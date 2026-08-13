@@ -35,13 +35,6 @@ def build():
                 path = os.path.join(root, name)
                 z.write(path, os.path.relpath(path, SRC))
                 count += 1
-        # Phase 0 only: the stub ships inside the ZIP so the toolbar button
-        # has something to run, but it lives in spike/ so there is one copy
-        # of it rather than two that drift.
-        stub = os.path.join(HERE, 'spike', 'stub_codicology.py')
-        if os.path.exists(stub):
-            z.write(stub, 'spike_stub.py')
-            count += 1
     print(f'wrote {OUT} ({count} files, {os.path.getsize(OUT)} bytes)')
     return OUT
 
