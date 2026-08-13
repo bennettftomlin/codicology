@@ -12,17 +12,40 @@ Dependencies (installed with the package):
         pymupdf     writing the searchable text layer (--pdf-text-layer)
         lxml        parsing a printed contents page into a real table of
                     contents
-    Optional: tesseract (brew install tesseract) — not an OCR backend here
-        but a second opinion. It cannot hallucinate, so its silence on a page
-        the model read paragraphs from is evidence, and its word boxes place
-        the searchable layer far more precisely than layout blocks can.
 
-OCR backends (install the one you want, selected with --ocr):
-    surya      pip install surya-ocr            # recommended: document-tuned
-    easyocr    pip install easyocr
-    paddleocr  pip install paddleocr paddlepaddle
-    tesseract  pip install pytesseract  + brew install tesseract
-    gcv        pip install google-cloud-vision   # needs GOOGLE_APPLICATION_CREDENTIALS
+REQUIRED, and not installable with pip:
+    tesseract       brew install tesseract  /  apt install tesseract-ocr
+
+    Not an OCR backend here but the witness. It has no generator, so it
+    cannot invent: its silence on a page the model read paragraphs from is
+    evidence, and two checks rest entirely on it —
+
+        * whether a page with no text layer to consult was invented, where
+          it is the ONLY witness (photographs, video, image-only scans);
+        * whether a page about to be deleted as blank was merely one this
+          pipeline failed to read, which no other check can tell apart —
+          and that one applies to every source.
+
+    Without it both simply pass, so the run refuses to start. --without-
+    witness overrides that and reports at the end how many pages went
+    unexamined. Its word boxes also place the searchable layer far more
+    precisely than layout blocks can.
+
+OCR backend:
+    surya      pip install surya-ocr
+
+    This pipeline was built around Surya and only Surya. Everything it does
+    beyond reading characters — figures, captions, running heads, headings,
+    reading order, block geometry — depends on the layout Surya returns.
+
+    The other names --ocr accepts (easyocr, paddleocr, tesseract, gcv) are
+    residue. Not one of them has ever been run against a real book here, and
+    none is tested. Read the code and it is plain why: each returns FLAT
+    TEXT and nothing else, so a book built on one would arrive with no
+    figures, no furniture stripped, no headings, no contents, and no note
+    links — silently, since nothing checks for it. They are left in place
+    because the seam they sit behind is honest, not because they work.
+    Treat them as unimplemented.
 
 Usage:
     # a PDF — the usual case. Always pass --ocr-cache: it makes a rebuild
@@ -1894,6 +1917,13 @@ OCR_BACKENDS: dict[str, type[OCRBackend]] = {
 
 
 def load_backend(name: str, langs: list[str]) -> OCRBackend:
+    if name != "surya":
+        # Said once, plainly, at the moment it stops being hypothetical.
+        print(f"[!] --ocr {name}: this pipeline was built around Surya and has "
+              f"never been run with anything else. {name} returns flat text "
+              f"with no layout, so the book will have no figures, no headings, "
+              f"no contents and no note links, and nothing downstream will "
+              f"notice. This path is untested.")
     try:
         return OCR_BACKENDS[name](langs)
     except ImportError as exc:
@@ -4423,7 +4453,12 @@ def build_epub(
             second_opinion = set()
             for i in sorted(blank):
                 n = _classical_word_count(page_paths[i], min_len=3)
-                if n is not None and n >= 10:
+                if n is None:
+                    # Nothing can tell an empty leaf from a page we failed to
+                    # read, so this page is about to be deleted on our own
+                    # word alone. Counted, and reported at the end.
+                    UNWITNESSED["blank"] += 1
+                elif n >= 10:
                     second_opinion.add(i)
             if second_opinion:
                 blank -= second_opinion
@@ -4684,6 +4719,12 @@ def build_epub(
     book.spine = ["nav"] + chapters
     epub.write_epub(output_epub, book)
     print(f"  EPUB saved: {output_epub}")
+    if UNWITNESSED["fabrication"] or UNWITNESSED["blank"]:
+        print(f"  [!] built without a witness: "
+              f"{UNWITNESSED['fabrication']} page(s) passed the fabrication "
+              f"check unexamined, {UNWITNESSED['blank']} page(s) were "
+              f"deleted as blank on this pipeline's word alone. Install "
+              f"tesseract and rebuild to have either checked.")
 
 
 # ── Main pipeline ─────────────────────────────────────────────────────────────
@@ -5305,6 +5346,20 @@ def _layer_can_testify(page_path: str) -> bool:
         return False
 
 
+def witness_available() -> bool:
+    """Whether the classical reader this pipeline testifies with is installed."""
+    import shutil
+    return shutil.which("tesseract") is not None
+
+
+# Set when the operator has said, in as many words, to run without a witness.
+# Nothing consults it to decide anything; it exists so the count of checks
+# that went unwitnessed can be reported at the end of the run instead of the
+# checks quietly not happening.
+WITNESS_WAIVED = False
+UNWITNESSED = {"fabrication": 0, "blank": 0}
+
+
 def _classical_word_count(page_path: str, min_len: int = 2) -> "int | None":
     """
     How many words a classical OCR finds on the page, or None if unavailable.
@@ -5396,7 +5451,12 @@ def _read_pages_resiliently(paths: list[str], images: list,
                 if it.html and not it.is_furniture).lower()))
             if n_ours >= LAYER_MIN_WORDS:
                 n_tess = _classical_word_count(path)
-                if n_tess is not None and n_tess < 5:
+                if n_tess is None:
+                    # The only witness this page had, and it is not here. The
+                    # page passes unexamined — which is the honest outcome,
+                    # but it must be counted and said, not simply skipped.
+                    UNWITNESSED["fabrication"] += 1
+                elif n_tess < 5:
                     second = backend.run_items([img])[0]
                     if _reading_agrees(items, second) < 0.5:
                         why = ("read paragraphs where a classical OCR reads "
@@ -6235,7 +6295,13 @@ def main(argv: "list[str] | None" = None) -> None:
                              "born-digital file. Needs a cache written with geometry "
                              "(re-OCR with a fresh cache for books read before)")
     parser.add_argument("--ocr", choices=sorted(OCR_BACKENDS), default="surya",
-                        help="OCR backend used for --epub (default: surya)")
+                        help="OCR backend used for --epub (default: surya). "
+                             "Surya is the only one this pipeline was built "
+                             "for or has ever been run with; the others "
+                             "return flat text with no layout, so a book "
+                             "built on one arrives with no figures, headings, "
+                             "contents or note links. Treat them as "
+                             "unimplemented")
     parser.add_argument("--lang", default="en",
                         help="Comma-separated OCR language codes (default: en)")
     parser.add_argument("--title", default="Scanned Book", help="EPUB title metadata")
@@ -6327,6 +6393,14 @@ def main(argv: "list[str] | None" = None) -> None:
     parser.add_argument("--min-still-frames", type=int, default=3,
                         help="Frames a page must be held still to count. Raise if you get "
                              "spurious pages from mid-turn pauses (default: 3)")
+    parser.add_argument("--without-witness", action="store_true",
+                        help="Run even though tesseract is not installed. Two "
+                             "checks depend on it and both then pass without "
+                             "examining anything: whether a page with no text "
+                             "layer was invented, and whether a page about to "
+                             "be deleted as blank was merely one this pipeline "
+                             "failed to read. The run says at the end how many "
+                             "pages went unwitnessed")
     parser.add_argument("--no-warp", action="store_true",
                         help="Skip perspective correction (useful when detection fails)")
     parser.add_argument("--no-enhance", action="store_true",
@@ -6341,6 +6415,28 @@ def main(argv: "list[str] | None" = None) -> None:
                              "sideways (default: 0)")
 
     args = parser.parse_args(argv)
+
+    # The witness is checked here, before any work, because finding out after
+    # forty minutes of reading that nothing was witnessed is finding out too
+    # late. It is the tesseract BINARY, not the pytesseract package, which is
+    # a different thing that only the tesseract OCR backend uses — so no pip
+    # install satisfies this and the dependency list cannot enforce it.
+    if not witness_available():
+        if not args.without_witness:
+            sys.exit(
+                "codicology needs tesseract installed: it is the witness two "
+                "checks depend on — whether a page with no text layer was "
+                "invented, and whether a page about to be deleted as blank "
+                "was merely one this pipeline failed to read. Without it both "
+                "pass without examining anything.\n"
+                "    macOS:  brew install tesseract\n"
+                "    Debian: apt install tesseract-ocr\n"
+                "Or pass --without-witness to build anyway, accepting that "
+                "those pages go unchecked. The run will say how many did.")
+        globals()["WITNESS_WAIVED"] = True
+        print("[!] Running WITHOUT a witness. Pages with no text layer will "
+              "pass the fabrication check unexamined, and pages deleted as "
+              "blank will be deleted on this pipeline's word alone.")
 
     if args.pages_from or args.from_images:
         # Neither mode reads a video, so a lone positional is the output PDF.
