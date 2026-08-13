@@ -27,7 +27,10 @@ The automated checks prove everything except Calibre drawing the dialogs
 and the bar. Once:
 
 1. Quit Calibre completely and restart it (a plugin replaced while it runs
-   is not picked up). **OCR PDF** should be on the main toolbar.
+   is not picked up). **OCR PDF** should be on the main toolbar — but a
+   CLI (re)install does not manage toolbar layout, so if it is missing,
+   add it once: Preferences → Toolbars & menus → The main toolbar. It
+   survives later reinstalls of the same plugin name after that.
 2. Preferences → Plugins → Codicology OCR → Customize → **Check
    environment**. Expect "Environment ready" naming tesseract and
    llama-server.
