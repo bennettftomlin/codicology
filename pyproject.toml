@@ -23,7 +23,13 @@ dependencies = [
 
 [project.optional-dependencies]
 # OCR backends are chosen with --ocr; install the one you want.
-surya = ["surya-ocr"]
+# Surya is pinned to the exact version this pipeline is developed and
+# tested against: its API has broken across minor versions before, and
+# v0.20.0 moved inference into an external server (llama.cpp on CPU and
+# Apple Silicon, vllm on NVIDIA) — a requirement invisible to imports.
+# Move the pin deliberately, with a real book, then update SuryaBackend
+# if the shape shifted. `codicology doctor --full` proves an environment.
+surya = ["surya-ocr==0.22.1"]
 tesseract = ["pytesseract"]
 easyocr = ["easyocr"]
 heif = ["pillow-heif"]

@@ -1,10 +1,12 @@
-"""codicology — one command, three verbs.
+"""codicology — one command, four verbs.
 
     codicology convert …    build the PDF/EPUB (the pipeline; see convert -h)
     codicology verify EPUB PDF
                             the after-every-build check: is anything missing?
     codicology compare EPUB PDF
                             word-by-word disagreement with the source's layer
+    codicology doctor       can this environment run a build? --full reads
+                            one synthetic page through the real backend
 
 The check subcommands take the book first and the source second, in both
 cases — the old standalone scripts disagreed with each other about the
@@ -53,6 +55,26 @@ def main(argv: "list[str] | None" = None) -> "int | None":
     p_compare.add_argument("epub", help="the EPUB this pipeline built")
     p_compare.add_argument("pdf", help="the source PDF it was built from")
 
+    p_doctor = sub.add_parser(
+        "doctor",
+        help="report whether this environment can run a build: binaries, "
+             "packages, tesseract's languages. --full also reads one "
+             "synthetic page, which is the only check that catches a surya "
+             "that imports cleanly but cannot serve inference")
+    p_doctor.add_argument("--full", action="store_true",
+                          help="also OCR a synthetic test page through the "
+                               "real backend (the first run may download "
+                               "model weights)")
+    p_doctor.add_argument("--ocr", default="surya",
+                          help="backend for the --full smoke test "
+                               "(default: surya)")
+    p_doctor.add_argument("--lang", default="en",
+                          help="comma-separated language codes for the "
+                               "smoke test (default: en)")
+    p_doctor.add_argument("--json", action="store_true", dest="as_json",
+                          help="one JSON object on stdout, for a program "
+                               "driving this pipeline")
+
     args = parser.parse_args(argv)
     if args.command == "verify":
         from . import verify
@@ -60,6 +82,10 @@ def main(argv: "list[str] | None" = None) -> "int | None":
     if args.command == "compare":
         from . import compare
         return compare.main(args.pdf, args.epub)
+    if args.command == "doctor":
+        from . import doctor
+        return doctor.main(full=args.full, ocr=args.ocr, lang=args.lang,
+                           as_json=args.as_json)
     return None
 
 

@@ -21,6 +21,14 @@ brew install tesseract
 
 **Both are required.**
 
+Ask the environment whether it is actually ready — `--full` reads one
+synthetic page through the real backend, which is the only check that
+catches a surya that imports cleanly but cannot serve inference:
+
+```bash
+codicology doctor --full
+```
+
 ### Surya is the OCR backend
 
 This pipeline was built around Surya and only Surya. Everything it does

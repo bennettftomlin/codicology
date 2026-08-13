@@ -129,6 +129,8 @@ import cv2
 import numpy as np
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
+from . import progress
+
 
 # ── Frame extraction ──────────────────────────────────────────────────────────
 
@@ -2377,6 +2379,8 @@ def read_folios(page_paths: list[str], backend: "OCRBackend",
             results[i] = Folio(i, f.number, f.text, f.confident)
         done = min(c0 + batch, len(live))
         print(f"    read {done}/{len(live)} pages…")
+        progress.emit(event="progress", phase="folios",
+                      done=done, total=len(live))
     for i in range(len(page_paths)):
         out.append(results.get(i, Folio(i, None, "", False)))
     return out
@@ -4140,6 +4144,8 @@ def build_epub(
     _restrict_page_list_to_pagebreaks()
 
     print(f"  OCR backend: {backend.name} (batch size {backend.batch_size})")
+    progress.emit(event="phase", phase="ocr",
+                  message=f"OCR backend: {backend.name}")
     cache = OCRCache(ocr_cache, backend.name, backend.langs) if ocr_cache else None
     if cache and cache.entries:
         print(f"  OCR cache: {len(cache.entries)} pages remembered in {ocr_cache}")
@@ -4270,6 +4276,9 @@ def build_epub(
         done = min(start + len(chunk_paths), total)
         note = f" ({cache.hits} from cache)" if cache and cache.hits else ""
         print(f"    OCR'd {done}/{total} pages…{note}")
+        progress.emit(event="progress", phase="ocr", done=done, total=total,
+                      note=f"{cache.hits} from cache"
+                           if cache and cache.hits else "")
 
     if cache:
         cache.save()
@@ -4330,6 +4339,8 @@ def build_epub(
 
     if check_folios:
         print("  Reading printed page numbers…")
+        progress.emit(event="phase", phase="folios",
+                      message="Reading printed page numbers")
         folios = folios or []
         # Pages cached before running heads were kept carry no furniture record,
         # and for those absence means nothing. Only they pay for a second look.
@@ -6305,6 +6316,11 @@ def main(argv: "list[str] | None" = None) -> None:
     parser.add_argument("--lang", default="en",
                         help="Comma-separated OCR language codes (default: en)")
     parser.add_argument("--title", default="Scanned Book", help="EPUB title metadata")
+    parser.add_argument("--progress-json", action="store_true",
+                        help="Emit machine-readable progress as one JSON object per "
+                             "line on stderr, for a program driving this pipeline "
+                             "through a pipe (the Calibre plugin does). The human "
+                             "log on stdout is unchanged")
     parser.add_argument("--ocr-cache", metavar="FILE",
                         help="Remember what OCR read on each page here, and reuse it. "
                              "Re-running to change deduplication or --drop-pages then "
@@ -6415,7 +6431,22 @@ def main(argv: "list[str] | None" = None) -> None:
                              "sideways (default: 0)")
 
     args = parser.parse_args(argv)
+    if args.progress_json:
+        progress.enable()
+    try:
+        _convert(args, parser)
+    except SystemExit as exc:
+        # sys.exit(message) is this pipeline's idiom for a refusal; hand the
+        # message to whoever is driving before the status code ends us.
+        if exc.code not in (None, 0):
+            progress.emit(event="error", message=str(exc.code))
+        raise
+    except Exception as exc:
+        progress.emit(event="error", message=f"{type(exc).__name__}: {exc}")
+        raise
 
+
+def _convert(args, parser) -> None:
     # The witness is checked here, before any work, because finding out after
     # forty minutes of reading that nothing was witnessed is finding out too
     # late. It is the tesseract BINARY, not the pytesseract package, which is
@@ -6532,6 +6563,7 @@ def main(argv: "list[str] | None" = None) -> None:
         link_notes_flag=args.link_notes,
         pdf_text_layer=args.pdf_text_layer,
     )
+    progress.emit(event="result", epub=args.epub, pdf=output_pdf)
 
 
 if __name__ == "__main__":
