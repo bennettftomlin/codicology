@@ -10,16 +10,46 @@ heads, footnote rules, and gathering structure — not just the text.
 ## Install
 
 ```bash
-pip install -e .
-# plus an OCR backend, e.g.:
 pip install -e ".[surya]"
 ```
 
-Tesseract is optional but recommended (`brew install tesseract`): it is not
-an OCR backend here but a second opinion — it cannot hallucinate, so its
-silence on a page the model read paragraphs from is evidence, and its word
-boxes position the searchable PDF text layer far more precisely than layout
-blocks can.
+Then install Tesseract, which pip cannot do for you:
+
+```bash
+brew install tesseract
+```
+
+**Both are required.**
+
+### Surya is the OCR backend
+
+This pipeline was built around Surya and only Surya. Everything it does
+beyond reading characters — figures, captions, running heads, headings,
+reading order, block geometry — depends on the layout Surya returns.
+
+`--ocr` also accepts `easyocr`, `paddleocr`, `tesseract`, and `gcv`. Those
+are residue. **Not one has ever been run against a real book here, and none
+is tested.** Each returns flat text and nothing else, so a book built on one
+would arrive with no figures, no furniture stripped, no headings, no
+contents and no note links — silently, because nothing downstream checks.
+They remain only because the seam they sit behind is honest. Treat them as
+unimplemented.
+
+### Tesseract is the witness, not a backend
+
+It has no generator, so it cannot invent. Its silence on a page the model
+read paragraphs from is evidence, and two checks rest entirely on it:
+
+- whether a page with **no text layer to consult** was invented — on
+  photographs, video, and image-only scans it is the *only* witness;
+- whether a page about to be deleted as **blank** was merely one the
+  pipeline failed to read. Nothing else can tell those apart, and that check
+  applies to every source.
+
+Without it, both checks pass without examining anything, so a run refuses to
+start. `--without-witness` overrides that and reports at the end how many
+pages went unexamined. Its word boxes also position the searchable PDF text
+layer far more precisely than layout blocks can.
 
 ## One command, three verbs
 
