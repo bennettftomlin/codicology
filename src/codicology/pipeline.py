@@ -3273,6 +3273,80 @@ def normalize_chapter_heads(bodies: list[str]) -> int:
     return changed
 
 
+# An item that has already printed its own marker: the numeral or bullet the
+# page shows, before any of the item's words.
+SELF_MARKED_NUM = re.compile(r"<li[^>]*>\s*(?:<[^/][^>]*>\s*)*\d{1,3}[.)]\s")
+SELF_MARKED_BUL = re.compile(r"<li[^>]*>\s*(?:<[^/][^>]*>\s*)*[•·▪‣∙]\s")
+LIST_OPEN = re.compile(r"<(ol|ul)\b([^>]*)>", re.I)
+
+
+def normalize_list_markers(bodies: list[str]) -> int:
+    """
+    Stop a list drawing a marker the item has already printed.
+
+    The recogniser hands back a real <ol> whose items still carry the number
+    the page showed — "<li>1. Suppose the multiplier…" — so a reader draws
+    its own "1." beside ours and the item reads "1. 1. Suppose". Principles
+    of Economics shipped 813 of those, and 450 doubled bullets besides. The
+    recogniser already writes list-style-type: none on some lists, which is
+    exactly why other books came out clean; it simply does not do it
+    consistently.
+
+    The marker in the text is what the page printed, so it stays: a list may
+    begin at five, or number by citation rather than position, and stripping
+    it would delete something the book actually says. What is suppressed is
+    the marker the READER would add — presentation only, no text touched.
+
+    Only a list whose items mostly mark themselves is changed, so a list
+    where one item merely opens with a date or a figure number is left as it
+    is.
+    """
+    changed = 0
+    for bi, body in enumerate(bodies):
+        edits = []
+        for om in LIST_OPEN.finditer(body):
+            kind, attrs = om.group(1).lower(), om.group(2)
+            if "list-style" in attrs.lower():
+                continue                      # the recogniser already said so
+            # find this list's close, respecting nesting
+            depth, pos, close = 1, om.end(), None
+            while depth and pos < len(body):
+                nxt = re.search(rf"<(/?){kind}\b[^>]*>", body[pos:], re.I)
+                if not nxt:
+                    break
+                depth += -1 if nxt.group(1) else 1
+                pos += nxt.end()
+                if depth == 0:
+                    close = pos
+            if close is None:
+                continue
+            # judge this list on ITS OWN items: a nested list that marks
+            # itself must not talk its parent into being restyled too
+            own = body[om.end():close]
+            while True:
+                stripped = re.sub(
+                    r"<(ol|ul)\b[^>]*>(?:(?!<(?:ol|ul)\b).)*?</\1>", "",
+                    own, flags=re.S | re.I)
+                if stripped == own:
+                    break
+                own = stripped
+            items = len(re.findall(r"<li\b", own, re.I))
+            if not items:
+                continue
+            pat = SELF_MARKED_NUM if kind == "ol" else SELF_MARKED_BUL
+            marked = len(pat.findall(own))
+            if marked * 2 < items:            # not mostly self-marking
+                continue
+            style = ' style="list-style-type: none;"'
+            edits.append((om.start(), om.end(),
+                          f"<{kind}{attrs}{style}>"))
+        for a, z, new in sorted(edits, reverse=True):
+            body = body[:a] + new + body[z:]
+            changed += 1
+        bodies[bi] = body
+    return changed
+
+
 def promote_missing_chapter_heads(bodies: list[str]) -> int:
     """
     Recover a chapter opening the layout pass ran into the prose.
@@ -4204,6 +4278,10 @@ def build_epub(
     if n_recovered:
         print(f"    recovered {n_recovered} chapter opening(s) the layout ran "
               f"into the prose")
+    n_lists = normalize_list_markers(bodies)
+    if n_lists:
+        print(f"    stopped {n_lists} list(s) double-marking items that "
+              f"already carry their own number or bullet")
     texts = [_strip_tags(b) for b in bodies]
     folios = folios_from_furniture(page_furniture) if page_furniture else None
 
