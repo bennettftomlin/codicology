@@ -102,3 +102,43 @@ def test_lists_across_many_pages_are_each_judged_on_their_own(vtb):
     assert "list-style" in bodies[0]
     assert "list-style" not in bodies[1]
     assert "list-style" in bodies[2]
+
+
+def test_a_stray_bullet_on_one_item_is_removed(vtb):
+    """The shape that actually shipped: the recogniser caught the glyph on
+    the first item and missed it on the rest, so that item alone rendered
+    "• •". Suppressing the list's markers would strip the other three of
+    theirs, so the stray goes instead."""
+    bodies = ["<ul><li>• Economics is a social science.</li>"
+              "<li> Scarcity implies we must give up one alternative.</li>"
+              "<li> A good that is not scarce is a free good.</li>"
+              "<li> The opportunity cost is the value forgone.</li></ul>"]
+    vtb.normalize_list_markers(bodies)
+    assert "•" not in bodies[0], "the stray bullet survived"
+    assert "list-style" not in bodies[0], "the other items lost their markers"
+    assert "Economics is a social science." in bodies[0]
+
+
+def test_a_stray_number_is_left_alone(vtb):
+    """A lone number may mean something a bullet cannot — a numbered item
+    among unnumbered ones — so it is reported by the sweep, never removed."""
+    bodies = ["<ol><li>3. A numbered citation.</li>"
+              "<li>Ordinary item.</li><li>Another ordinary item.</li>"
+              "<li>And a fourth.</li></ol>"]
+    vtb.normalize_list_markers(bodies)
+    assert "3. A numbered citation." in bodies[0]
+
+
+def test_removing_a_stray_bullet_loses_no_word(vtb):
+    bodies = ["<ul><li>• First point here.</li><li> Second point.</li>"
+              "<li> Third point.</li></ul>"]
+    before = vtb._strip_tags(bodies[0]).replace("•", "").split()
+    vtb.normalize_list_markers(bodies)
+    assert vtb._strip_tags(bodies[0]).split() == before
+
+
+def test_a_fully_bulleted_list_still_takes_suppression_not_stripping(vtb):
+    bodies = ["<ul><li>• One.</li><li>• Two.</li><li>• Three.</li></ul>"]
+    vtb.normalize_list_markers(bodies)
+    assert "list-style-type: none" in bodies[0]
+    assert bodies[0].count("•") == 3, "the printed bullets were stripped"
