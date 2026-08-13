@@ -119,7 +119,3 @@ cannot silently reuse OCR read from the file it replaced.
   so rather than letting the tool merely look slow.
 - Surya is pinned (`==0.22.1`): its API has broken across minor versions,
   and v0.20.0 made inference delegation invisible to import checks.
-
-## Licence
-
-MIT, as codicology.
