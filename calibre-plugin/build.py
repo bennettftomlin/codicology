@@ -48,6 +48,13 @@ def install(path):
             except FileNotFoundError:
                 continue
             print(r.stdout.strip() or r.stderr.strip())
+            if r.returncode == 0:
+                # calibre-customize registers the plugin but does not manage
+                # toolbar layout, so a reinstall can leave the button off the
+                # toolbar. Learned live: the first CLI reinstall did.
+                print('Restart Calibre. If the OCR PDF button is missing, '
+                      'add it: Preferences → Toolbars & menus → '
+                      'The main toolbar.')
             return r.returncode
     print('calibre-customize not found', file=sys.stderr)
     return 1
