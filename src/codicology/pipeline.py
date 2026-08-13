@@ -3335,7 +3335,20 @@ def normalize_list_markers(bodies: list[str]) -> int:
                 continue
             pat = SELF_MARKED_NUM if kind == "ol" else SELF_MARKED_BUL
             marked = len(pat.findall(own))
-            if marked * 2 < items:            # not mostly self-marking
+            if marked * 2 < items:
+                # Not the list's convention — a marker on one item of four is
+                # the recogniser catching a glyph it missed on the rest, and
+                # it renders as "• •" on that item alone. Suppressing the
+                # list's own markers would strip the other three of theirs,
+                # so the stray goes instead. Only ever a bullet: the <li>
+                # already says "list item", so the glyph carries nothing a
+                # number might, and it is not a word by any count taken here.
+                if marked and kind == "ul":
+                    fixed = re.sub(
+                        r"(<li[^>]*>\s*(?:<[^/][^>]*>\s*)*)[•·▪‣∙]\s+",
+                        r"\1", body[om.end():close])
+                    if fixed != body[om.end():close]:
+                        edits.append((om.end(), close, fixed))
                 continue
             style = ' style="list-style-type: none;"'
             edits.append((om.start(), om.end(),
