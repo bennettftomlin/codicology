@@ -42,6 +42,52 @@ swapping by stable run ids, review sheets for human adjudication, cover
 selection, OCR backend and language choice, and the geometry knobs for
 video extraction.
 
+## Books that only exist on paper
+
+The PDF path is the usual case, but the pipeline began life digitizing
+books nobody had scanned, and those inputs remain first-class.
+
+**From photographs** — the best capture path for physical books:
+
+```bash
+codicology convert --from-images ./shots book.pdf --epub book.epub \
+    --ocr-cache book.ocr.gz
+```
+
+Point it at a folder or glob and the shots are read in filename order.
+Consecutive shots of the same page are grouped and the best one kept, so
+interval or burst shooting works as-is — photograph every page twice and
+let the pipeline choose. Stills carry far more detail than video frames,
+which is what makes small type readable. iPhone HEIC files are handled
+directly (via `pillow-heif`), alongside JPEG, PNG, TIFF, and WebP.
+
+**From video** — film the book page by page:
+
+```bash
+codicology convert recording.mp4 book.pdf --pdf-text-layer \
+    --epub book.epub --ocr-cache book.ocr.gz
+```
+
+Pages are told apart from half-finished turns by stillness: a page must be
+held steady for a few frames to count, and the motion threshold is chosen
+from the footage itself. Hold each page flat for a second or two at a
+steady pace, use even lighting, and a dark background helps detection.
+
+Both paths share the same cleanup: the page is found in the frame,
+perspective-corrected, deskewed against its own text lines, and a
+landscape spread is split at the gutter into two pages (each step has a
+`--no-*` off switch, and `--rotate` handles sideways captures). Both also
+share the same safety net — pages the duplicate pass was unsure about go
+on an HTML review sheet (`--review-sheet`), and its verdicts feed
+`--drop-pages` and `--swap` by stable run ids that survive re-extraction.
+A page that came out blurred or occluded can be re-shot later and patched
+in by name (`--patch r060p1=folio60.jpg`) without redoing the capture.
+
+The `book.pdf` these paths produce is a facsimile of the physical book —
+with `--pdf-text-layer`, one that searches and copies like a born-digital
+file — and it feeds back into `--pages-from` for every later rebuild, so
+the camera work is done exactly once.
+
 ## What it does without being asked
 
 - Pages rendered from a PDF are stored losslessly; figures are passed
