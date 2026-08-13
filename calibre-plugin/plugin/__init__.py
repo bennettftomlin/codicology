@@ -6,12 +6,13 @@ back into the library. The pipeline itself is NOT bundled: it needs torch
 and OpenCV, which have no wheels for the Python 3.14 Calibre embeds, so it
 lives in its own environment and is driven as a subprocess.
 
-Phase 0: the toolbar action runs a stub, to prove the job plumbing before
-any of the real machinery exists.
+Phase 1: real conversions, one book at a time. The environment is supplied
+by hand — the configured path, or a probe of the usual places; the setup
+wizard that builds one arrives in Phase 2.
 """
 from calibre.customize import InterfaceActionBase
 
-__version__ = (0, 0, 1)
+__version__ = (0, 1, 0)
 
 
 class CodicologyOCRPlugin(InterfaceActionBase):
