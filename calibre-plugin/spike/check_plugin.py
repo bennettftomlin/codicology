@@ -157,6 +157,19 @@ def main():
               bool(doctor) and doctor.get("ok") is True,
               "problems: " + "; ".join((doctor or {}).get("problems", ["none"])))
 
+        # Reproduce the GUI exactly: launchd's PATH, then ask doctor.
+        # This is the condition the first live Check environment failed.
+        saved = os.environ.get("PATH")
+        os.environ["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
+        try:
+            gui_doctor = env.quick_doctor(exe)
+        finally:
+            os.environ["PATH"] = saved
+        check("doctor stays ready under a Finder-launched PATH (the GUI case)",
+              bool(gui_doctor) and gui_doctor.get("ok") is True,
+              ("problems: " + "; ".join(gui_doctor.get("problems", ["none"])))
+              if gui_doctor else "no answer from doctor")
+
         scratch = os.environ.get("CODICOLOGY_SPIKE_DIR") or os.path.join(
             os.path.dirname(os.environ.get("CLAUDE_SCRATCH", "/tmp")), "")
         pdf = os.path.join(

@@ -71,6 +71,24 @@ def main():
     check("a prepended directory wins", runner.child_env(
         path_prepend=["/tmp/native/bin"])["PATH"].startswith("/tmp/native/bin"))
 
+    # The GUI regression: a Finder-launched Calibre inherits launchd's
+    # PATH, which has four entries and no Homebrew — enough entries to
+    # dodge the emptiness backfill, and the first Check environment
+    # reported tesseract and llama-server missing on a machine that has
+    # both. The fix appends the well-known directories.
+    saved = os.environ.get("PATH")
+    os.environ["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
+    try:
+        finder_path = runner.child_env()["PATH"].split(os.pathsep)
+    finally:
+        os.environ["PATH"] = saved
+    expected = [d for d in runner._EXTRA_BIN_DIRS if os.path.isdir(d)]
+    check("a Finder-launched PATH gains the directories binaries live in",
+          all(d in finder_path for d in expected),
+          f"gained: {', '.join(expected) or 'none present on this machine'}")
+    check("but they are appended, so the inherited PATH still wins",
+          finder_path[0] == "/usr/bin")
+
     # ── 2. a foreign interpreter actually runs ──────────────────────────
     print("\n2. Foreign interpreter under Calibre")
     events, logs, stamps = [], [], []
