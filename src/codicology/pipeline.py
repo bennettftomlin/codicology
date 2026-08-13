@@ -1167,6 +1167,70 @@ def _crop_block(image: Image.Image, block, page) -> Image.Image | None:
 PLACEHOLDER_IMG = re.compile(r"<img(?![^>]*\bsrc=)[^>]*>")
 
 
+def _picture_signature(data: bytes) -> "tuple | None":
+    """A coarse fingerprint of what a picture LOOKS like, not what it weighs.
+
+    Size alone would be reckless: a field manual draws every diagram to one
+    column width, so matching on dimensions would collapse hundreds of
+    distinct figures into one. Two images match here only when the same
+    light-and-dark pattern survives being reduced to a 16x32 thumbnail —
+    which a decorative band repeated down a margin does, and two different
+    diagrams of the same width do not.
+    """
+    try:
+        with Image.open(io.BytesIO(data)) as im:
+            small = im.convert("L").resize((16, 32))
+            px = list(small.getdata())
+    except Exception:
+        return None
+    if not px:
+        return None
+    avg = sum(px) / len(px)
+    return (len(px), tuple(p > avg for p in px))
+
+
+# How many separate pages must carry the same picture before it stops being a
+# figure and becomes decoration. Two is a book showing one thing twice, which
+# happens and is content — a chart repeated for reference, a plate reproduced
+# in a later chapter. Three is a pattern.
+FURNITURE_PAGES = 3
+
+
+def find_image_furniture(page_figures: list[list[str]],
+                         figure_data: dict) -> set:
+    """The pictures that are page furniture rather than figures.
+
+    A running head is not content and the pipeline has always known it; the
+    same is true of the ornament printed down the margin of every chapter
+    opening, which is a running head that happens to be drawn rather than
+    typeset. It was being recovered as artwork — one book carried the same
+    decorative band eight times over, 2.5MB of a 7MB file, sitting with the
+    folio numbers it was printed beside.
+
+    Recurrence is what separates them, and it is the book's own evidence: a
+    figure illustrates its page and appears there. Anything that appears
+    identically on three or more pages is furniture, and no unique picture
+    can be caught by this however it is shaped or wherever it sits.
+    """
+    by_sig: dict = {}
+    for page_no, names in enumerate(page_figures):
+        for name in names:
+            data = figure_data.get(name)
+            if data is None:
+                continue
+            sig = _picture_signature(data)
+            if sig is None:
+                continue
+            entry = by_sig.setdefault(sig, ([], set()))
+            entry[0].append(name)
+            entry[1].add(page_no)
+    doomed = set()
+    for names, pages in by_sig.values():
+        if len(names) >= FURNITURE_PAGES and len(pages) >= FURNITURE_PAGES:
+            doomed.update(names)
+    return doomed
+
+
 def recover_placeholder_figures(items: list, page_path: str) -> list:
     """Turn source-less image placeholders back into the pictures they mark."""
     if not any(it.figure is None and it.html and it.box
@@ -3797,6 +3861,7 @@ def build_epub(
     # go straight into the book for the same reason.
     bodies: list[str] = []
     page_figures: list[list[str]] = []  # figure files each page put in the book
+    figure_data: dict[str, bytes] = {}  # their bytes, for spotting repeats
     page_furniture: list[list[str]] = []   # running head/foot text, per page
     furniture_known: list[bool] = []       # False = cached before heads were kept
     n_figures = 0
@@ -3833,6 +3898,7 @@ def build_epub(
             art.close()
         name = f"images/fig_{n_figures:04d}.{ext}"
         current_figures.append(name)
+        figure_data[name] = data
         book.add_item(epub.EpubImage(
             uid=f"fig{n_figures}",
             file_name=name,
@@ -3919,6 +3985,30 @@ def build_epub(
         print(f"    extracted {n_figures} figures")
     if n_blank_figures:
         print(f"    skipped {n_blank_figures} blank-page image(s)")
+
+    # Decoration that recurs down the book is furniture, not artwork, and is
+    # dropped here — before anything downstream counts what a page holds, so
+    # a page carrying nothing but an ornament is judged on what it really has.
+    furniture = find_image_furniture(page_figures, figure_data)
+    if furniture:
+        for i, names in enumerate(page_figures):
+            hit = [n for n in names if n in furniture]
+            if not hit:
+                continue
+            for name in hit:
+                bodies[i] = re.sub(
+                    r"<figure>(?:(?!</figure>).)*?" + re.escape(name)
+                    + r"(?:(?!</figure>).)*?</figure>", "", bodies[i], flags=re.S)
+                bodies[i] = re.sub(r"<img[^>]*" + re.escape(name) + r"[^>]*/?>",
+                                   "", bodies[i])
+            page_figures[i] = [n for n in names if n not in furniture]
+        book.items = [it for it in book.items
+                      if getattr(it, "file_name", None) not in furniture]
+        freed = sum(len(figure_data[n]) for n in furniture if n in figure_data)
+        for name in furniture:
+            figure_data.pop(name, None)
+        print(f"    dropped {len(furniture)} repeated decoration(s) as page "
+              f"furniture, freeing {freed / 1048576:.1f} MB")
 
     bodies = [normalize_entry_heads(normalize_math(b)) for b in bodies]
     n_promoted = normalize_note_heads(bodies)
