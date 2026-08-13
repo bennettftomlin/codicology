@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codicology"
+version = "0.1.0"
+description = "Turn book captures — video, photos, scans, born-digital PDFs — into clean PDFs and OCR'd EPUBs, with the checks that keep the result honest"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Bennett Tomlin" }]
+dependencies = [
+    "opencv-python>=4.8",
+    "numpy>=1.24",
+    "Pillow>=10.0",
+    "img2pdf>=0.5",
+    "pypdfium2>=4.0",
+    "pymupdf>=1.24",
+    "lxml>=4.9",
+    "ebooklib>=0.18",
+]
+
+[project.optional-dependencies]
+# OCR backends are chosen with --ocr; install the one you want.
+surya = ["surya-ocr"]
+tesseract = ["pytesseract"]
+easyocr = ["easyocr"]
+heif = ["pillow-heif"]
+dev = ["pytest>=8"]
+
+[project.scripts]
+codicology = "codicology.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
