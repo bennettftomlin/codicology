@@ -50,9 +50,19 @@ exercises every part of the chain.
 
 **Calibre 9.13 sets no `PYTHONHOME`/`PYTHONPATH`.** The variables that
 actually break a child are `SSL_CERT_DIR`, `OPENSSL_MODULES`,
-`OPENSSL_ENGINES`, `FONTCONFIG_*` — all aimed inside `Calibre.app`. A
-shell-launched calibre-debug also inherits a full shell `PATH`, which
-*hides* the Finder-launch problem; the runner backfills PATH either way.
+`OPENSSL_ENGINES`, `FONTCONFIG_*` — all aimed inside `Calibre.app`.
+
+**The Finder PATH problem is real, and shell testing hides it.** The first
+live "Check environment" from the GUI reported tesseract and llama-server
+missing on a machine that has both: a Finder-launched Calibre inherits
+launchd's PATH — four entries, no Homebrew — while every automated check
+had run under calibre-debug from a shell, inheriting the shell's full
+PATH. The runner now appends the well-known binary directories
+(`/opt/homebrew/bin`, `/usr/local/bin`) to the child PATH — appended, so
+anything the user put on PATH still wins — and both check suites
+reproduce the launchd PATH explicitly. The GUI's own **Check
+environment** button remains the only test that runs in the true Finder
+context; trust it over a shell run when they disagree.
 
 **The event/log split earns its keep in practice.** A real surya run
 interleaves HF Hub warnings and llama-server lifecycle lines on stderr

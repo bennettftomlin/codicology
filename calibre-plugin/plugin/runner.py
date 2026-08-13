@@ -49,6 +49,20 @@ _BASE_PATH = {
     "win32": r"C:\Windows\system32;C:\Windows",
 }.get(sys.platform, "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin")
 
+# Directories a desktop-launched app's PATH lacks but a terminal's carries.
+# A Finder-launched Calibre inherits launchd's PATH — /usr/bin:/bin and
+# friends, no Homebrew — so tesseract and llama-server can be installed on
+# the machine and still be invisible to the child. Appended, never
+# prepended: anything the user put on PATH wins, and the managed native/
+# directory (path_prepend) wins over everything. This bit in practice: the
+# GUI's first "Check environment" reported both binaries missing, while a
+# shell-launched calibre-debug, inheriting the shell's PATH, had hidden
+# the problem from every automated check.
+_EXTRA_BIN_DIRS = {
+    "darwin": ("/opt/homebrew/bin", "/usr/local/bin"),
+    "linux": ("/usr/local/bin",),
+}.get(sys.platform, ())
+
 
 class Aborted(Exception):
     """The user cancelled the job."""
@@ -77,10 +91,14 @@ def child_env(extra=None, path_prepend=()):
 
     parts = [str(p) for p in path_prepend if p]
     existing = env.get("PATH") or _BASE_PATH
-    # A Finder-launched Calibre has a PATH with nothing useful on it.
+    # An empty or near-empty PATH gets the baseline back.
     if len(existing.split(os.pathsep)) < 3:
         existing = os.pathsep.join([existing, _BASE_PATH]) if existing else _BASE_PATH
-    env["PATH"] = os.pathsep.join(parts + [existing])
+    entries = existing.split(os.pathsep)
+    # And a Finder-launched PATH gains the places binaries actually live.
+    entries += [d for d in _EXTRA_BIN_DIRS
+                if d not in entries and os.path.isdir(d)]
+    env["PATH"] = os.pathsep.join(parts + entries)
 
     # Without this the child block-buffers behind a pipe and progress
     # arrives in one lump when the run is already over.
