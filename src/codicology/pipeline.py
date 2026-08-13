@@ -3197,6 +3197,181 @@ BOLD_HEAD_BLOCK = re.compile(
     r"(^|</(?:p|h\d|ol|ul|table|figure)>)(\s*)<b>\s*(\d{1,2})\.\s+([^<]+?)\s*</b>")
 
 
+# A heading that opens a chapter: the word, then the number the book counts
+# in. Roman is admitted because half the books here number that way, and the
+# strict parser refuses anything that is merely made of those letters.
+CHAPTER_HEAD = re.compile(
+    r"<(h[1-6])[^>]*>\s*(?:<[^/][^>]*>\s*)*"
+    r"(CHAPTER|Chapter)\s+(\d{1,3}|[IVXL]{1,7})"
+    r"\s*[.:—-]?\s*(.*?)</\1>", re.S)
+
+
+def _chapter_head_number(token: str) -> "int | None":
+    return int(token) if token.isdigit() else _roman_to_int(token)
+
+
+def normalize_chapter_heads(bodies: list[str]) -> int:
+    """
+    Give every chapter opening the same rank, and its title back.
+
+    The layout pass reads each page alone, so it has no way to notice that it
+    called chapter five an h1 and chapter six an h2 — Principles of
+    Macroeconomics came out seven of one and fourteen of the other for the
+    same job. It also splits the opening in two, the number in one heading
+    and the title in the next, which leaves neither able to say on its own
+    what chapter this is.
+
+    Both are repaired from the same recognition. Rank goes to the SHALLOWEST
+    level the book itself used for a chapter: a chapter is the outermost
+    division a book names, so where the layout ever managed to see one as
+    top-level, that is what it is — taking the commonest instead would have
+    pushed macroeconomics' chapters down to h2, level with the very titles
+    they own. The title is then folded back into the heading, giving the
+    shape the books that got it right already have ("CHAPTER 1. INVASION").
+
+    Only an exactly-numbered heading is touched, so a book whose openings are
+    already whole is left alone, and a heading carrying prose is never
+    merged into.
+    """
+    found = []                                   # (page, match, level)
+    for i, body in enumerate(bodies):
+        for m in CHAPTER_HEAD.finditer(body):
+            if _chapter_head_number(m.group(3)) is None:
+                continue
+            found.append((i, m, int(m.group(1)[1])))
+    if len(found) < 2:
+        return 0
+    rank = min(level for _, _, level in found)
+    changed = 0
+    for i in sorted({p for p, _, _ in found}, reverse=True):
+        body = bodies[i]
+        edits = []
+        for m in CHAPTER_HEAD.finditer(body):
+            if _chapter_head_number(m.group(3)) is None:
+                continue
+            word, num = m.group(2), m.group(3)
+            title = re.sub(r"\s+", " ", _strip_tags(m.group(4))).strip()
+            end = m.end()
+            if not title:
+                # the title is the next heading along, if that is what it is:
+                # adjacent, no deeper than a title should be, and short enough
+                # to be one rather than a paragraph that got promoted
+                nxt = re.match(r"\s*<(h[1-6])[^>]*>(.*?)</\1>", body[m.end():], re.S)
+                if nxt and int(nxt.group(1)[1]) >= rank:
+                    cand = re.sub(r"\s+", " ", _strip_tags(nxt.group(2))).strip()
+                    if 0 < len(cand) <= 90 and not re.match(
+                            r"^(CHAPTER|Chapter)\s", cand):
+                        title, end = cand, m.end() + nxt.end()
+            label = f"{word} {num}" + (f". {title}" if title else "")
+            new = f"<h{rank}>{html.escape(label)}</h{rank}>"
+            if body[m.start():end] != new:
+                edits.append((m.start(), end, new))
+        for a, z, new in sorted(edits, reverse=True):
+            body = body[:a] + new + body[z:]
+            changed += 1
+        bodies[i] = body
+    return changed
+
+
+def promote_missing_chapter_heads(bodies: list[str]) -> int:
+    """
+    Recover a chapter opening the layout pass ran into the prose.
+
+    A chapter that begins on a fresh page is easy: its number and title stand
+    alone and come back as headings. One that begins halfway down a page,
+    under the previous chapter's exercises, does not — Principles of
+    Macroeconomics welded the whole of chapter nine's opening onto the end of
+    chapter eight's last problem, "…over the two decades. Chapter 9 The
+    Nature and Creation of Money Start Up: How Many Macks…". The reader lost
+    the chapter break itself, not merely a line in the contents.
+
+    "Chapter 9" also appears in ordinary prose — a textbook cross-references
+    its own chapters constantly — so recognition alone would be reckless.
+    What makes this safe is that only a HOLE is filled: the number must be
+    one the sequence is missing, it must lie between the pages of the
+    chapters either side of it, it must open a sentence, and it must be the
+    only such mention in that range. A cross-reference fails all of these at
+    once; the genuine opening passes them by construction.
+
+    The title is deliberately left where it is. Where it ends in run-together
+    prose cannot be known — "…Creation of Money Start Up: How Many Macks…"
+    offers no honest boundary — and a heading that swallows half the next
+    one would be invention. The break is what was lost; the break is what is
+    restored.
+    """
+    found = []
+    for i, body in enumerate(bodies):
+        for m in CHAPTER_HEAD.finditer(body):
+            no = _chapter_head_number(m.group(3))
+            if no is not None:
+                found.append((no, i, int(m.group(1)[1])))
+    if len(found) < 2:
+        return 0                              # nothing to be a gap between
+    found.sort()
+    rank = min(level for _, _, level in found)
+    seen = {no: page for no, page, _ in found}
+    pages_in_order = [seen[no] for no in sorted(seen)]
+    if any(b < a for a, b in zip(pages_in_order, pages_in_order[1:])):
+        return 0                              # sequence disagrees with the book
+    filled = 0
+    for missing in range(min(seen) + 1, max(seen)):
+        if missing in seen:
+            continue
+        lo, hi = seen.get(missing - 1), seen.get(missing + 1)
+        if lo is None or hi is None or hi <= lo:
+            continue
+        word = "CHAPTER" if any(
+            CHAPTER_HEAD.search(bodies[p]) and
+            CHAPTER_HEAD.search(bodies[p]).group(2) == "CHAPTER"
+            for p in (lo, hi)) else "Chapter"
+        pat = re.compile(
+            r"(?<=[.!?])(\s+)(" + word + r"\s+" + str(missing) + r")\s+(?=[A-Z])")
+        hits = [(p, m) for p in range(lo, hi + 1)
+                for m in pat.finditer(bodies[p])]
+        if len(hits) != 1:
+            continue
+        p, m = hits[0]
+        body = bodies[p]
+        # Split the paragraph: what came before stays in it, the opening
+        # becomes a heading of the rank its siblings use, the remainder
+        # resumes in a fresh paragraph.
+        head = f"</p><h{rank}>{word} {missing}</h{rank}><p>"
+        bodies[p] = body[:m.start()] + head + body[m.end():]
+        filled += 1
+    return filled
+
+
+def chapter_head_contents(bodies: list[str]) -> "list[tuple[int, str]]":
+    """
+    (page, label) for each chapter opening, as a contents list of last resort.
+
+    Some books simply have no printed contents page — Principles of
+    Macroeconomics runs copyright, preface, chapter one — and until now that
+    meant the reader got one navigation entry per page, eight hundred and
+    twenty-six of them reading "Page 1", "Page 2". The book still knows where
+    its chapters begin; nothing was asking it. This is only ever consulted
+    when the printed page yielded nothing, so a real contents always wins.
+    """
+    out, seen = [], set()
+    for i, body in enumerate(bodies):
+        for m in CHAPTER_HEAD.finditer(body):
+            no = _chapter_head_number(m.group(3))
+            if no is None or no in seen:
+                continue
+            seen.add(no)
+            label = re.sub(r"\s+", " ", _strip_tags(m.group(0))).strip()
+            if label:
+                out.append((i, label))
+    # numbers must climb with the pages, or this is not a chapter sequence
+    if len(out) < 3:
+        return []
+    nums = [_chapter_head_number(CHAPTER_HEAD.search(bodies[i]).group(3))
+            for i, _ in out]
+    if any(b <= a for a, b in zip(nums, nums[1:])):
+        return []
+    return out
+
+
 def normalize_note_heads(bodies: list[str]) -> int:
     """
     Promote bold blocks that the notes parser recognizes as group heads into
@@ -4018,6 +4193,17 @@ def build_epub(
     if n_reconciled:
         print(f"    reconciled {n_reconciled} word(s) against the book's "
               f"own born-digital text")
+    # After reconciliation, never before it. Reconciling corrects our reading
+    # against the publisher's text, word by word; the merged opening
+    # "Chapter 1. Economics" has no counterpart there, so running it first
+    # let the correction quietly take the separator back out again.
+    n_chapters = normalize_chapter_heads(bodies)
+    if n_chapters:
+        print(f"    squared up {n_chapters} chapter heading(s) to one rank")
+    n_recovered = promote_missing_chapter_heads(bodies)
+    if n_recovered:
+        print(f"    recovered {n_recovered} chapter opening(s) the layout ran "
+              f"into the prose")
     texts = [_strip_tags(b) for b in bodies]
     folios = folios_from_furniture(page_furniture) if page_furniture else None
 
@@ -4375,6 +4561,17 @@ def build_epub(
             print(f"    contents: {len(placed)} printed lines, "
                   f"{verified} title-verified, {missed} unplaced"
                   + (f", {len(entries)} numbered entries" if entries else ""))
+    if not toc_built:
+        # No printed contents parsed. Before falling back to a list of pages —
+        # which is not a table of contents, and which the page list now
+        # provides properly anyway — ask the book where its chapters start.
+        heads = [(i, t) for i, t in chapter_head_contents(bodies)
+                 if i in pos_of]
+        if heads:
+            toc_built = [epub.Link(f"page_{i:04d}.xhtml", t, f"chap{i}")
+                         for i, t in heads]
+            print(f"    contents: no printed contents page; built from "
+                  f"{len(heads)} chapter headings in the text")
     book.toc = tuple(toc_built) if toc_built else tuple(chapters)
 
     if cover_spec == "auto":
