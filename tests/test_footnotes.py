@@ -155,3 +155,70 @@ def test_an_endnote_marker_is_left_for_the_endnote_linker(vtb):
     bodies = ["<p>Endnoted claim.<sup>12</sup></p>"]
     vtb.link_footnotes(bodies)
     assert bodies[0] == "<p>Endnoted claim.<sup>12</sup></p>"
+
+
+# ── the superscript rendering, and pages the layout gave no rule ─────────────
+
+def test_a_foot_numbered_in_superscript_is_read(vtb):
+    """When Protest Becomes Crime writes "<p><sup>2</sup> See: …" on some
+    pages and "<p>1. According to …" on others. Only the second was
+    understood, which cost it 52 of its 63 footnotes."""
+    bodies = ["<p>Claim.<sup>1</sup> Another.<sup>2</sup></p><hr/>"
+              "<p><sup>1</sup> First source.</p><p><sup>2</sup> Second.</p>"]
+    stats = vtb.link_footnotes(bodies, allow_numbered=True)
+    assert stats["numbered"] == 2
+    assert 'href="#fn-p0-n2"' in bodies[0]
+    assert "Second." in bodies[0]
+
+
+def test_both_renderings_on_one_page(vtb):
+    bodies = ["<p>A.<sup>1</sup> B.<sup>2</sup></p><hr/>"
+              "<p>1. Plain form.</p><p><sup>2</sup> Superscript form.</p>"]
+    assert vtb.link_footnotes(bodies, allow_numbered=True)["numbered"] == 2
+
+
+def test_a_foot_block_under_no_rule_is_found(vtb):
+    """Seven pages of that book carry a plain foot block with no rule at
+    all, and the pass skipped them on its first line."""
+    body = ("<p>" + "Body prose about the case. " * 12 + "Claim.<sup>1</sup></p>"
+            "<p><sup>1</sup> The foot of the page.</p>")
+    bodies = [body]
+    stats = vtb.link_footnotes(bodies, allow_numbered=True)
+    assert stats["ruleless"] == 1 and stats["numbered"] == 1
+
+
+def test_a_ruleless_page_needs_a_page_above_the_feet(vtb):
+    """A page that is nothing but numbered paragraphs is a list or a notes
+    page, not a page with feet under it."""
+    bodies = ["<p><sup>1</sup> One.</p><p><sup>2</sup> Two.</p>"
+              "<p><sup>3</sup> Three.</p>"]
+    assert vtb.link_footnotes(bodies, allow_numbered=True)["ruleless"] == 0
+
+
+def test_a_ruleless_page_needs_the_feet_at_the_end(vtb):
+    """A superscript-led paragraph in the middle, with prose after it, is
+    not a foot block — the block is the last thing on its page."""
+    body = ("<p>" + "Body prose. " * 12 + "Claim.<sup>1</sup></p>"
+            "<p><sup>1</sup> Looks like a foot.</p>"
+            "<p>" + "But the page carries on afterwards. " * 8 + "</p>")
+    bodies = [body]
+    assert vtb.link_footnotes(bodies, allow_numbered=True)["ruleless"] == 0
+
+
+def test_the_ruleless_path_is_off_when_numbers_belong_to_endnotes(vtb):
+    """A book with an endnotes section resolves its numbers there; without
+    a rule there is not even a printed boundary to argue otherwise."""
+    body = ("<p>" + "Body prose. " * 12 + "Claim.<sup>44</sup></p>"
+            "<p><sup>44</sup> Would look like a foot.</p>")
+    bodies = [body]
+    assert vtb.link_footnotes(bodies)["ruleless"] == 0
+    assert "<sup>44</sup>" in bodies[0]
+
+
+def test_a_ruleless_page_with_no_superscript_feet_is_untouched(vtb):
+    """Plain "1." paragraphs at the foot are not enough without a rule: an
+    ordinary numbered list at the end of a page looks exactly the same."""
+    body = ("<p>" + "Body prose. " * 12 + "Claim.<sup>1</sup></p>"
+            "<p>1. Could be a list item.</p>")
+    bodies = [body]
+    assert vtb.link_footnotes(bodies, allow_numbered=True)["ruleless"] == 0
