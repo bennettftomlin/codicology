@@ -63,11 +63,27 @@ def test_an_index_heading_does_not_become_a_group(vtb):
 
 
 def test_a_heading_that_merely_opens_with_the_word_is_not_a_head(vtb):
-    """"Chapter One was drafted twice" is prose about a chapter."""
-    bodies = ["<p>One.<sup>1</sup></p>",
-              notes_page("<h2>Chapter One was drafted twice</h2>")]
+    """"Chapter One was drafted twice" is prose about a chapter, and must not
+    open a group. The section may still parse as an ungrouped one — three
+    notes numbered 1, 2, 3 under no head is exactly that — so what is asserted
+    here is the head, not the outcome: no group is opened BY this heading.
+    The companion below is the case where that distinction bites."""
+    frag = notes_page("<h2>Chapter One was drafted twice</h2>")
+    assert vtb.GROUP_HEAD.search(frag) is None
+
+
+def test_an_unreadable_head_over_restarting_numbers_still_refuses(vtb):
+    """The distinction that matters: a grouped book whose heads we cannot
+    read must not be flattened into one sequence. Its numbers restart, and
+    that is what refuses — not the heading."""
+    bodies = ["<p>A.<sup>1</sup> B.<sup>2</sup> C.<sup>3</sup></p>",
+              "<h1>NOTES</h1><h2>Chapter One was drafted twice</h2>"
+              "<ol><li>1. a</li><li>2. b</li><li>3. c</li></ol>"
+              "<h2>Chapter Two was also drafted twice</h2>"
+              "<ol><li>1. d</li><li>2. e</li><li>3. f</li></ol>"]
     _, groups = vtb.parse_notes_section(bodies)
     assert groups == []
+    assert vtb.link_notes(bodies, dropped=set())["linked"] == 0
 
 
 # ── the alignment guard ──────────────────────────────────────────────────────
@@ -125,3 +141,74 @@ def test_a_shifted_book_links_nothing_rather_than_everything_wrongly(vtb):
     stats = vtb.link_notes(bodies, dropped=set())
     assert stats["linked"] == 0, "markers were bound across a shifted pairing"
     assert stats["misaligned"] is True
+
+
+# ── books that do not group their notes at all ───────────────────────────────
+
+def ungrouped(head="<h1>Notes</h1>", n=6, tail=""):
+    items = "".join(f"<li>{k}. Source {k}.</li>" for k in range(1, n + 1))
+    return head + "<ol>" + items + "</ol>" + tail
+
+
+def test_a_single_continuous_sequence_binds(vtb):
+    """A Critical History of Poverty Finance cites author-date in the prose
+    and keeps numbered notes for archival sources, so twenty-one notes run
+    straight through under one heading with no chapter heads at all."""
+    bodies = ["<p>A.<sup>1</sup> B.<sup>2</sup> C.<sup>3</sup></p>",
+              "<p>D.<sup>4</sup> E.<sup>5</sup> F.<sup>6</sup></p>",
+              ungrouped()]
+    start, groups = vtb.parse_notes_section(bodies)
+    assert len(groups) == 1 and len(groups[0]) == 6
+    stats = vtb.link_notes(bodies, dropped=set())
+    assert stats["linked"] == 6 and stats["unlinked"] == 0
+
+
+def test_a_note_cited_twice_still_binds_once_backwards(vtb):
+    bodies = ["<p>A.<sup>1</sup> B.<sup>2</sup> C.<sup>3</sup> "
+              "again.<sup>2</sup> and.<sup>4</sup></p>",
+              ungrouped(n=4)]
+    stats = vtb.link_notes(bodies, dropped=set())
+    assert stats["linked"] == 5
+    assert bodies[0].count('epub:type="noteref"') == 5
+    assert bodies[1].count("#ref-") == 4, "one backlink per note, not per marker"
+
+
+def test_numbers_that_restart_without_a_heading_still_refuse(vtb):
+    """Two chapters' notes run together with nothing to say where one ends.
+    Which "1" a marker means is unknowable, so nothing binds."""
+    bodies = ["<p>A.<sup>1</sup> B.<sup>2</sup> C.<sup>3</sup></p>",
+              "<h1>Notes</h1><ol><li>1. a</li><li>2. b</li><li>3. c</li>"
+              "<li>1. d</li><li>2. e</li><li>3. f</li></ol>"]
+    _, groups = vtb.parse_notes_section(bodies)
+    assert groups == []
+    assert vtb.link_notes(bodies, dropped=set())["linked"] == 0
+
+
+def test_the_bibliography_after_it_is_not_swallowed(vtb):
+    """A numbered bibliography beyond the section boundary belongs to
+    somebody else; taking it would inflate the group and mis-bind."""
+    bodies = ["<p>A.<sup>1</sup> B.<sup>2</sup> C.<sup>3</sup></p>",
+              ungrouped(n=3),
+              "<h1>Bibliography</h1><ol><li>4. Adams, A. Some Book.</li>"
+              "<li>5. Brown, B. Another Book.</li></ol>"]
+    _, groups = vtb.parse_notes_section(bodies)
+    assert len(groups) == 1
+    assert [n for _, n, _ in groups[0]] == [1, 2, 3]
+
+
+def test_a_grouped_book_never_reaches_the_fallback(vtb):
+    bodies = ["<p>A.<sup>1</sup> B.<sup>2</sup> C.<sup>3</sup></p>",
+              "<p>D.<sup>1</sup> E.<sup>2</sup> F.<sup>3</sup></p>",
+              "<h1>NOTES</h1><h2>Chapter One</h2>"
+              "<ol><li>1. a</li><li>2. b</li><li>3. c</li></ol>"
+              "<h2>Chapter Two</h2>"
+              "<ol><li>1. d</li><li>2. e</li><li>3. f</li></ol>"]
+    _, groups = vtb.parse_notes_section(bodies)
+    assert len(groups) == 2, "the grouped path was bypassed"
+
+
+def test_too_few_entries_to_be_a_notes_section(vtb):
+    bodies = ["<p>A.<sup>1</sup></p>",
+              "<h1>Notes</h1><ol><li>1. Only one.</li></ol>"]
+    _, groups = vtb.parse_notes_section(bodies)
+    assert groups == []
