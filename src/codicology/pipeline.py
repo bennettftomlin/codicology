@@ -3052,8 +3052,54 @@ def parse_notes_section(bodies: list[str]) -> tuple[int, list[list[tuple[int, in
             elif current is not None:
                 current.append((i, n, pos))
     keep = [(no, g) for no, g in zip(group_nos, groups) if g]
+    if not keep:
+        solo = _ungrouped_notes(bodies, start)
+        if solo:
+            parse_notes_section.last_group_numbers = [None]
+            return start, [solo]
     parse_notes_section.last_group_numbers = [no for no, _ in keep]
     return start, [g for _, g in keep]
+
+
+def _ungrouped_notes(bodies: list[str], start: int) -> list:
+    """
+    The whole notes section as one group, for a book that does not group.
+
+    Not every book divides its endnotes by chapter. A Critical History of
+    Poverty Finance cites author-date in the prose and keeps numbered notes
+    for archival sources only, so its twenty-one notes run 1 to 21 straight
+    through under a single "Notes" heading with no chapter heads at all. Every
+    entry was recognised and then discarded, because a group must be opened
+    before an entry has anywhere to go.
+
+    The absence of grouping is what makes this safe rather than risky: with
+    one sequence the numbers are unique across the whole book, so the scope
+    question the group machinery exists to answer does not arise — note 7 is
+    note 7 wherever it is cited. That is also the condition. The numbers must
+    climb without restarting; a section that starts over without a heading to
+    say so is genuinely ambiguous and keeps its refusal.
+
+    The section ends at the next part of the book. A bibliography or an index
+    opens with a heading of the notes head's own rank, and numbered entries
+    beyond that boundary are somebody else's.
+    """
+    rank = re.search(r"<(h[1-6])[^>]*>\s*NOTES?\s*</\1>", bodies[start], re.I)
+    stop = rf"<{rank.group(1)}[^>]*>" if rank else r"<h1[^>]*>"
+    entries: list[tuple[int, int, int]] = []
+    for i in range(start, len(bodies)):
+        if i > start and re.search(stop, bodies[i], re.I):
+            break
+        sup = [(m.start(), int(m.group(1))) for m in NOTE_ENTRY.finditer(bodies[i])]
+        plain = [] if sup else [(m.start(), int(m.group(1)))
+                                for pat in (NOTE_ENTRY_PLAIN, NOTE_ENTRY_LI)
+                                for m in pat.finditer(bodies[i])]
+        entries += [(i, n, pos) for pos, n in sorted(sup + plain)]
+    if len(entries) < 3:
+        return []
+    nums = [n for _, n, _ in entries]
+    if any(b <= a for a, b in zip(nums, nums[1:])):
+        return []
+    return entries
 
 
 def _entry_anchor(entry: str, note_id: str, back_href: str, n: int):
