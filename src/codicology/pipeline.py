@@ -2976,8 +2976,25 @@ def find_numbered_entries(bodies: list[str]) -> list[tuple[int, str, int]]:
 NOTE_ENTRY = re.compile(r"<p>\s*<sup>\s*(\d{1,3})\s*</sup>")
 BODY_MARKER = re.compile(r"<sup>\s*(\d{1,3})\s*</sup>")
 NOTES_HEAD = re.compile(r"<h\d[^>]*>\s*NOTES?\s*</h\d>", re.I)
-GROUP_HEAD = re.compile(r"<(?:h\d[^>]*|p)>\s*(CHAPTER\s+[A-Z\-]+|CHAPTER\s+\d+)\s*</",
-                        re.I)
+# The names a notes section gives its groups. Chapter forms, spelled out or
+# numbered — and the sections a book's front and back matter use, because a
+# book that annotates its introduction gives those notes a group of their
+# own. Missing that group does not merely lose it: groups pair by position,
+# so an unrecognised first group shifts every one after it by one, and the
+# markers then link confidently to the wrong chapter's citations.
+GROUP_NAMES = (r"CHAPTER\s+[A-Z\-]+|CHAPTER\s+\d{1,3}"
+               r"|INTRODUCTION|PREFACE|PROLOGUE|FOREWORD|FORWARD"
+               r"|CONCLUSION|EPILOGUE|AFTERWORD|POSTSCRIPT")
+# Inline markup between the heading and its words is invisible to a reader
+# and fatal to a pattern that does not expect it: Work, Sex & Power sets
+# every one of its eighteen group heads as <h2><i>Chapter One</i></h2>, and
+# not one was recognised, so all 359 of its markers went unlinked. The
+# designation must still be the WHOLE heading — a heading that merely opens
+# with the word is prose, not a head.
+GROUP_HEAD = re.compile(
+    r"<(h[1-6]|p)\b[^>]*>\s*(?:<[^/][^>]*>\s*)*"
+    r"(" + GROUP_NAMES + r")"
+    r"\s*(?:</[a-zA-Z]+>\s*)*</\1>", re.I)
 
 
 def parse_notes_section(bodies: list[str]) -> tuple[int, list[list[tuple[int, int, int]]]]:
@@ -3640,6 +3657,38 @@ def link_footnotes(bodies: list[str], allow_numbered: bool = False) -> dict:
     return stats
 
 
+def _paired_groups_agree(body_groups, note_groups, min_judged: int = 4) -> bool:
+    """
+    Do these pairings look like the same chapters, or like a shifted list?
+
+    The highest marker in a chapter's prose and the highest note in its group
+    are the same citation, so where the pairing is right the two numbers meet.
+    Where it is shifted they do not, and no per-marker check can tell: every
+    chapter numbers from 1, so each marker finds SOME note and the run reports
+    a full set of links.
+
+    Judged loosely on each pair and strictly in aggregate — a single chapter
+    may legitimately disagree, where a note went unread or a marker was taken
+    as a footnote, but a shifted list disagrees nearly everywhere. And judged
+    only with enough pairs to tell those apart: across two groups, one honest
+    disagreement and a shift look identical, so the rule keeps quiet unless
+    the counts already failed to match, which is the case where the pairing
+    was a guess to begin with.
+    """
+    agree = judged = 0
+    for bg, ng in zip(body_groups, note_groups):
+        if not bg or not ng:
+            continue
+        judged += 1
+        b_top = max(n for _, n, _ in bg)
+        n_top = max(n for _, n, _ in ng)
+        if abs(b_top - n_top) <= max(2, 0.25 * max(b_top, n_top)):
+            agree += 1
+    if judged < min_judged:
+        return True                    # too little to tell; other rules apply
+    return agree >= 0.75 * judged
+
+
 def link_notes(bodies: list[str], dropped: set[int],
                chapter_starts: "list[tuple[int, int]] | None" = None) -> dict:
     """
@@ -3689,6 +3738,20 @@ def link_notes(bodies: list[str], dropped: set[int],
             return stats
         body_groups, note_groups = body_groups[:k], note_groups[:k]
         stats["misaligned"] = True
+
+    # Pairing by position assumes any group missing from one side is missing
+    # from the END. When it is missing from the FRONT — a notes section whose
+    # introduction group went unrecognised — every pair is off by one and
+    # every marker still finds a note, because chapters all number from 1.
+    # Nothing downstream would notice: it reads as a full set of links. So
+    # the pairs are checked against each other first. A chapter's last marker
+    # and its last note are the same citation, so their numbers agree; paired
+    # across a shift they do not, and four markers sitting against
+    # twenty-five notes is the shape that gives it away.
+    if not _paired_groups_agree(body_groups, note_groups,
+                                min_judged=2 if stats["misaligned"] else 4):
+        stats["misaligned"] = True
+        return stats
 
     # rewrite from the last page backward so match offsets stay valid
     edits: dict[int, list[tuple[int, int, str]]] = {}
