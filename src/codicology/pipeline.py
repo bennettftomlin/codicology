@@ -3544,8 +3544,18 @@ FOOTNOTE_SYMBOLS = ("\\*\\*", "\\*", "†", "‡")
 # A paragraph shaped like a footnote entry: opening with a marker — numbered
 # or symbol, possibly already wrapped in its link by the symbol pass — and
 # then saying something.
-FOOT_SHAPE = re.compile(
-    r"<p[^>]*>\s*(?:<a[^>]*>)?\s*(?:\*{1,2}|†|‡|\d{1,3}[.)]?)\s*(?:</a>)?\s+\S")
+# A paragraph shaped like a foot: opening with its marker, then saying
+# something. The marker may be set as plain text ("1. According to…") or as a
+# superscript ("<sup>2</sup> See:…") — one book uses both, page by page, and
+# only the first was understood, which cost it 52 of its 63 footnotes. It may
+# also already be wrapped in its link by the symbol pass.
+FOOT_MARK = r"(?:<sup>\s*)?(?:<a[^>]*>)?\s*(?:\*{1,2}|†|‡|\d{1,3}[.)]?)\s*" \
+            r"(?:</a>)?\s*(?:</sup>)?"
+FOOT_SHAPE = re.compile(r"<p[^>]*>\s*" + FOOT_MARK + r"\s*\S")
+# The same thing with its number captured: what a foot entry is, wherever the
+# page happens to put the block.
+FOOT_ENTRY = re.compile(r"<p[^>]*>\s*(?:<sup>\s*)?(\d{1,3})[.)]?\s*"
+                        r"(?:</sup>)?\s+(?=\S)")
 
 
 def _looks_like_foot_block(below: str) -> bool:
@@ -3574,6 +3584,43 @@ def _looks_like_foot_block(below: str) -> bool:
     return shaped >= 0.8 * total
 
 
+def _foot_block_without_a_rule(body: str) -> int:
+    """
+    Where the feet begin on a page the layout gave no rule, or 0 if unsure.
+
+    The printed rule is what normally separates the body from its feet, and
+    where the recogniser sees one there is nothing to guess. It does not
+    always see one: seven pages of When Protest Becomes Crime carry a plain
+    foot block under no rule at all, and the pass skipped them at its first
+    line.
+
+    What stands in for the rule is where the feet sit and how they open. A
+    footnote block is the LAST thing on its page and every paragraph in it
+    leads with its own number — and a paragraph never leads with a
+    superscript otherwise, which is the same reasoning the endnote parser
+    uses to tell a citation from a marker in running prose. So the trailing
+    run of such paragraphs is the block, and it counts only if what precedes
+    it is real prose: a page that is nothing but numbered paragraphs is a
+    list, or a notes page, and neither is a page with feet under it.
+    """
+    paras = list(re.finditer(r"<p[^>]*>.*?</p>", body, re.S))
+    if len(paras) < 2:
+        return 0
+    lead = re.compile(r"<p[^>]*>\s*<sup>\s*\d{1,3}\s*</sup>\s*\S")
+    k = len(paras)
+    while k > 0 and lead.match(paras[k - 1].group(0)):
+        k -= 1
+    if k == len(paras) or k == 0:
+        return 0                      # no trailing run, or the whole page
+    # anything after the last body paragraph belongs to the block
+    start = paras[k - 1].end()
+    body_words = len(_strip_tags(body[:start]).split())
+    foot_words = len(_strip_tags(body[start:]).split())
+    if body_words < 30 or not foot_words:
+        return 0                      # too little page above to be a page
+    return start
+
+
 def link_footnotes(bodies: list[str], allow_numbered: bool = False) -> dict:
     """
     Same-page footnotes, bound where the page itself settles the match.
@@ -3598,11 +3645,20 @@ def link_footnotes(bodies: list[str], allow_numbered: bool = False) -> dict:
     Every guard costs recall on a page laid out unusually, which is the side
     to err on — an unlinked marker is the page as printed.
     """
-    stats = {"linked": 0, "numbered": 0, "skipped": 0}
+    stats = {"linked": 0, "numbered": 0, "skipped": 0, "ruleless": 0}
     for pi, body in enumerate(bodies):
-        if "<hr/>" not in body:
-            continue
-        above, below = body.split("<hr/>", 1)
+        rule = "<hr/>"
+        if rule in body:
+            above, below = body.split(rule, 1)
+        else:
+            # No rule drawn. Only the numbered pass goes on without one, and
+            # only where the page's own shape says where the feet begin —
+            # symbols have no such trailing-run signature to stand on.
+            cut = _foot_block_without_a_rule(body) if allow_numbered else 0
+            if not cut:
+                continue
+            above, below, rule = body[:cut], body[cut:], ""
+            stats["ruleless"] += 1
         for k, sym in enumerate(FOOTNOTE_SYMBOLS):
             foot = list(re.finditer(rf"<p>\s*({sym})(?![*†‡])\s*", below))
             mark = list(re.finditer(rf"(?<=\S)({sym})(?![*†‡])", above))
@@ -3629,7 +3685,7 @@ def link_footnotes(bodies: list[str], allow_numbered: bool = False) -> dict:
             for m in re.finditer(r"<sup>\s*(\d{1,3})\s*</sup>", above):
                 mark_by_n.setdefault(int(m.group(1)), []).append(m)
             foot_by_n: dict[int, list] = {}
-            for m in re.finditer(r"<p[^>]*>\s*(\d{1,3})[.)]?\s+(?=\S)", below):
+            for m in FOOT_ENTRY.finditer(below):
                 foot_by_n.setdefault(int(m.group(1)), []).append(m)
             both = sorted(set(mark_by_n) & set(foot_by_n))
             usable = [n for n in both
@@ -3653,7 +3709,7 @@ def link_footnotes(bodies: list[str], allow_numbered: bool = False) -> dict:
             stats["linked"] += len(usable)
             stats["numbered"] += len(usable)
 
-        bodies[pi] = above + "<hr/>" + below
+        bodies[pi] = above + rule + below
     return stats
 
 
