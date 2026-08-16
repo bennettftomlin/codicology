@@ -1,4 +1,4 @@
-"""codicology — one command, four verbs.
+"""codicology — one command, five verbs.
 
     codicology convert …    build the PDF/EPUB (the pipeline; see convert -h)
     codicology verify EPUB PDF
@@ -75,6 +75,22 @@ def main(argv: "list[str] | None" = None) -> "int | None":
                           help="one JSON object on stdout, for a program "
                                "driving this pipeline")
 
+    p_adj = sub.add_parser(
+        "adjudicate",
+        help="where the readers disagree: re-read the book with the "
+             "witnesses and emit the dispute record — every word the "
+             "engines could not agree on and which rung of the ladder "
+             "settled it. Never changes the book")
+    p_adj.add_argument("epub", help="the EPUB this pipeline built")
+    p_adj.add_argument("pdf", help="the source it was built from")
+    p_adj.add_argument("--report", metavar="JSON",
+                       help="also write the full record as JSON")
+    p_adj.add_argument("--limit", type=int, default=None,
+                       help="examine only the first N pages")
+    p_adj.add_argument("--calibrate", action="store_true",
+                       help="score the witness engines against this "
+                            "born-digital book's own text instead")
+
     args = parser.parse_args(argv)
     if args.command == "verify":
         from . import verify
@@ -86,6 +102,12 @@ def main(argv: "list[str] | None" = None) -> "int | None":
         from . import doctor
         return doctor.main(full=args.full, ocr=args.ocr, lang=args.lang,
                            as_json=args.as_json)
+    if args.command == "adjudicate":
+        from . import adjudicate
+        if args.calibrate:
+            return adjudicate.calibrate(args.pdf, limit=args.limit)
+        return adjudicate.main(args.epub, args.pdf, report=args.report,
+                               limit=args.limit)
     return None
 
 
