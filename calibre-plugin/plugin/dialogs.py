@@ -75,6 +75,14 @@ class PreflightDialog(QDialog):
         self.typography.setChecked(bool(prefs["typography"]))
         form.addRow(self.typography)
 
+        self.link_index = QCheckBox("Link the index's page numbers to their "
+                                    "pages")
+        self.link_index.setToolTip(
+            "Joins the printed index to the page list. An index that "
+            "declares paragraph references is believed and left alone")
+        self.link_index.setChecked(bool(prefs["link_index"]))
+        form.addRow(self.link_index)
+
         self.check_folios = QCheckBox("Read printed page numbers and build "
                                       "the EPUB's page list")
         self.check_folios.setChecked(bool(prefs["check_folios"]))
@@ -116,6 +124,7 @@ class PreflightDialog(QDialog):
             "link_notes": self.link_notes.isChecked(),
             "link_citations": self.link_citations.isChecked(),
             "typography": self.typography.isChecked(),
+            "link_index": self.link_index.isChecked(),
             "check_folios": self.check_folios.isChecked(),
             "embed_images": self.embed_images.isChecked(),
             "keep_blank_pages": self.keep_blank.isChecked(),
