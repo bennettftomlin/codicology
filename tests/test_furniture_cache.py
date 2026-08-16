@@ -188,3 +188,28 @@ def test_decorated_folios_are_undressed_in_furniture(vtb):
     ])
     assert [(f.number, f.confident) for f in folios] == [
         (56, True), (54, True), (None, False)]
+
+
+def test_labels_round_trip_and_old_entries_stay_readable(vtb, tmp_path):
+    """The layout model's block labels survive the cache, and an entry
+    written before labels were kept reads back with label None — which every
+    consumer must treat as "unknown", never as "Text"."""
+    from PIL import Image
+    page = str(tmp_path / "p.png")
+    Image.new("RGB", (60, 90), "white").save(page)
+    path = str(tmp_path / "c.ocr.gz")
+    c = vtb.OCRCache(path, "surya", ["en"])
+    c.put(page, [vtb.PageItem(html="<p>1. src</p>", label="Footnote"),
+                 vtb.PageItem(html="<p>body</p>")])
+    c.save()
+    c2 = vtb.OCRCache(path, "surya", ["en"])
+    got = c2.get(page)
+    assert got[0].label == "Footnote"
+    assert got[1].label is None
+    # a pre-label entry: strip the key as an old writer would never have set it
+    key = c2._key(page)
+    entry = c2.entries[key]
+    for it in (entry["items"] if isinstance(entry, dict) else entry):
+        it.pop("lab", None)
+    old = c2.get(page)
+    assert old[0].label is None and old[0].html == "<p>1. src</p>"

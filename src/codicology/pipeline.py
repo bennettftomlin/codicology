@@ -1030,6 +1030,13 @@ class PageItem(NamedTuple):
     # it is worth anything as a guard is an empirical question, and one that
     # cannot even be asked while the number is being discarded.
     conf: float | None = None
+    # The layout model's own name for the block — Footnote, Formula,
+    # SectionHeader, TableOfContents, Handwriting, Text… — kept verbatim
+    # because every one of those is an assertion some heuristic here
+    # re-derives from shape. None on entries cached before labels were
+    # kept, and every consumer must treat None as "label unknown",
+    # never as "label Text".
+    label: "str | None" = None
 
 
 class OCRBackend:
@@ -1778,7 +1785,8 @@ class SuryaBackend(OCRBackend):
                         items.append(PageItem(html=_to_xhtml(frag),
                                               is_furniture=True,
                                               box=block_box(b),
-                                              conf=getattr(b, "confidence", None)))
+                                              conf=getattr(b, "confidence", None),
+                                              label=label or None))
                         tops.append(block_top(b))
                     continue
                 if label in FIGURE_LABELS:
@@ -1787,7 +1795,8 @@ class SuryaBackend(OCRBackend):
                     crop = _crop_block(image, b, pred)
                     if crop is not None:
                         items.append(PageItem(figure=crop, box=block_box(b),
-                                              conf=getattr(b, "confidence", None)))
+                                              conf=getattr(b, "confidence", None),
+                                              label=label or None))
                         tops.append(block_top(b))
                         poly = getattr(b, "polygon", None)
                         if poly:
@@ -1801,7 +1810,8 @@ class SuryaBackend(OCRBackend):
                 items.append(PageItem(html=_to_xhtml(frag),
                                       is_caption=label in CAPTION_LABELS,
                                       box=block_box(b),
-                                      conf=getattr(b, "confidence", None)))
+                                      conf=getattr(b, "confidence", None),
+                                      label=label or None))
                 tops.append(block_top(b))
 
             # Drawings the layout never segmented — a boxed structure with text
@@ -2153,7 +2163,8 @@ class OCRCache:
                                   is_caption=it.get("cap", False),
                                   is_furniture=it.get("furn", False),
                                   box=tuple(it["box"]) if it.get("box") else None,
-                                  conf=it.get("conf")))
+                                  conf=it.get("conf"),
+                                  label=it.get("lab")))
         return items
 
     def knows_furniture(self, page_path: str) -> bool:
@@ -2174,7 +2185,7 @@ class OCRCache:
             raw.append({"html": it.html, "fig": enc, "cap": it.is_caption,
                         "furn": it.is_furniture,
                         "box": list(it.box) if it.box else None,
-                        "conf": it.conf})
+                        "conf": it.conf, "lab": it.label})
         # The version marker is what tells a page with no running head apart
         # from a page read before heads were kept at all — without it, an old
         # cache would silently audit as a book with no folios anywhere.
@@ -2880,7 +2891,12 @@ def normalize_math(body: str) -> str:
             t = t.replace("\\" + name, ch)
         t = t.replace("\\,", ",").replace("\\", "")
         return t
-    return re.sub(r"<math[^>]*>(.*?)</math>", clean, body, flags=re.S)
+    # Display math is exempt: a block the layout model LABELLED Formula is
+    # an equation, not a Greek letter in a chemical name, and flattening it
+    # to letters destroys structure a MathML-capable reader would show. The
+    # assembly loop stamps those blocks display="block" on the way in.
+    return re.sub(r"<math(?![^>]*display=\"block\")[^>]*>(.*?)</math>",
+                  clean, body, flags=re.S)
 
 
 # The five renderings of an entry head, each capturing the head's own text.
@@ -4784,6 +4800,7 @@ def build_epub(
     furniture_known: list[bool] = []       # False = cached before heads were kept
     n_figures = 0
     n_blank_figures = 0
+    n_label_rules = 0
     total = len(page_paths)
 
     nonlocal_page_i = [0]      # the page emit_figure is currently working on
@@ -4889,7 +4906,27 @@ def build_epub(
                         i += 1
                     continue
 
-                parts.append(item.html)
+                # The layout model's own word for a block outranks the shape
+                # heuristics downstream — where a label exists. A page whose
+                # feet the model has NAMED but whose printed rule the
+                # recogniser did not draw gets its boundary here: the <hr/>
+                # the foot linker keys on, synthesised from the label. Seven
+                # pages of When Protest Becomes Crime needed exactly this and
+                # got a trailing-run heuristic instead; the label is the
+                # primary witness, the heuristic stays as the fallback for
+                # every cache written before labels were kept.
+                if item.label == "Footnote" \
+                        and "<hr/>" not in "".join(parts) \
+                        and not any(it.label == "Footnote" for it in items[:i]):
+                    parts.append("<hr/>")
+                    n_label_rules += 1
+                html_out = item.html
+                if item.label == "Formula" and "<math" in html_out:
+                    # the label's assertion, stamped so normalize_math keeps
+                    # its hands off real equations
+                    html_out = re.sub(r"<math(?![^>]*display)",
+                                      '<math display="block"', html_out)
+                parts.append(html_out)
                 i += 1
             bodies.append("".join(parts))
             page_figures.append(current_figures)
@@ -4906,6 +4943,9 @@ def build_epub(
         print(f"    extracted {n_figures} figures")
     if n_blank_figures:
         print(f"    skipped {n_blank_figures} blank-page image(s)")
+    if n_label_rules:
+        print(f"    drew {n_label_rules} footnote rule(s) the layout labels "
+              f"assert but the page never showed")
 
     # Decoration that recurs down the book is furniture, not artwork, and is
     # dropped here — before anything downstream counts what a page holds, so
