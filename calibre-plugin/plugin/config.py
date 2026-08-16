@@ -13,6 +13,7 @@ prefs = JSONConfig('plugins/codicology_ocr')
 
 prefs.defaults['codicology_path'] = ''      # empty: probe well-known dirs
 prefs.defaults['verify_after_build'] = True
+prefs.defaults['adjudicate_after_build'] = True
 prefs.defaults['lang'] = 'en'
 prefs.defaults['link_notes'] = True
 prefs.defaults['link_citations'] = False
@@ -61,6 +62,16 @@ class ConfigWidget(QWidget):
             'missing pages (codicology verify)')
         self.verify_box.setChecked(bool(prefs['verify_after_build']))
         layout.addWidget(self.verify_box)
+
+        self.adjudicate_box = QCheckBox(
+            'After every build, re-read the book with the witness engines '
+            'and save the dispute record (codicology adjudicate)')
+        self.adjudicate_box.setToolTip(
+            'Every word the OCR engines read differently, and which rule '
+            'settled it. Adds several minutes per book; never changes the '
+            'EPUB. The record is saved beside the OCR cache.')
+        self.adjudicate_box.setChecked(bool(prefs['adjudicate_after_build']))
+        layout.addWidget(self.adjudicate_box)
         layout.addStretch(1)
 
     def _browse(self):
@@ -113,3 +124,4 @@ class ConfigWidget(QWidget):
     def save_settings(self):
         prefs['codicology_path'] = self.path_edit.text().strip()
         prefs['verify_after_build'] = self.verify_box.isChecked()
+        prefs['adjudicate_after_build'] = self.adjudicate_box.isChecked()

@@ -273,39 +273,105 @@ def _vision_present() -> bool:
         return False
 
 
-def calibrate(pdf: str, limit: "int | None" = None,
-              scale: float = 200 / 72) -> int:
-    """Score the engines we run against a born-digital book's own text."""
+def calibrate(pdf: str, epub: "str | None" = None,
+              limit: "int | None" = None, scale: float = 200 / 72,
+              degrade: bool = False) -> dict:
+    """Score the engines — and the ladder itself — against a born-digital
+    book's own text.
+
+    Engine recall/precision is the shallow layer. The number that decides
+    whether the adjudicator may leave the house is RUNG ACCURACY: put real
+    disputes (the shipped EPUB text against a witness reading) through the
+    ladder where the truth is known, and count each rung's verdicts right,
+    wrong, and the abstains truth could have settled. A rung that rules
+    confidently wrong is a design fault, not a statistic.
+
+    --degrade re-renders each page through synthetic damage (blur, noise,
+    downscale) before reading it, because the adjudicator's real workload is
+    degraded type and clean-render calibration cannot speak to it. The truth
+    stays known — that is the entire point of synthesising the damage.
+    """
     import pypdfium2 as pdfium
     doc = pdfium.PdfDocument(pdf)
     tmp = tempfile.mkdtemp(prefix="calibrate_")
-    stats = {"tesseract": Counter(), "vision": Counter()}
+    engines = {"tesseract": Counter(), "vision": Counter()}
+    shipped = epub_page_texts(epub) if epub else {}
+    agreed, dispute_rows = [], []
     n = 0
     for i in range(len(doc)):
         if limit and n >= limit:
             break
-        truth = tokens(doc[i].get_textpage().get_text_bounded())
+        truth_txt = doc[i].get_textpage().get_text_bounded()
+        truth = tokens(truth_txt)
         if len(truth) < 100:
             continue
         n += 1
         png = f"{tmp}/p{i}.png"
-        doc[i].render(scale=scale).to_pil().save(png)
+        img = doc[i].render(scale=scale).to_pil()
+        if degrade:
+            from PIL import ImageFilter
+            img = img.convert("L").filter(ImageFilter.GaussianBlur(1.1))
+            img = img.resize((img.width * 2 // 3, img.height * 2 // 3))
+            img = img.resize((img.width * 3 // 2, img.height * 3 // 2))
+        img.save(png)
         truth_f = Counter(fold_word(w) for w in truth)
+        reads = {}
         for name, reader in (("tesseract", read_tesseract),
                              ("vision", read_vision)):
             got = reader(png)
             if got is None:
                 continue
+            reads[name] = got
             got_f = Counter(fold_word(w) for w in tokens(got))
             inter = sum((truth_f & got_f).values())
-            stats[name]["truth"] += sum(truth_f.values())
-            stats[name]["got"] += sum(got_f.values())
-            stats[name]["hit"] += inter
-    print(f"pages scored: {n}")
-    for name, c in stats.items():
+            engines[name]["truth"] += sum(truth_f.values())
+            engines[name]["got"] += sum(got_f.values())
+            engines[name]["hit"] += inter
+        # the ladder, on real disputes with the answer key in hand
+        ours = tokens(shipped.get(i, "")) if shipped else truth
+        wit = tokens(reads.get("tesseract", ""))
+        if not wit:
+            continue
+        pairs = align_disputes(ours, wit)
+        pair_set = {fold_word(a) for a, _ in pairs} | \
+                   {fold_word(b) for _, b in pairs}
+        agreed.append([w for w in ours if fold_word(w) not in pair_set])
+        for a, b in pairs:
+            dispute_rows.append((i, a, b, truth_f))
+
+    lexicon = build_lexicon(agreed)
+    rung_score = {}
+    for i, a, b, truth_f in dispute_rows:
+        v = adjudicate_pair(a, b, lexicon)
+        rung = v["rung"]
+        rs = rung_score.setdefault(rung, Counter())
+        fa, fb = fold_word(a), fold_word(b)
+        ta, tb = truth_f.get(fa, 0) > 0, truth_f.get(fb, 0) > 0
+        if v["winner"] is None:
+            rs["settleable" if (ta != tb) else "truly_open"] += 1
+        else:
+            fw = fold_word(v["winner"])
+            tw = truth_f.get(fw, 0) > 0
+            other = fb if fw == fa else fa
+            to = truth_f.get(other, 0) > 0
+            if tw and not to:
+                rs["right"] += 1
+            elif to and not tw:
+                rs["WRONG"] += 1
+            else:
+                rs["unjudgeable"] += 1
+
+    print(f"pages scored: {n}" + ("  (degraded renders)" if degrade else ""))
+    for name, c in engines.items():
         if not c.get("got"):
             print(f"  {name:<10} (unavailable)")
             continue
         print(f"  {name:<10} recall {c['hit']/max(1,c['truth']):.4f}  "
               f"precision {c['hit']/max(1,c['got']):.4f}")
-    return 0
+    if dispute_rows:
+        print(f"  ladder, on {len(dispute_rows)} real disputes with truth known:")
+        for rung, rs in sorted(rung_score.items()):
+            print(f"    {rung:<12} " + "  ".join(f"{k}={v}" for k, v in
+                                                 sorted(rs.items())))
+    return {"pages": n, "engines": {k: dict(v) for k, v in engines.items()},
+            "rungs": {k: dict(v) for k, v in rung_score.items()}}
