@@ -99,6 +99,8 @@ class CodicologyOCRAction(InterfaceAction):
             argv.append('--link-notes')
         if opts.get('link_citations'):
             argv.append('--link-citations')
+        if opts.get('typography'):
+            argv.append('--typography')
         if opts['check_folios']:
             argv.append('--check-folios')
         if opts['embed_images']:

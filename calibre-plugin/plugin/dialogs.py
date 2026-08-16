@@ -67,6 +67,14 @@ class PreflightDialog(QDialog):
         self.link_citations.setChecked(bool(prefs["link_citations"]))
         form.addRow(self.link_citations)
 
+        self.typography = QCheckBox("Restore directional quotes and collapse "
+                                    "double spaces (letters never touched)")
+        self.typography.setToolTip(
+            "The printed page had curly quotes; OCR flattens them. Spaced "
+            "ellipses are left exactly as the book set them")
+        self.typography.setChecked(bool(prefs["typography"]))
+        form.addRow(self.typography)
+
         self.check_folios = QCheckBox("Read printed page numbers and build "
                                       "the EPUB's page list")
         self.check_folios.setChecked(bool(prefs["check_folios"]))
@@ -107,6 +115,7 @@ class PreflightDialog(QDialog):
             "lang": self.lang.text().strip() or "en",
             "link_notes": self.link_notes.isChecked(),
             "link_citations": self.link_citations.isChecked(),
+            "typography": self.typography.isChecked(),
             "check_folios": self.check_folios.isChecked(),
             "embed_images": self.embed_images.isChecked(),
             "keep_blank_pages": self.keep_blank.isChecked(),

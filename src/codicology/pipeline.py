@@ -121,6 +121,7 @@ import os
 import re
 import shutil
 import statistics
+from collections import Counter
 import sys
 import tempfile
 from typing import NamedTuple
@@ -3791,6 +3792,103 @@ def _paired_groups_agree(body_groups, note_groups, min_judged: int = 4) -> bool:
     return agree >= 0.75 * judged
 
 
+# ── typography restoration ───────────────────────────────────────────────────
+
+# Words that legitimately OPEN with an apostrophe, where the mark elides
+# letters rather than opening a quotation: "'tis", "'em", "the '90s". An
+# opening single quote before these would be wrong far more often than right.
+_ELISIONS = re.compile(r"(?:tis|twas|twere|em|cause|til|till|round|bout|"
+                       r"neath|gainst|\d0s?)\b", re.I)
+
+
+def _requote(text: str) -> str:
+    """Directional quotes for one run of plain text, letters untouched.
+
+    The printed page had directional quotes; the recogniser flattened them
+    to straight ones — two and a half thousand in one book. Putting them
+    back is restoration, not modernisation, which is why this pass exists
+    and the spelling-modernising kind never will. The rules are the
+    typesetter's own: a quote after space or an opening bracket opens, any
+    other closes; a straight apostrophe between letters, after a letter, or
+    eliding ("'tis", "'90s") is ’.
+    """
+    out = []
+    for i, ch in enumerate(text):
+        if ch == '"':
+            prev = text[i - 1] if i else " "
+            out.append("“" if prev in " \t\n(—–[{‘“"
+                       else "”")
+        elif ch == "'":
+            prev = text[i - 1] if i else " "
+            nxt = text[i + 1] if i + 1 < len(text) else " "
+            if prev.isalnum():
+                out.append("’")           # contraction or possessive
+            elif _ELISIONS.match(text[i + 1:]):
+                out.append("’")           # elision keeps the apostrophe
+            elif prev in " \t\n(—–[{“" and (nxt.isalnum()
+                                                          or nxt in "“\""):
+                out.append("‘")
+            else:
+                out.append("’")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def normalize_typography(bodies: list[str],
+                         page_paths: "list[str] | None" = None) -> dict:
+    """
+    Restore what the recogniser flattened: quote direction, and the double
+    spaces no printed page contains. Deliberately NOT normalised: spaced
+    ellipses (". . ." is how older houses set them — that is the book),
+    hyphens standing where a dash might (a guess between minus, range and
+    dash would be wrong somewhere), and anything involving letters, which
+    belong to the OCR and its witnesses. Text inside tags is never touched.
+
+    Neither is a born-digital page. Its text is the publisher's own
+    typesetting — restored or reconciled from the layer — and its
+    punctuation is therefore the real thing, not a flattening to repair. A
+    heuristic that overwrote it would be guessing over an answer sheet.
+    Only pages the OCR alone speaks for are touched.
+    """
+    stats = {"quotes": 0, "spaces": 0, "native_skipped": 0}
+    for i, body in enumerate(bodies):
+        if page_paths is not None and i < len(page_paths) \
+                and os.path.exists(page_paths[i] + ".native"):
+            stats["native_skipped"] += 1
+            continue
+        parts = re.split(r"(<[^>]+>)", body)
+        for j, part in enumerate(parts):
+            if part.startswith("<"):
+                continue
+            n_q = part.count('"') + part.count("'")
+            if n_q:
+                part = _requote(part)
+                stats["quotes"] += n_q
+            collapsed = re.sub(r"(?<=\S)  +(?=\S)", " ", part)
+            if collapsed != part:
+                stats["spaces"] += 1
+                part = collapsed
+            parts[j] = part
+        bodies[i] = "".join(parts)
+    return stats
+
+
+def unusual_characters(bodies: list[str]) -> "list[tuple[str, int]]":
+    """Characters that usually mean the recogniser stumbled, with counts —
+    the broken-ligature ¬, box-drawing strays, replacement characters.
+    Reported for a human eye; nothing is ever changed on this evidence."""
+    sus = Counter()
+    for body in bodies:
+        text = re.sub(r"<[^>]+>", "", body)
+        for ch in text:
+            o = ord(ch)
+            if ch in "¬¦§¤°^~`|\\" or 0x2500 <= o <= 0x257F \
+                    or ch == "�" or 0x0080 <= o <= 0x009F:
+                sus[ch] += 1
+    return sus.most_common(8)
+
+
 # ── citations → bibliography ─────────────────────────────────────────────────
 
 BIBLIOGRAPHY_HEAD = re.compile(
@@ -4532,6 +4630,7 @@ def build_epub(
     cover_spec: str | None = "auto",
     link_notes_flag: bool = False,
     link_citations_flag: bool = False,
+    typography_flag: bool = False,
 ) -> None:
     try:
         from ebooklib import epub
@@ -4715,6 +4814,21 @@ def build_epub(
     if n_reconciled:
         print(f"    reconciled {n_reconciled} word(s) against the book's "
               f"own born-digital text")
+    # After reconciliation, the lesson the chapter separator taught: the
+    # publisher's layer keeps straight quotes, and reconciling after this
+    # pass would quietly put them back.
+    if typography_flag:
+        tst = normalize_typography(bodies, page_paths)
+        if tst["quotes"]:
+            print(f"    typography: {tst['quotes']} quote mark(s) set "
+                  f"directional, {tst['spaces']} double space(s) collapsed"
+                  + (f"; {tst['native_skipped']} born-digital page(s) left "
+                     f"to the publisher's own typesetting"
+                     if tst["native_skipped"] else ""))
+        odd = unusual_characters(bodies)
+        if odd:
+            print("    [~] characters that usually mean the OCR stumbled: "
+                  + ", ".join(f"{c!r} x{n}" for c, n in odd))
     # After reconciliation, never before it. Reconciling corrects our reading
     # against the publisher's text, word by word; the merged opening
     # "Chapter 1. Economics" has no counterpart there, so running it first
@@ -6336,6 +6450,7 @@ def _finish(
     cover_spec: str | None = "auto",
     link_notes_flag: bool = False,
     link_citations_flag: bool = False,
+    typography_flag: bool = False,
     pdf_text_layer: bool = False,
 ) -> None:
     """Write whichever outputs were asked for, from pages already on disk."""
@@ -6427,7 +6542,8 @@ def _finish(
                    review_sheet, ocr_cache, page_ids=kept_ids,
                    check_folios=check_folios, drop_blank=drop_blank,
                    cover_spec=cover_spec, link_notes_flag=link_notes_flag,
-                   link_citations_flag=link_citations_flag)
+                   link_citations_flag=link_citations_flag,
+                   typography_flag=typography_flag)
 
     if output_pdf and pdf_text_layer:
         # After the EPUB, so a shared cache is already warm — and the reads
@@ -6486,6 +6602,7 @@ def process_video(
     cover_spec: str | None = "auto",
     link_notes_flag: bool = False,
     link_citations_flag: bool = False,
+    typography_flag: bool = False,
     pdf_text_layer: bool = False,
 ) -> None:
     try:
@@ -6519,7 +6636,8 @@ def process_video(
             _finish(page_paths, output_pdf, output_epub, backend, title,
                     embed_images, img2pdf, dedupe, review_sheet, drop_pages,
                     ocr_cache, swap_pairs, ids, drop_turns, check_folios, drop_blank,
-                    cover_spec, link_notes_flag, link_citations_flag, pdf_text_layer)
+                    cover_spec, link_notes_flag, link_citations_flag, typography_flag,
+                    pdf_text_layer)
             return
 
         if from_images:
@@ -6546,7 +6664,8 @@ def process_video(
             _finish(page_paths, output_pdf, output_epub, backend, title,
                     embed_images, img2pdf, dedupe, review_sheet, drop_pages,
                     ocr_cache, swap_pairs, page_ids, drop_turns, check_folios, drop_blank,
-                    cover_spec, link_notes_flag, link_citations_flag, pdf_text_layer)
+                    cover_spec, link_notes_flag, link_citations_flag, typography_flag,
+                    pdf_text_layer)
             return
 
         print("\n[1/3] Scanning video for pages held still…")
@@ -6692,7 +6811,8 @@ def process_video(
         _finish(page_paths, output_pdf, output_epub, backend, title,
                 embed_images, img2pdf, dedupe, review_sheet, drop_pages,
                 ocr_cache, swap_pairs, page_ids, drop_turns, check_folios, drop_blank,
-                    cover_spec, link_notes_flag, link_citations_flag, pdf_text_layer)
+                    cover_spec, link_notes_flag, link_citations_flag, typography_flag,
+                    pdf_text_layer)
 
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
@@ -6769,6 +6889,12 @@ def main(argv: "list[str] | None" = None) -> None:
                              "Author-date in prose (Bernards 2019a) and Chicago short-form "
                              "in notes (the italic title). Every edited page must read "
                              "back word-for-word identical or it is reverted whole")
+    parser.add_argument("--typography", action="store_true",
+                        help="Restore what the recogniser flattened: straight quotes "
+                             "become directional and double spaces collapse. Letters are "
+                             "never touched, and neither are spaced ellipses — '. . .' is "
+                             "how the book set them. Also reports characters that usually "
+                             "mean the OCR stumbled")
     parser.add_argument("--cover", metavar="PAGE_OR_FILE", default="auto",
                         help="The EPUB's cover: a page named like --drop-pages names them, "
                              "a path to an image file, or 'none'. Default 'auto' takes the "
@@ -6987,6 +7113,7 @@ def _convert(args, parser) -> None:
         cover_spec=None if args.cover == "none" else args.cover,
         link_notes_flag=args.link_notes,
         link_citations_flag=args.link_citations,
+        typography_flag=args.typography,
         pdf_text_layer=args.pdf_text_layer,
     )
     progress.emit(event="result", epub=args.epub, pdf=output_pdf)
