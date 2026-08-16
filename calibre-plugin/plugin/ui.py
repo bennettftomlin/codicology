@@ -97,6 +97,8 @@ class CodicologyOCRAction(InterfaceAction):
                 '--ocr-cache', cache, '--title', title, '--progress-json']
         if opts['link_notes']:
             argv.append('--link-notes')
+        if opts.get('link_citations'):
+            argv.append('--link-citations')
         if opts['check_folios']:
             argv.append('--check-folios')
         if opts['embed_images']:
