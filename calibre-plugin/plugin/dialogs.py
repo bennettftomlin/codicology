@@ -57,6 +57,16 @@ class PreflightDialog(QDialog):
         self.link_notes.setChecked(bool(prefs["link_notes"]))
         form.addRow(self.link_notes)
 
+        self.link_citations = QCheckBox("Link in-text citations to the "
+                                        "bibliography (author-date and "
+                                        "Chicago notes)")
+        self.link_citations.setToolTip(
+            "Driven from the bibliography itself: only names and years it "
+            "actually holds are sought, an ambiguous match binds nothing, "
+            "and a page whose words would change is left untouched")
+        self.link_citations.setChecked(bool(prefs["link_citations"]))
+        form.addRow(self.link_citations)
+
         self.check_folios = QCheckBox("Read printed page numbers and build "
                                       "the EPUB's page list")
         self.check_folios.setChecked(bool(prefs["check_folios"]))
@@ -96,6 +106,7 @@ class PreflightDialog(QDialog):
         opts = {
             "lang": self.lang.text().strip() or "en",
             "link_notes": self.link_notes.isChecked(),
+            "link_citations": self.link_citations.isChecked(),
             "check_folios": self.check_folios.isChecked(),
             "embed_images": self.embed_images.isChecked(),
             "keep_blank_pages": self.keep_blank.isChecked(),
