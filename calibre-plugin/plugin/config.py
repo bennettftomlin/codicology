@@ -17,6 +17,7 @@ prefs.defaults['lang'] = 'en'
 prefs.defaults['link_notes'] = True
 prefs.defaults['link_citations'] = False
 prefs.defaults['typography'] = False
+prefs.defaults['link_index'] = False
 prefs.defaults['check_folios'] = True
 prefs.defaults['embed_images'] = False
 prefs.defaults['keep_blank_pages'] = False
