@@ -116,12 +116,18 @@ class CodicologyOCRAction(InterfaceAction):
 
         verify_argv = ([exe, 'verify', out.name, pdf]
                        if prefs['verify_after_build'] else None)
+        # The dispute record lands beside the OCR cache, named by the book,
+        # so re-running a conversion refreshes it in place.
+        report_path = cache.rsplit('.ocr.gz', 1)[0] + '-disputes.json'
+        adjudicate_argv = ([exe, 'adjudicate', out.name, pdf,
+                            '--report', report_path]
+                           if prefs['adjudicate_after_build'] else None)
 
         job = ThreadedJob(
             'codicology_ocr',
             f'OCR PDF — {title}',
             convert_worker,
-            [argv, verify_argv, book_id, out.name, title], {},
+            [argv, verify_argv, adjudicate_argv, book_id, out.name, title], {},
             self.Dispatcher(self.finished))
         self.gui.job_manager.run_threaded_job(job)
         self.gui.status_bar.show_message(
@@ -159,6 +165,27 @@ class CodicologyOCRAction(InterfaceAction):
                 pass
         self.gui.library_view.model().refresh_ids((book_id,))
 
+        adj = result.get('adjudicate')
+        if adj is not None:
+            import re as _re
+            m = _re.search(r'disputes: (\d+)', adj.get('output', ''))
+            n_disp = int(m.group(1)) if m else None
+            if adj['rc'] != 0:
+                error_dialog(
+                    self.gui, 'Dispute record could not be made',
+                    f'The book was added, but adjudication failed '
+                    f'(exit {adj["rc"]}).',
+                    det_msg=adj['output'], show=True)
+            elif n_disp:
+                info_dialog(
+                    self.gui, 'Where the readers disagreed',
+                    f'"{title}": {n_disp} word(s) the OCR engines read '
+                    f'differently. The record — who read what, and which '
+                    f'rule settled it — is saved beside the cache.',
+                    det_msg=adj['output'], show=True)
+            else:
+                self.gui.status_bar.show_message(
+                    'Codicology: the readers agreed on every word.', 5000)
         verify = result.get('verify')
         if verify is None:
             return info_dialog(

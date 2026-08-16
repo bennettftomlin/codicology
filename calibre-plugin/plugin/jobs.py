@@ -25,11 +25,12 @@ LABELS = {
 }
 
 
-def convert_worker(argv, verify_argv, book_id, epub_path, title,
+def convert_worker(argv, verify_argv, adjudicate_argv, book_id, epub_path, title,
                    abort=None, log=None, notifications=None):
     """
-    Run a conversion, then optionally verify, and return what finished()
-    needs: {'book_id', 'epub', 'title', 'result', 'verify'}.
+    Run a conversion, then optionally verify and adjudicate, and return
+    what finished() needs:
+    {'book_id', 'epub', 'title', 'result', 'verify', 'adjudicate'}.
 
     Raises runner.Aborted on cancellation and runner.Failed when the
     pipeline exits non-zero — ThreadedJob turns either into job.failed.
@@ -67,7 +68,7 @@ def convert_worker(argv, verify_argv, book_id, epub_path, title,
                         abort=abort)
 
     out = {"book_id": book_id, "epub": epub_path, "title": title,
-           "result": result, "verify": None}
+           "result": result, "verify": None, "adjudicate": None}
 
     if verify_argv:
         put(0.97, "Checking the EPUB for holes")
@@ -81,6 +82,20 @@ def convert_worker(argv, verify_argv, book_id, epub_path, title,
         # verify's exit status is a verdict, not a failure: 0 is clean,
         # 1 is "LOOK AT THIS". Anything else means it could not run.
         out["verify"] = {"rc": r.returncode, "output": text}
+
+    if adjudicate_argv and not (abort is not None and abort.is_set()):
+        # Slow on purpose: it re-reads the whole book with the witness
+        # engines. The record is why — every word the readers disagreed on,
+        # and which rule settled it — and it never changes the book.
+        put(0.98, "Adjudicating: re-reading with the witness engines")
+        r = subprocess.run([str(a) for a in adjudicate_argv],
+                           capture_output=True, text=True,
+                           env=runner.child_env(), timeout=3600)
+        text = ((r.stdout or "") + (r.stderr or "")).strip()
+        if log is not None:
+            for line in text.splitlines():
+                log(line)
+        out["adjudicate"] = {"rc": r.returncode, "output": text}
 
     put(1.0, "Done")
     return out

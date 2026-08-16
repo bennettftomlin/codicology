@@ -88,8 +88,9 @@ def main(argv: "list[str] | None" = None) -> "int | None":
     p_adj.add_argument("--limit", type=int, default=None,
                        help="examine only the first N pages")
     p_adj.add_argument("--calibrate", action="store_true",
-                       help="score the witness engines against this "
-                            "born-digital book's own text instead")
+                       help="score the witness engines AND the ladder's own "
+                            "verdicts against this born-digital book's text "
+                            "instead of emitting a dispute record")
 
     args = parser.parse_args(argv)
     if args.command == "verify":
@@ -105,7 +106,8 @@ def main(argv: "list[str] | None" = None) -> "int | None":
     if args.command == "adjudicate":
         from . import adjudicate
         if args.calibrate:
-            return adjudicate.calibrate(args.pdf, limit=args.limit)
+            adjudicate.calibrate(args.pdf, epub=args.epub, limit=args.limit)
+            return 0
         return adjudicate.main(args.epub, args.pdf, report=args.report,
                                limit=args.limit)
     return None
