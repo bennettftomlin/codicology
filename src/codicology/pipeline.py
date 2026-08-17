@@ -2674,18 +2674,26 @@ def parse_printed_toc(bodies: list[str], limit: int = 25
                 title = " ".join(cells[:-1]) if len(cells) > 1 else ""
                 # printed dot leaders survive OCR as trailing runs of dots
                 title = re.sub(r"[\s.·…]+$", "", title)
-                if not title:
-                    continue
                 m = re.fullmatch(r"(\d{1,3})", folio_text)
                 cm = re.fullmatch(r"(\d{1,2})-(\d{1,3})", folio_text)
                 roman = re.fullmatch(r"[ivxlc]+", folio_text.lower())
-                if cm:
+                if cm and title:
                     entries.append(TocEntry(title, int(cm.group(1)) * 1000
                                             + int(cm.group(2)), folio_text, 2))
-                elif m:
+                elif m and title:
                     entries.append(TocEntry(title, int(m.group(1)), folio_text, 2))
-                elif roman:
+                elif roman and title:
                     entries.append(TocEntry(title, None, folio_text, 2))
+                else:
+                    # A row with no folio at all is usually noise — but a
+                    # part heading is printed exactly this way: eagle's
+                    # contents groups its chapters under "BOOK SEVEN: The
+                    # Revolt" lines that carry no page number, and dropping
+                    # them flattened the book's own declared structure.
+                    full = re.sub(r"[\s.·…]+$", "", " ".join(cells))
+                    if re.match(r"(BOOK|PART|VOLUME)\b", full, re.I) \
+                            and 2 <= len(full.split()) <= 8:
+                        entries.append(TocEntry(full, None, "", 0))
     return _infer_row_depths(entries), toc_pages
 
 
