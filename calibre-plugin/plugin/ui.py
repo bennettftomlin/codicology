@@ -114,20 +114,32 @@ class CodicologyOCRAction(InterfaceAction):
         if opts['extra_flags']:
             argv += shlex.split(opts['extra_flags'])
 
+        # Decisions exported from a review sheet, placed beside the cache,
+        # are a durable input: every rebuild reapplies them before the
+        # linkers run. Stale sites are reported in the build log, not
+        # guessed at.
+        report_path = cache.rsplit('.ocr.gz', 1)[0] + '-disputes.json'
+        decisions_path = report_path[:-len('.json')] + '.decisions.json'
+        if os.path.exists(decisions_path):
+            argv += ['--apply-decisions', decisions_path]
+
         verify_argv = ([exe, 'verify', out.name, pdf]
                        if prefs['verify_after_build'] else None)
         # The dispute record lands beside the OCR cache, named by the book,
         # so re-running a conversion refreshes it in place.
-        report_path = cache.rsplit('.ocr.gz', 1)[0] + '-disputes.json'
         adjudicate_argv = ([exe, 'adjudicate', out.name, pdf,
                             '--report', report_path]
                            if prefs['adjudicate_after_build'] else None)
+        review_argv = ([exe, 'review', report_path]
+                       if adjudicate_argv
+                       and prefs['review_sheet_after_build'] else None)
 
         job = ThreadedJob(
             'codicology_ocr',
             f'OCR PDF — {title}',
             convert_worker,
-            [argv, verify_argv, adjudicate_argv, book_id, out.name, title], {},
+            [argv, verify_argv, adjudicate_argv, review_argv,
+             book_id, out.name, title], {},
             self.Dispatcher(self.finished))
         self.gui.job_manager.run_threaded_job(job)
         self.gui.status_bar.show_message(
@@ -170,6 +182,17 @@ class CodicologyOCRAction(InterfaceAction):
             import re as _re
             m = _re.search(r'disputes: (\d+)', adj.get('output', ''))
             n_disp = int(m.group(1)) if m else None
+            rev = result.get('review')
+            sheet_note = ''
+            if rev is not None and rev.get('rc') == 0:
+                ms = _re.search(r'review sheet: (.+)', rev.get('output', ''))
+                if ms:
+                    sheet_note = (
+                        f'\n\nA review sheet — the ink beside every disputed '
+                        f'word, and a field for your own reading — is at:\n'
+                        f'{ms.group(1).strip()}\n'
+                        f'Export decisions from it and drop the file beside '
+                        f'the cache; the next rebuild applies them.')
             if adj['rc'] != 0:
                 error_dialog(
                     self.gui, 'Dispute record could not be made',
@@ -181,7 +204,8 @@ class CodicologyOCRAction(InterfaceAction):
                     self.gui, 'Where the readers disagreed',
                     f'"{title}": {n_disp} word(s) the OCR engines read '
                     f'differently. The record — who read what, and which '
-                    f'rule settled it — is saved beside the cache.',
+                    f'rule settled it — is saved beside the cache.'
+                    + sheet_note,
                     det_msg=adj['output'], show=True)
             else:
                 self.gui.status_bar.show_message(

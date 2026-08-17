@@ -14,6 +14,7 @@ prefs = JSONConfig('plugins/codicology_ocr')
 prefs.defaults['codicology_path'] = ''      # empty: probe well-known dirs
 prefs.defaults['verify_after_build'] = True
 prefs.defaults['adjudicate_after_build'] = True
+prefs.defaults['review_sheet_after_build'] = True
 prefs.defaults['lang'] = 'en'
 prefs.defaults['link_notes'] = True
 prefs.defaults['link_citations'] = False
@@ -72,6 +73,20 @@ class ConfigWidget(QWidget):
             'EPUB. The record is saved beside the OCR cache.')
         self.adjudicate_box.setChecked(bool(prefs['adjudicate_after_build']))
         layout.addWidget(self.adjudicate_box)
+
+        self.review_sheet_box = QCheckBox(
+            'Also render the dispute record as a review sheet '
+            '(codicology review)')
+        self.review_sheet_box.setToolTip(
+            'A single HTML file beside the cache: the ink itself next to '
+            'every disputed word, ranked by how likely the shipped reading '
+            'is wrong, with a field for your own reading — which outranks '
+            'every rule. Export your decisions from the sheet and drop the '
+            'file beside the cache; the next rebuild applies them. Needs '
+            'the dispute record above.')
+        self.review_sheet_box.setChecked(
+            bool(prefs['review_sheet_after_build']))
+        layout.addWidget(self.review_sheet_box)
         layout.addStretch(1)
 
     def _browse(self):
@@ -125,3 +140,4 @@ class ConfigWidget(QWidget):
         prefs['codicology_path'] = self.path_edit.text().strip()
         prefs['verify_after_build'] = self.verify_box.isChecked()
         prefs['adjudicate_after_build'] = self.adjudicate_box.isChecked()
+        prefs['review_sheet_after_build'] = self.review_sheet_box.isChecked()
