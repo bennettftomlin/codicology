@@ -4273,6 +4273,51 @@ def link_index(bodies: list[str], folio_to_page: dict, dropped: set) -> dict:
     return stats
 
 
+PAGE_HYPHEN = re.compile(r"([A-Za-z]+)-((?:\s*</[^>]+>)*\s*)$")
+PAGE_CONT = re.compile(r"^((?:\s*<[^>]+>)*\s*)([a-z][A-Za-z'’]*[.,;:!?'’\"]*)")
+
+
+def join_page_break_hyphens(bodies: list, dropped: "set[int]") -> dict:
+    """A word the printer split across a page turn is one word.
+
+    Surya rejoins line-break hyphenation within a page, but a page is the
+    edge of its world: eagle shipped sixty words split at page edges —
+    Rus- | sia — where search cannot match and speech stumbles. When a
+    kept page ends mid-word on an ASCII hyphen and the next kept page
+    opens with a lowercase fragment, and the joined form is a word — the
+    dictionary's or this book's own — the continuation moves up to
+    complete it. The page-break anchor stays where it was.
+
+    Refusals are the point: an em-dash never matches, a capitalized
+    continuation is left alone, a heading is never raided for its first
+    word, and a printed compound breaking at the page edge (self- |
+    control) fails the join gate and keeps its hyphen, exactly as set."""
+    from .adjudicate import _is_word, fold_word
+    vocab = set()
+    for b in bodies:
+        for w in re.findall(r"[A-Za-z][A-Za-z'’]*", _strip_tags(b)):
+            vocab.add(fold_word(w))
+    kept = [i for i in range(len(bodies)) if i not in dropped]
+    joined = refused = 0
+    for a, b in zip(kept, kept[1:]):
+        m = PAGE_HYPHEN.search(bodies[a])
+        if not m:
+            continue
+        c = PAGE_CONT.match(bodies[b])
+        if not c or re.search(r"<(h\d|figure)", c.group(1)):
+            continue
+        frag = c.group(2)
+        word2 = re.match(r"[a-zA-Z'’]+", frag).group(0)
+        f = fold_word(m.group(1) + word2)
+        if not (_is_word(f) or f in vocab):
+            refused += 1
+            continue
+        bodies[a] = bodies[a][:m.start()] + m.group(1) + frag + m.group(2)
+        bodies[b] = c.group(1) + bodies[b][c.end():].lstrip()
+        joined += 1
+    return {"joined": joined, "refused": refused}
+
+
 def apply_reviewer_decisions(bodies: list, decisions_path: str) -> dict:
     """A review sheet's exported decisions, reapplied at rebuild time —
     before the linkers run, so a corrected word can still earn its anchor.
@@ -5361,6 +5406,13 @@ def build_epub(
             print(f"    decisions: {dst['applied']} reviewer correction(s) "
                   f"reapplied"
                   + (f", {dst['stale']} stale" if dst["stale"] else ""))
+
+    jst = join_page_break_hyphens(bodies, dropped)
+    if jst["joined"] or jst["refused"]:
+        print(f"    page-break hyphens: {jst['joined']} split word(s) "
+              f"rejoined across page turns"
+              + (f", {jst['refused']} left as printed (compound or unknown)"
+                 if jst["refused"] else ""))
 
     if link_notes_flag:
         # chapter starts, where the printed contents can supply them: a leaf
