@@ -4316,8 +4316,10 @@ def relabel_cache(cache_path: str, pdf_path: str, backend_name: str = "surya",
 
     Recognition is the slow half of a build and the settled half: the words
     in the cache do not improve by being read again by the same pinned
-    model. Labels are the cheap half — a small local layout model, no
-    inference server — and the only thing pre-label caches lack. Pages are
+    model. Labels are the cheap half — one layout call per page instead of
+    layout plus recognition; the layout head rides the same served
+    foundation model, so the inference server must be free, and it is
+    auto-started the way a build starts it. Pages are
     regenerated through the same extraction path the original build used,
     so their bytes and therefore their cache keys reproduce exactly; a page
     whose key misses is reported and skipped, never guessed at. The text is
@@ -4335,6 +4337,7 @@ def relabel_cache(cache_path: str, pdf_path: str, backend_name: str = "surya",
         from surya.layout import LayoutPredictor
         lp = LayoutPredictor()
         st = _Counter()
+        dry_streak = 0
         for pp in page_paths:
             key = cache._key(pp)
             entry = cache.entries.get(key)
@@ -4349,6 +4352,18 @@ def relabel_cache(cache_path: str, pdf_path: str, backend_name: str = "surya",
             img = Image.open(pp)
             result = lp([img])[0]
             blocks = [(b.label, list(b.bbox)) for b in result.bboxes]
+            # a page with cached blocks but zero layout blocks is the shape
+            # of a dead inference server retrying forever, not of a book;
+            # three in a row and this run stops rather than spins
+            if boxed and not blocks:
+                dry_streak += 1
+                if dry_streak >= 3:
+                    print("  [!] layout returned nothing three pages "
+                          "running — inference server down? aborting; "
+                          "cache untouched beyond what was already saved")
+                    break
+            else:
+                dry_streak = 0
             st["items_labeled"] += _match_layout_labels(
                 raw, blocks, img.width, img.height)
             st["items_unmatched"] += sum(1 for it in raw
