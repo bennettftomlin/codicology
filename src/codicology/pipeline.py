@@ -280,6 +280,12 @@ REVIEW_THUMB_WIDTH = 150
 # re-compressing the file is not what the run spends its time on.
 CACHE_CHECKPOINT_PAGES = 25
 
+# What a cache entry must have been written by to be served. Bumped when a
+# read gains something the whole pipeline downstream depends on — v3 kept
+# running heads, v4 records Surya's layout labels. A page below the mark is
+# re-read once and stamped current, whatever its ink turns out to hold.
+CACHE_VERSION = 4
+
 # A corner may sit this far from a right angle before the quad stops looking like
 # a photograph of a rectangle. Genuine tilt bends a corner by a few degrees.
 MAX_CORNER_ERROR_DEG = 12.0
@@ -2128,11 +2134,14 @@ class OCRCache:
     so a re-crop or a different backend misses rather than serving a stale read.
     """
 
-    def __init__(self, path: str, backend_name: str, langs: list[str]) -> None:
+    def __init__(self, path: str, backend_name: str, langs: list[str],
+                 serve_stale: bool = False) -> None:
         self.path = path
         self.tag = f"{backend_name}|{','.join(langs)}"
         self.entries: dict[str, list[dict]] = {}
         self.hits = 0
+        self.stale = 0
+        self.serve_stale = serve_stale
         self.dirty = False
         self.unsaved = 0
         if os.path.exists(path):
@@ -2151,6 +2160,18 @@ class OCRCache:
     def get(self, page_path: str) -> list[PageItem] | None:
         entry = self.entries.get(self._key(page_path))
         if entry is None:
+            return None
+        # A page read before the pipeline recorded layout labels is not a
+        # hit: it would build silently without the labels every consumer
+        # downstream now expects — the footnote rules, the reattached
+        # markers, the heading hierarchy. Re-read it. What makes this
+        # converge rather than re-read forever is the version stamp and
+        # not the labels themselves: a page whose ink genuinely yields no
+        # labelled block is stamped current all the same, and is a hit
+        # ever after.
+        version = entry.get("v", 0) if isinstance(entry, dict) else 0
+        if version < CACHE_VERSION and not self.serve_stale:
+            self.stale += 1
             return None
         raw = entry["items"] if isinstance(entry, dict) else entry
         self.hits += 1
@@ -2189,8 +2210,11 @@ class OCRCache:
                         "conf": it.conf, "lab": it.label})
         # The version marker is what tells a page with no running head apart
         # from a page read before heads were kept at all — without it, an old
-        # cache would silently audit as a book with no folios anywhere.
-        self.entries[self._key(page_path)] = {"v": 3, "items": raw}
+        # cache would silently audit as a book with no folios anywhere. It
+        # now also carries the same distinction for layout labels, which is
+        # what lets a stale page be re-read exactly once.
+        self.entries[self._key(page_path)] = {"v": CACHE_VERSION,
+                                              "items": raw}
         self.dirty = True
         self.unsaved += 1
         # Checkpoint as we go. Reading a book takes the better part of an hour,
@@ -4392,6 +4416,10 @@ def relabel_cache(cache_path: str, pdf_path: str, backend_name: str = "surya",
             st["items_unmatched"] += sum(1 for it in raw
                                          if it.get("box") and not it.get("lab"))
             st["pages"] += 1
+            # stamped current: these pages have been through the layout
+            # model, so a later build must not read them again
+            if isinstance(entry, dict):
+                entry["v"] = CACHE_VERSION
             cache.dirty = True
         if cache.dirty:
             backup = cache_path + ".prelabel"
@@ -5117,6 +5145,7 @@ def build_epub(
     link_index_flag: bool = False,
     typography_flag: bool = False,
     decisions_path: str | None = None,
+    serve_stale_cache: bool = False,
 ) -> None:
     try:
         from ebooklib import epub
@@ -5127,9 +5156,19 @@ def build_epub(
     print(f"  OCR backend: {backend.name} (batch size {backend.batch_size})")
     progress.emit(event="phase", phase="ocr",
                   message=f"OCR backend: {backend.name}")
-    cache = OCRCache(ocr_cache, backend.name, backend.langs) if ocr_cache else None
+    cache = (OCRCache(ocr_cache, backend.name, backend.langs,
+                      serve_stale=serve_stale_cache) if ocr_cache else None)
     if cache and cache.entries:
         print(f"  OCR cache: {len(cache.entries)} pages remembered in {ocr_cache}")
+        n_old = sum(1 for e in cache.entries.values()
+                    if not isinstance(e, dict) or e.get("v", 0) < CACHE_VERSION)
+        if n_old:
+            print(f"    {n_old} of them predate layout labels"
+                  + (" — served anyway (--keep-stale-cache); the label "
+                     "consumers stay dark on those pages"
+                     if serve_stale_cache else
+                     " and will be read again, which is what puts the "
+                     "labels there"))
 
     book = epub.EpubBook()
     book.set_title(title)
@@ -7067,6 +7106,7 @@ def _finish(
     typography_flag: bool = False,
     pdf_text_layer: bool = False,
     decisions_path: str | None = None,
+    serve_stale_cache: bool = False,
 ) -> None:
     """Write whichever outputs were asked for, from pages already on disk."""
     # Both numbered against the pages as they went in, which is what the review
@@ -7160,7 +7200,8 @@ def _finish(
                    link_citations_flag=link_citations_flag,
                    link_index_flag=link_index_flag,
                    typography_flag=typography_flag,
-                   decisions_path=decisions_path)
+                   decisions_path=decisions_path,
+                   serve_stale_cache=serve_stale_cache)
 
     if output_pdf and pdf_text_layer:
         # After the EPUB, so a shared cache is already warm — and the reads
@@ -7223,6 +7264,7 @@ def process_video(
     typography_flag: bool = False,
     pdf_text_layer: bool = False,
     decisions_path: str | None = None,
+    serve_stale_cache: bool = False,
 ) -> None:
     try:
         import img2pdf
@@ -7257,7 +7299,8 @@ def process_video(
                     ocr_cache, swap_pairs, ids, drop_turns, check_folios, drop_blank,
                     cover_spec, link_notes_flag, link_citations_flag, link_index_flag,
                     typography_flag, pdf_text_layer,
-                    decisions_path=decisions_path)
+                    decisions_path=decisions_path,
+                    serve_stale_cache=serve_stale_cache)
             return
 
         if from_images:
@@ -7286,7 +7329,8 @@ def process_video(
                     ocr_cache, swap_pairs, page_ids, drop_turns, check_folios, drop_blank,
                     cover_spec, link_notes_flag, link_citations_flag, link_index_flag,
                     typography_flag, pdf_text_layer,
-                    decisions_path=decisions_path)
+                    decisions_path=decisions_path,
+                    serve_stale_cache=serve_stale_cache)
             return
 
         print("\n[1/3] Scanning video for pages held still…")
@@ -7434,7 +7478,8 @@ def process_video(
                 ocr_cache, swap_pairs, page_ids, drop_turns, check_folios, drop_blank,
                     cover_spec, link_notes_flag, link_citations_flag, link_index_flag,
                     typography_flag, pdf_text_layer,
-                    decisions_path=decisions_path)
+                    decisions_path=decisions_path,
+                    serve_stale_cache=serve_stale_cache)
 
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
@@ -7522,6 +7567,10 @@ def main(argv: "list[str] | None" = None) -> None:
                              "never touched, and neither are spaced ellipses — '. . .' is "
                              "how the book set them. Also reports characters that usually "
                              "mean the OCR stumbled")
+    parser.add_argument("--keep-stale-cache", action="store_true",
+                        help="serve cached pages that predate layout labels "
+                             "instead of reading them again. Faster, and the "
+                             "label consumers stay dark on those pages")
     parser.add_argument("--apply-decisions", metavar="JSON", default=None,
                         help="review-sheet decisions to reapply at build time, "
                              "before the linkers run — the reviewer's "
@@ -7749,6 +7798,7 @@ def _convert(args, parser) -> None:
         typography_flag=args.typography,
         pdf_text_layer=args.pdf_text_layer,
         decisions_path=args.apply_decisions,
+        serve_stale_cache=args.keep_stale_cache,
     )
     progress.emit(event="result", epub=args.epub, pdf=output_pdf)
 
