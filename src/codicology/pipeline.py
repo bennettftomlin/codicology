@@ -4273,6 +4273,102 @@ def link_index(bodies: list[str], folio_to_page: dict, dropped: set) -> dict:
     return stats
 
 
+def _box_iou(a, b) -> float:
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    inter = ix * iy
+    union = ((a[2] - a[0]) * (a[3] - a[1])
+             + (b[2] - b[0]) * (b[3] - b[1]) - inter)
+    return inter / union if union > 0 else 0.0
+
+
+def _match_layout_labels(items: list, blocks: list, width: int,
+                         height: int) -> int:
+    """Assign layout labels to cached items by greedy best-IoU, one block
+    per item, nothing under 0.5. An item that matches no block cleanly
+    stays unlabeled — a wrong label misleads every consumer downstream,
+    an absent one merely declines to help."""
+    cands = []
+    for bi, (lab, bb) in enumerate(blocks):
+        nb = (bb[0] / width, bb[1] / height, bb[2] / width, bb[3] / height)
+        for ii, it in enumerate(items):
+            if not it.get("box") or it.get("lab"):
+                continue
+            iou = _box_iou(nb, tuple(it["box"]))
+            if iou >= 0.5:
+                cands.append((iou, ii, bi, lab))
+    cands.sort(key=lambda c: -c[0])
+    used_i, used_b, n = set(), set(), 0
+    for iou, ii, bi, lab in cands:
+        if ii in used_i or bi in used_b:
+            continue
+        items[ii]["lab"] = lab
+        used_i.add(ii)
+        used_b.add(bi)
+        n += 1
+    return n
+
+
+def relabel_cache(cache_path: str, pdf_path: str, backend_name: str = "surya",
+                  langs: "list[str] | None" = None) -> dict:
+    """Backfill layout labels into an existing cache without re-reading a
+    word.
+
+    Recognition is the slow half of a build and the settled half: the words
+    in the cache do not improve by being read again by the same pinned
+    model. Labels are the cheap half — a small local layout model, no
+    inference server — and the only thing pre-label caches lack. Pages are
+    regenerated through the same extraction path the original build used,
+    so their bytes and therefore their cache keys reproduce exactly; a page
+    whose key misses is reported and skipped, never guessed at. The text is
+    left byte-identical, which keeps every dispute record and decisions
+    file valid."""
+    from collections import Counter as _Counter
+    langs = langs or ["en"]
+    tmp = tempfile.mkdtemp(prefix="relabel_")
+    try:
+        page_paths = load_pages_from_pdf(pdf_path, tmp)
+        cache = OCRCache(cache_path, backend_name, langs)
+        if not cache.entries:
+            print(f"  [!] cache is cold or tagged differently: {cache_path}")
+            return {"pages": 0}
+        from surya.layout import LayoutPredictor
+        lp = LayoutPredictor()
+        st = _Counter()
+        for pp in page_paths:
+            key = cache._key(pp)
+            entry = cache.entries.get(key)
+            if entry is None:
+                st["page_miss"] += 1
+                continue
+            raw = entry["items"] if isinstance(entry, dict) else entry
+            boxed = [it for it in raw if it.get("box")]
+            if boxed and all(it.get("lab") for it in boxed):
+                st["already_labeled"] += 1
+                continue
+            img = Image.open(pp)
+            result = lp([img])[0]
+            blocks = [(b.label, list(b.bbox)) for b in result.bboxes]
+            st["items_labeled"] += _match_layout_labels(
+                raw, blocks, img.width, img.height)
+            st["items_unmatched"] += sum(1 for it in raw
+                                         if it.get("box") and not it.get("lab"))
+            st["pages"] += 1
+            cache.dirty = True
+        if cache.dirty:
+            backup = cache_path + ".prelabel"
+            if not os.path.exists(backup):
+                shutil.copy2(cache_path, backup)
+            cache.save()
+        print(f"  relabel: {st['items_labeled']} item(s) labeled across "
+              f"{st['pages']} page(s), {st['items_unmatched']} unmatched "
+              f"(left unlabeled), {st['page_miss']} page key(s) not in cache, "
+              f"{st['already_labeled']} already labeled")
+        return dict(st)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 PAGE_HYPHEN = re.compile(r"([A-Za-z]+)-((?:\s*</[^>]+>)*\s*)$")
 PAGE_CONT = re.compile(r"^((?:\s*<[^>]+>)*\s*)([a-z][A-Za-z'’]*[.,;:!?'’\"]*)")
 

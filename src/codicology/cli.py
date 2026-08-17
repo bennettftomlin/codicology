@@ -124,6 +124,22 @@ def main(argv: "list[str] | None" = None) -> "int | None":
     p_rev.add_argument("--no-crops", action="store_true",
                        help="text-only sheet, no page rendering")
 
+    p_rel = sub.add_parser(
+        "relabel",
+        help="backfill layout labels into an existing OCR cache without "
+             "re-reading a word: pages regenerate through the same "
+             "extraction path, a small local layout model names the "
+             "blocks, and labels attach by geometry. Text stays "
+             "byte-identical, so dispute records and decisions survive")
+    p_rel.add_argument("cache", help="the .ocr.gz cache to upgrade")
+    p_rel.add_argument("pdf", help="the source PDF its pages came from")
+    p_rel.add_argument("--ocr", default="surya",
+                       help="backend tag the cache was written under "
+                            "(default: surya)")
+    p_rel.add_argument("--lang", default="en",
+                       help="language tag the cache was written under "
+                            "(default: en)")
+
     p_apply = sub.add_parser(
         "apply",
         help="feed a review sheet's exported decisions back into the EPUB: "
@@ -162,6 +178,11 @@ def main(argv: "list[str] | None" = None) -> "int | None":
     if args.command == "apply":
         from . import review
         review.apply_decisions(args.epub, args.decisions, out=args.out)
+        return 0
+    if args.command == "relabel":
+        from . import pipeline
+        pipeline.relabel_cache(args.cache, args.pdf, backend_name=args.ocr,
+                               langs=args.lang.split(","))
         return 0
     return None
 
