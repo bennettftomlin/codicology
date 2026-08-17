@@ -1644,9 +1644,18 @@ def _to_xhtml(fragment: str) -> str:
 # Surya's llama.cpp backend sizes the server's KV cache as parallel-slots x
 # 12k tokens, and matches its client workers to the same number — but its
 # default of 8 slots is double the 4-page batches this pipeline ever sends.
-# The surplus is pure memory: ~48k tokens of idle KV cache, which is exactly
-# the pressure that made grammar initialisation start failing when two OCR
-# stacks ran at once. Sized to the work, set before surya reads its settings.
+# The surplus is pure memory, and buys nothing: measured on an M1 Pro, 24
+# pages at 4 slots and at 8 ran 3.04 and 3.01 pages/minute — a difference
+# far inside the noise, while 8 slots cost about a gigabyte more resident.
+# The GPU is saturated by four pages in flight; a fifth only waits.
+#
+# The measurement was run because the reason first written here was wrong.
+# It blamed this on memory pressure from grammar-initialisation failures
+# when two OCR stacks overlapped. Those failures are neither: the error is
+# surya's guided-decoding schema being rejected by llama.cpp's grammar
+# parser, it reproduces on an idle machine in a single process, and it is
+# harmless — a startup probe that falls back. Sized to the work, for the
+# reason the work actually supports; set before surya reads its settings.
 os.environ.setdefault("SURYA_INFERENCE_PARALLEL", "4")
 
 
