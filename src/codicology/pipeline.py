@@ -2686,7 +2686,32 @@ def parse_printed_toc(bodies: list[str], limit: int = 25
                     entries.append(TocEntry(title, int(m.group(1)), folio_text, 2))
                 elif roman:
                     entries.append(TocEntry(title, None, folio_text, 2))
-    return entries, toc_pages
+    return _infer_row_depths(entries), toc_pages
+
+
+def _infer_row_depths(entries: "list[TocEntry]") -> "list[TocEntry]":
+    """The printed page declares its own hierarchy in the entries' prefixes:
+    Russian Purge lists roman-numeral chapters with runs of (1)…(6)
+    subsections beneath them, and a nav that flattens all forty-nine lines
+    is our failure, not the book's. Rows parse flat; this pass reads the
+    declaration back. Only parenthesized prefixes are believed — (1), (a) —
+    and only when at least three rows carry one, so a flat contents stays
+    flat. A row is promoted to section rank only when a subsection actually
+    follows it: a chapter with none stays a plain leaf, because an empty
+    grouping in the nav is noise."""
+    sub = re.compile(r"^\([0-9a-z]{1,3}\)\s")
+    rows = [i for i, e in enumerate(entries) if e.depth == 2]
+    n_sub = sum(1 for i in rows if sub.match(entries[i].title))
+    if n_sub < 3 or n_sub == len(rows):
+        return entries
+    out = list(entries)
+    for k, i in enumerate(rows):
+        if sub.match(entries[i].title):
+            continue
+        nxt = rows[k + 1] if k + 1 < len(rows) else None
+        if nxt is not None and sub.match(entries[nxt].title):
+            out[i] = entries[i]._replace(depth=1)
+    return out
 
 
 def folio_resolver(folios: "list[Folio]") -> "callable":
@@ -2794,7 +2819,10 @@ def _place_toc_entries(bodies: list[str], folios,
     resolve = folio_resolver(folios)
     placed: list[tuple] = []          # (entry, target | None, verified)
     for e in printed:
-        if e.depth < 2:
+        # groupings without a printed folio have nothing to resolve; a
+        # promoted chapter row still carries its folio and resolves like
+        # any leaf
+        if e.folio is None and e.depth < 2:
             placed.append((e, None, False))
             continue
         target = resolve(e.folio) if e.folio is not None else None
@@ -5338,7 +5366,9 @@ def build_epub(
             placed_ch, _tocp = _place_toc_entries(bodies, folios, dropped)
             for e, tgt, _ok in placed_ch:
                 mnum = re.match(r"^([IVXL]{1,6}|\d{1,2})\s+\S", e.title)
-                if e.depth == 2 and mnum and tgt is not None:
+                # depth 1 included: a chapter row promoted to section rank
+                # because subsections follow it is still a chapter start
+                if e.depth >= 1 and mnum and tgt is not None:
                     tok = mnum.group(1)
                     no = int(tok) if tok.isdigit() else _roman_to_int(tok)
                     if no is not None:
@@ -5526,13 +5556,6 @@ def build_epub(
         hunt_from = max(toc_pages) if toc_pages else -1
         stack: list[tuple[int, list]] = [(-1, links)]
         for e, target, ok in placed:
-            if e.depth < 2:
-                sect: list = []
-                while stack and stack[-1][0] >= e.depth:
-                    stack.pop()
-                stack[-1][1].append((epub.Section(e.title), sect))
-                stack.append((e.depth, sect))
-                continue
             if ok:
                 verified += 1
             elif target is not None and target not in pos_of:
@@ -5566,6 +5589,21 @@ def build_epub(
                                   None)
                 if target is not None:
                     hunt_from = target
+            if e.depth < 2:
+                # a grouping: BOOK SEVEN as printed, or a chapter promoted
+                # because subsections follow it. A chapter that nests
+                # children is still a destination, so it keeps its link
+                # when it resolved; a grouping that never resolves is a
+                # heading and no more.
+                sect: list = []
+                while stack and stack[-1][0] >= e.depth:
+                    stack.pop()
+                head = (epub.Section(e.title, href=f"page_{target:04d}.xhtml")
+                        if target is not None and target in pos_of
+                        else epub.Section(e.title))
+                stack[-1][1].append((head, sect))
+                stack.append((e.depth, sect))
+                continue
             if target is None or target not in pos_of:
                 missed += 1
                 continue

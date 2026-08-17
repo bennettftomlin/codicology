@@ -369,7 +369,12 @@ def render_sheet(report, crops=None) -> str:
         "<p class='alt'>Nothing here has changed the book. The EPUB ships "
         "what “shipped” says; export your decisions and feed them "
         "to <code>codicology apply</code> or the next rebuild. Your typed "
-        "reading outranks every rung.</p>",
+        "reading outranks every rung. The amber box marks where the "
+        "<em>witness</em> engine read its word — almost always the disputed "
+        "ink itself, but when the witness misread page furniture (leader "
+        "dots, rules) its box can sit apart from the shipped word's true "
+        "position. When the box seems to mark nothing, read the whole "
+        "crop before ruling.</p>",
     ]
     for key in ("catches", "broken", "open"):
         rows = tiers[key]

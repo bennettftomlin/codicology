@@ -446,3 +446,48 @@ def test_a_contents_followed_by_a_figure_list_keeps_both_sequences(vtb):
     placed_titles = {e.title for e, t, _ in placed if t is not None}
     assert sum(1 for t in placed_titles if t.startswith("Chapter")) == 8
     assert sum(1 for t in placed_titles if t.startswith("Figure")) == 7
+
+
+def _row(title, folio):
+    return (f"<tr><td>{title} . . . . .</td><td>{folio}</td></tr>")
+
+
+def test_printed_subsections_nest_under_their_chapter(vtb):
+    """Russian Purge's contents: roman chapters, (1)…(6) runs beneath.
+    The book declares its own hierarchy; the parse reads it back."""
+    body = ("<p>Contents</p><table>"
+            + _row("Authors’ Introduction", 1)
+            + _row("V Prison Life", 40)
+            + _row("VI The Prisoners", 55)
+            + _row("(1) The Party Organization", 56)
+            + _row("(2) Red Partisans", 60)
+            + _row("(3) The Army", 64)
+            + _row("VII Interrogation", 70)
+            + "</table>")
+    entries, _ = vtb.parse_printed_toc([body])
+    depths = {e.title: e.depth for e in entries}
+    assert depths["VI The Prisoners"] == 1, "subsections follow: section rank"
+    assert depths["(1) The Party Organization"] == 2
+    assert depths["V Prison Life"] == 2, "no subsections: stays a plain leaf"
+    assert depths["Authors’ Introduction"] == 2
+    assert depths["VII Interrogation"] == 2, "nothing follows it"
+
+
+def test_flat_contents_stay_flat(vtb):
+    """Two parenthesized rows are coincidence, not structure."""
+    body = ("<p>Contents</p><table>"
+            + _row("I One", 1) + _row("(1) Sub", 2) + _row("II Two", 9)
+            + _row("(2) Sub", 11) + _row("III Three", 20)
+            + "</table>")
+    entries, _ = vtb.parse_printed_toc([body])
+    assert all(e.depth == 2 for e in entries)
+
+
+def test_all_parenthesized_rows_stay_flat(vtb):
+    """A book whose every chapter is (n)-numbered has one rank, not zero
+    chapters under an invisible parent."""
+    body = ("<p>Contents</p><table>"
+            + "".join(_row(f"({i}) Chapter", i * 10) for i in range(1, 6))
+            + "</table>")
+    entries, _ = vtb.parse_printed_toc([body])
+    assert all(e.depth == 2 for e in entries)
