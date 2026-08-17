@@ -128,3 +128,40 @@ def test_sequence_state_carries_across_pages(vtb):
              _item(vtb, "<p>3</p>", box=(0.1, 0.21, 0.13, 0.229))]
     ra, sp = vtb.reattach_orphan_markers(page2, set(), state)
     assert (ra, sp) == (1, 0)
+
+
+def test_relabel_matcher_assigns_by_geometry(vtb):
+    items = [{"box": [0.1, 0.1, 0.9, 0.3], "html": "<p>a</p>"},
+             {"box": [0.1, 0.4, 0.9, 0.6], "html": "<p>b</p>"}]
+    blocks = [("Text", [100, 400, 900, 600]),
+              ("SectionHeader", [100, 100, 900, 300])]
+    n = vtb._match_layout_labels(items, blocks, 1000, 1000)
+    assert n == 2
+    assert items[0]["lab"] == "SectionHeader"
+    assert items[1]["lab"] == "Text"
+
+
+def test_relabel_matcher_refuses_poor_overlap(vtb):
+    """A wrong label misleads every consumer; an absent one declines to
+    help. Nothing under half overlap attaches."""
+    items = [{"box": [0.1, 0.1, 0.3, 0.2], "html": "<p>a</p>"}]
+    blocks = [("Text", [600, 700, 900, 900])]
+    assert vtb._match_layout_labels(items, blocks, 1000, 1000) == 0
+    assert "lab" not in items[0]
+
+
+def test_relabel_matcher_is_one_to_one(vtb):
+    """Two items over one block: the better fit wins, the other stays
+    unlabeled rather than sharing a guess."""
+    items = [{"box": [0.1, 0.1, 0.9, 0.3]},
+             {"box": [0.1, 0.12, 0.9, 0.34]}]
+    blocks = [("Caption", [100, 100, 900, 300])]
+    assert vtb._match_layout_labels(items, blocks, 1000, 1000) == 1
+    assert items[0]["lab"] == "Caption" and "lab" not in items[1]
+
+
+def test_relabel_matcher_never_overwrites(vtb):
+    items = [{"box": [0.1, 0.1, 0.9, 0.3], "lab": "Footnote"}]
+    blocks = [("Text", [100, 100, 900, 300])]
+    assert vtb._match_layout_labels(items, blocks, 1000, 1000) == 0
+    assert items[0]["lab"] == "Footnote"
