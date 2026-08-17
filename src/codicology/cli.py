@@ -108,6 +108,19 @@ def main(argv: "list[str] | None" = None) -> "int | None":
     p_rev.add_argument("--no-crops", action="store_true",
                        help="text-only sheet, no page rendering")
 
+    p_apply = sub.add_parser(
+        "apply",
+        help="feed a review sheet's exported decisions back into the EPUB: "
+             "each correction lands at its recorded occurrence in text "
+             "nodes only, the original is kept beside the book as "
+             ".preapply, and decisions whose site no longer exists are "
+             "reported stale, never guessed at")
+    p_apply.add_argument("epub", help="the EPUB this pipeline built")
+    p_apply.add_argument("decisions",
+                         help="decisions JSON exported from the review sheet")
+    p_apply.add_argument("--out", metavar="EPUB",
+                         help="write here instead of correcting in place")
+
     args = parser.parse_args(argv)
     if args.command == "verify":
         from . import verify
@@ -130,6 +143,10 @@ def main(argv: "list[str] | None" = None) -> "int | None":
         from . import review
         return review.main(args.report, out=args.out, dpi=args.dpi,
                            crops=not args.no_crops)
+    if args.command == "apply":
+        from . import review
+        review.apply_decisions(args.epub, args.decisions, out=args.out)
+        return 0
     return None
 
 

@@ -374,6 +374,81 @@ def render_sheet(report, crops=None) -> str:
     return "\n".join(parts)
 
 
+def _apply_to_xhtml(xhtml, old, new, occurrence) -> "str | None":
+    """Replace the nth word-boundary occurrence of old in text nodes only.
+    Tags are never touched — the segments are split apart and only text
+    between them is searched. Returns None when the site is not there:
+    a decision that no longer matches its book is stale, and stale
+    decisions are surfaced, never guessed at."""
+    segs = re.split(r"(<[^>]+>)", xhtml)
+    pat = re.compile(r"(?<![\w])" + re.escape(old) + r"(?![\w])")
+    seen = 0
+    for i, seg in enumerate(segs):
+        if seg.startswith("<"):
+            continue
+        for m in pat.finditer(seg):
+            if seen == occurrence:
+                segs[i] = seg[:m.start()] + new + seg[m.end():]
+                return "".join(segs)
+            seen += 1
+    return None
+
+
+def apply_decisions(epub_path, decisions_path, out=None) -> dict:
+    """Feed the reviewer's exported decisions back into the EPUB.
+
+    The adjudicator never rewrites; this is the human act it reports
+    toward. Corrections land in text nodes at their recorded occurrence,
+    the original is kept beside the book as .preapply, and every decision
+    is accounted for: applied or stale, never silent."""
+    import shutil
+    import zipfile
+
+    dec = json.load(open(decisions_path))
+    by_page = collections.defaultdict(list)
+    for d in dec.get("decisions", []):
+        by_page[int(d["page"])].append(d)
+    out = out or epub_path
+    if out == epub_path:
+        shutil.copy2(epub_path, epub_path + ".preapply")
+    zin = zipfile.ZipFile(epub_path)
+    applied, stale = [], []
+    changed = {}
+    for name in zin.namelist():
+        m = re.match(r".*page_(\d{4})\.xhtml$", name)
+        if not m or int(m.group(1)) not in by_page:
+            continue
+        xhtml = zin.read(name).decode("utf-8")
+        for d in sorted(by_page[int(m.group(1))],
+                        key=lambda d: -d.get("occurrence", 0)):
+            got = _apply_to_xhtml(xhtml, d["old"], d["new"],
+                                  d.get("occurrence", 0))
+            if got is None:
+                stale.append(d)
+            else:
+                xhtml = got
+                applied.append(d)
+        changed[name] = xhtml.encode("utf-8")
+    names = zin.namelist()
+    with zipfile.ZipFile(out + ".tmp", "w") as zout:
+        for name in names:
+            data = changed.get(name, zin.read(name))
+            # the EPUB contract: mimetype first and stored, not deflated
+            zout.writestr(name, data,
+                          zipfile.ZIP_STORED if name == "mimetype"
+                          else zipfile.ZIP_DEFLATED)
+    zin.close()
+    import os
+    os.replace(out + ".tmp", out)
+    for d in stale:
+        print(f"  stale: p{d['page']} {d['old']!r} -> {d['new']!r} "
+              f"({d.get('source', '?')}) — site not found, kept as shipped")
+    print(f"applied {len(applied)} correction(s)"
+          + (f", {len(stale)} stale" if stale else "")
+          + f": {out}")
+    return {"applied": applied, "stale": stale}
+
+
 def main(report_path, out=None, dpi=200, crops=True) -> int:
     report = json.load(open(report_path))
     report.setdefault("name", str(report_path))
