@@ -25,7 +25,8 @@ LABELS = {
 }
 
 
-def convert_worker(argv, verify_argv, adjudicate_argv, book_id, epub_path, title,
+def convert_worker(argv, verify_argv, adjudicate_argv, review_argv,
+                   book_id, epub_path, title,
                    abort=None, log=None, notifications=None):
     """
     Run a conversion, then optionally verify and adjudicate, and return
@@ -68,7 +69,8 @@ def convert_worker(argv, verify_argv, adjudicate_argv, book_id, epub_path, title
                         abort=abort)
 
     out = {"book_id": book_id, "epub": epub_path, "title": title,
-           "result": result, "verify": None, "adjudicate": None}
+           "result": result, "verify": None, "adjudicate": None,
+           "review": None}
 
     if verify_argv:
         put(0.97, "Checking the EPUB for holes")
@@ -96,6 +98,22 @@ def convert_worker(argv, verify_argv, adjudicate_argv, book_id, epub_path, title
             for line in text.splitlines():
                 log(line)
         out["adjudicate"] = {"rc": r.returncode, "output": text}
+
+    if (review_argv and out["adjudicate"] is not None
+            and out["adjudicate"]["rc"] == 0
+            and not (abort is not None and abort.is_set())):
+        # The record, rendered for a human's eyes: ink crops beside every
+        # disputed word. Geometry was recorded during adjudication, so
+        # this is mostly page rendering — minutes, not a re-read.
+        put(0.99, "Rendering the review sheet")
+        r = subprocess.run([str(a) for a in review_argv],
+                           capture_output=True, text=True,
+                           env=runner.child_env(), timeout=1800)
+        text = ((r.stdout or "") + (r.stderr or "")).strip()
+        if log is not None:
+            for line in text.splitlines():
+                log(line)
+        out["review"] = {"rc": r.returncode, "output": text}
 
     put(1.0, "Done")
     return out
