@@ -190,3 +190,47 @@ def test_roman_syntax_keeps_real_words_out(vtb):
     assert not adj._is_roman("I"), "one letter stays a pronoun"
     v = adj.adjudicate_pair("civil", "civii", Counter())
     assert v["rung"] == "dictionary" and v["winner"] == "civil"
+
+
+def _wpage(*toks):
+    return [list(toks), [[0, 0, 0.1, 0.1]] * len(toks),
+            [[0, 0, 0.1, 0.1]] * len(toks)]
+
+
+def test_witness_stitches_where_the_book_joined(vtb):
+    """The builder shipped 'consulate' whole across a page turn; the
+    witness, whose world ends at the page edge, read 'con-'. Stitched,
+    the pages fold silent instead of crowning the fragment."""
+    pages = {0: _wpage("the", "con-"), 1: _wpage("sulate", "closed")}
+    n = adj._stitch_page_turns(pages, {0: "consulate", 1: "closed"})
+    assert n == 1
+    assert pages[0][0] == ["the", "consulate"]
+    assert pages[1][0] == ["closed"]
+    assert len(pages[1][1]) == 1 and len(pages[1][2]) == 1
+
+
+def test_witness_keeps_fragments_where_the_book_refused(vtb):
+    """self- | control failed the builder's gate and shipped as printed;
+    the stitch condition fails symmetrically and both pages stay as
+    read."""
+    pages = {0: _wpage("of", "self-"), 1: _wpage("control", "it")}
+    n = adj._stitch_page_turns(pages, {0: "self", 1: "it"})
+    assert n == 0
+    assert pages[0][0] == ["of", "self-"]
+    assert pages[1][0] == ["control", "it"]
+
+
+def test_stitch_reaches_across_a_dropped_blank(vtb):
+    """The builder joins across dropped blanks; the witness's empty page
+    is skipped and the fold-mirror condition stays the gate."""
+    pages = {0: _wpage("con-"), 1: _wpage(), 2: _wpage("sulate", "was")}
+    assert adj._stitch_page_turns(pages, {0: "consulate"}) == 1
+    assert pages[0][0] == ["consulate"]
+    assert pages[2][0] == ["was"]
+
+
+def test_stitch_refuses_when_the_mirror_fails(vtb):
+    """A gap plus a non-matching join: the fragment stays a fragment."""
+    pages = {0: _wpage("con-"), 5: _wpage("gress")}
+    assert adj._stitch_page_turns(pages, {0: "consulate"}) == 0
+    assert pages[0][0] == ["con-"]
