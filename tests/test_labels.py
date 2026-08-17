@@ -51,62 +51,80 @@ def test_inline_math_still_flattens(vtb):
     assert out == "<p>5-α-methyl</p>"
 
 
-# ── orphaned markers, back to their sentences ────────────────────────────────
+# ── orphaned markers: sequence-fit or suppress ──────────────────────────────
 
 def _item(vtb, html, label=None, box=None, furn=False):
     return vtb.PageItem(html=html, label=label, box=box, is_furniture=furn)
 
 
-def test_an_orphaned_marker_rejoins_the_prose(vtb):
-    items = [_item(vtb, "<p>" + "The strike spread through Pullman and the "
-                   "yards fell silent across the whole division that week." +
-                   "</p>", box=(0.1, 0.2, 0.9, 0.35)),
-             _item(vtb, "<p>2</p>", label="SectionHeader",
-                   box=(0.1, 0.36, 0.13, 0.379))]
-    n = vtb.reattach_orphan_markers(items, set())
-    assert n == 1
-    assert len(items) == 1
-    assert items[0].html.endswith("week.<sup>2</sup></p>")
+PROSE = ("<p>The strike spread through Pullman and the yards fell silent "
+         "across the whole division that week.<sup>1</sup></p>")
 
 
-def test_three_digit_markers_reattach(vtb):
-    """Continuous numbering reaches 425 in Working the Phones."""
+def test_a_sequence_fitting_orphan_rejoins_the_prose(vtb):
+    """Inline markers reach 1; a one-line '2' block continues the sequence."""
+    items = [_item(vtb, PROSE, box=(0.1, 0.2, 0.9, 0.35)),
+             _item(vtb, "<p>2</p>", box=(0.1, 0.36, 0.13, 0.379))]
+    ra, sp = vtb.reattach_orphan_markers(items, set())
+    assert (ra, sp) == (1, 0)
+    assert "<sup>2</sup>" in items[0].html
+
+
+def test_a_chapter_opening_one_reattaches_before_its_twos(vtb):
+    items = [_item(vtb, "<p>The new chapter opens with a long enough line "
+                   "of narrative prose to host a marker.</p>",
+                   box=(0.1, 0.1, 0.9, 0.2)),
+             _item(vtb, "<p>1</p>", box=(0.1, 0.21, 0.13, 0.229)),
+             _item(vtb, "<p>More prose follows here with the second "
+                   "reference.<sup>2</sup></p>", box=(0.1, 0.24, 0.9, 0.3))]
+    ra, sp = vtb.reattach_orphan_markers(items, set())
+    assert (ra, sp) == (1, 0)
+
+
+def test_a_phantom_that_fits_no_sequence_is_suppressed(vtb):
+    """Eagle's 220: digit blocks over plain prose, verified inkless. A '5'
+    when the stream sits at 1 fits nothing and ships nowhere."""
+    items = [_item(vtb, PROSE, box=(0.1, 0.2, 0.9, 0.35)),
+             _item(vtb, "<p>5</p>", box=(0.5, 0.4, 0.53, 0.419))]
+    ra, sp = vtb.reattach_orphan_markers(items, set())
+    assert (ra, sp) == (0, 1)
+    assert len(items) == 1, "the phantom shipped"
+
+
+def test_three_digit_continuation_reattaches(vtb):
+    state = {"last": 424}
     items = [_item(vtb, "<p>" + "prose " * 12 + "ends.</p>",
                    box=(0.1, 0.2, 0.9, 0.3)),
              _item(vtb, "<p>425</p>", box=(0.1, 0.31, 0.15, 0.329))]
-    assert vtb.reattach_orphan_markers(items, set()) == 1
+    ra, sp = vtb.reattach_orphan_markers(items, set(), state)
+    assert (ra, sp) == (1, 0)
     assert "<sup>425</sup>" in items[0].html
 
 
 def test_a_display_chapter_numeral_is_left_standing(vtb):
-    """Tall digit blocks are chapter openers, not markers — the measured gap
-    is 0.020 (largest marker) to 0.038 (shortest text block)."""
-    items = [_item(vtb, "<p>" + "prose " * 12 + "ends.</p>",
-                   box=(0.1, 0.1, 0.9, 0.2)),
+    items = [_item(vtb, PROSE, box=(0.1, 0.1, 0.9, 0.2)),
              _item(vtb, "<h2>17</h2>", box=(0.4, 0.3, 0.6, 0.42))]
-    assert vtb.reattach_orphan_markers(items, set()) == 0
-    assert items[1].html == "<h2>17</h2>"
+    ra, sp = vtb.reattach_orphan_markers(items, set())
+    assert (ra, sp) == (0, 0)
+    assert any("<h2>17</h2>" == it.html for it in items)
 
 
-def test_a_folio_number_never_becomes_a_marker(vtb):
-    items = [_item(vtb, "<p>" + "prose " * 12 + "ends.</p>",
-                   box=(0.1, 0.2, 0.9, 0.3)),
+def test_a_furniture_number_is_neither_marker_nor_phantom(vtb):
+    items = [_item(vtb, PROSE, box=(0.1, 0.2, 0.9, 0.3)),
              _item(vtb, "<p>159</p>", box=(0.45, 0.95, 0.55, 0.969))]
-    assert vtb.reattach_orphan_markers(items, {"159"}) == 0
+    ra, sp = vtb.reattach_orphan_markers(items, {"159"})
+    assert (ra, sp) == (0, 0)
 
 
-def test_a_digit_with_no_prose_before_it_stays(vtb):
-    items = [_item(vtb, "<p>3</p>", box=(0.1, 0.1, 0.13, 0.119))]
-    assert vtb.reattach_orphan_markers(items, set()) == 0
-
-
-def test_no_words_are_lost_in_reattachment(vtb):
-    prose = "The court heard the appeal and adjourned before the noon recess was called."
-    items = [_item(vtb, f"<p>{prose}</p>", box=(0.1, 0.2, 0.9, 0.3)),
-             _item(vtb, "<p>7</p>", box=(0.1, 0.31, 0.13, 0.329))]
-    import re
-    tok = lambda t: sorted(re.findall(r"[A-Za-z]+|\d+", t))
-    before = tok(vtb._strip_tags(items[0].html) + " 7")
-    vtb.reattach_orphan_markers(items, set())
-    after = tok(vtb._strip_tags(items[0].html))
-    assert after == before
+def test_sequence_state_carries_across_pages(vtb):
+    state = {"last": None}
+    page1 = [_item(vtb, PROSE.replace("<sup>1</sup>",
+                   "<sup>1</sup> more.<sup>2</sup>"),
+                   box=(0.1, 0.2, 0.9, 0.35))]
+    vtb.reattach_orphan_markers(page1, set(), state)
+    assert state["last"] == 2
+    page2 = [_item(vtb, "<p>" + "prose " * 10 + "goes on.</p>",
+                   box=(0.1, 0.1, 0.9, 0.2)),
+             _item(vtb, "<p>3</p>", box=(0.1, 0.21, 0.13, 0.229))]
+    ra, sp = vtb.reattach_orphan_markers(page2, set(), state)
+    assert (ra, sp) == (1, 0)
