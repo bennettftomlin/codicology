@@ -234,3 +234,16 @@ def test_stitch_refuses_when_the_mirror_fails(vtb):
     pages = {0: _wpage("con-"), 5: _wpage("gress")}
     assert adj._stitch_page_turns(pages, {0: "consulate"}) == 0
     assert pages[0][0] == ["con-"]
+
+
+def test_stitch_reads_past_the_running_head(vtb):
+    """The witness reads furniture too: the next page opens RUSSIAN PURGE
+    before the continuation. The completing token is sought among the
+    first few; nothing coincidental can complete the shipped word."""
+    pages = {0: _wpage("the", "con-"),
+             1: _wpage("RUSSIAN", "PURGE", "sulate", "was")}
+    n = adj._stitch_page_turns(pages, {0: "consulate"})
+    assert n == 1
+    assert pages[0][0] == ["the", "consulate"]
+    assert pages[1][0] == ["RUSSIAN", "PURGE", "was"]
+    assert len(pages[1][1]) == 3

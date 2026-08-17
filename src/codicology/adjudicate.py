@@ -337,14 +337,19 @@ def _stitch_page_turns(pages: dict, shipped_last: dict) -> int:
         if not (len(frag) >= 2 and frag.endswith("-")
                 and frag[-2].isalnum()):
             continue
-        joined = frag[:-1] + tb[0]
-        if fold_word(joined) != shipped_last.get(a):
-            continue
-        ta[-1] = joined
-        del tb[0]
-        del pages[b][1][0]
-        del pages[b][2][0]
-        stitched += 1
+        # the witness reads furniture too: the next page opens with its
+        # running head before the continuation, so the completing token is
+        # sought among the first few. No coincidence can slip in — the
+        # join must fold to the shipped page's exact last word.
+        for k, cand in enumerate(tb[:8]):
+            joined = frag[:-1] + cand
+            if fold_word(joined) == shipped_last.get(a):
+                ta[-1] = joined
+                del tb[k]
+                del pages[b][1][k]
+                del pages[b][2][k]
+                stitched += 1
+                break
     return stitched
 
 
