@@ -1644,10 +1644,16 @@ def _to_xhtml(fragment: str) -> str:
 # Surya's llama.cpp backend sizes the server's KV cache as parallel-slots x
 # 12k tokens, and matches its client workers to the same number — but its
 # default of 8 slots is double the 4-page batches this pipeline ever sends.
-# The surplus is pure memory, and buys nothing: measured on an M1 Pro, 24
-# pages at 4 slots and at 8 ran 3.04 and 3.01 pages/minute — a difference
-# far inside the noise, while 8 slots cost about a gigabyte more resident.
-# The GPU is saturated by four pages in flight; a fifth only waits.
+# The surplus is pure memory, and buys nothing. Measured on an M1 Pro,
+# each configuration run twice in mirrored order so drift over a session
+# could not pose as a result — pages per minute against slots:
+#
+#     2 slots  2.44      4 slots  2.89      (8 slots ties 4, at +1GB)
+#     3 slots  2.66
+#
+# Four is the knee, and it is a real one: nine percent per slot on the way
+# up, nothing at all past it. Fewer is measurably slower — dropping to 2
+# to save a gigabyte would cost a fifth of the throughput of every book.
 #
 # The measurement was run because the reason first written here was wrong.
 # It blamed this on memory pressure from grammar-initialisation failures
