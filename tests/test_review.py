@@ -139,3 +139,13 @@ def test_locator_refuses_ambiguity(vtb):
     """Two near-misses: a wrong crop misleads where a missing one is honest."""
     words = [(0, 0, 9, 9, "propcrly"), (30, 0, 9, 9, "properiy")]
     assert review._locate(words, ["properly"]) == []
+
+
+def test_repeated_abstains_sink_as_convention(vtb):
+    """The apparatus guard turns ff/f into abstains by the dozen; identical
+    abstains are convention, not eighty-six separate coin-flips."""
+    rows = [_d(p, "ff", "f") for p in range(6)]
+    rows.append(_d(50, "property", "properly"))
+    tiers = review.build_tiers(rows)
+    assert len(tiers["systematic"]) == 6
+    assert [r["surya"] for r in tiers["open"]] == ["property"]
