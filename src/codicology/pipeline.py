@@ -3481,27 +3481,41 @@ def normalize_list_markers(bodies: list[str]) -> int:
 MARKER_BLOCK_MAX_H = 0.03
 
 
-def reattach_orphan_markers(items: list, furn_numbers: set) -> int:
+def reattach_orphan_markers(items: list, furn_numbers: set,
+                            seq_state: "dict | None" = None) -> tuple:
     """
-    Give an orphaned superscript marker back to its sentence.
+    Sort a page's standalone digit blocks into markers and phantoms.
 
-    The layout model sometimes segments a marker into its own block, and
-    recognition then renders it as a bare paragraph or heading — <p>2</p> —
-    because block-internally there is nothing for it to be superscript TO.
-    Eagle shipped 272 of those as visible junk, and 220 of them were the
-    ONLY copy of their marker: unlinkable, uncounted, invisible to every
-    gate because the digits are real ink faithfully read.
+    The layout model does two different things that look identical in the
+    markup. Sometimes it segments a real superscript marker into its own
+    block — recognition renders <p>2</p> because block-internally there is
+    nothing to be superscript to. And sometimes it invents a tiny block
+    over ordinary prose that recognition then "reads" as a small digit —
+    eagle carried 220 of those, verified against the ink: the boxed regions
+    hold body text and no standalone digit at all. Fabrication at the
+    block level, below every page-level guard's sightline.
 
-    Four guards, each carrying measured weight: the text is a bare 1-3
-    digit numeral (continuous numbering runs past 99 — Working the Phones
-    reaches 425); the block stands at most MARKER_BLOCK_MAX_H of the page,
-    which separates markers from display numerals with daylight on both
-    sides; its value is not among the page's furniture numbers, so a folio
-    the furniture pass missed cannot become a marker; and a prose block
-    precedes it, because a marker annotates something.
+    Geometry cannot separate the two — both stand one line tall. What
+    separates them is the marker SEQUENCE: a real orphan continues the
+    inline markers (last seen + 1) or opens a chapter (a 1 whose next
+    inline marker is 2). A phantom fits nowhere, because it was never part
+    of any sequence. Fits are reattached to the preceding prose; misfits
+    are suppressed and counted, never shipped as the stray digits they
+    have been.
+
+    Returns (reattached, suppressed).
     """
-    n = 0
-    for i, it in enumerate(items):
+    if seq_state is None:
+        seq_state = {"last": None}
+    reattached = suppressed = 0
+    # inline markers on this page, in order, for lookahead and tracking
+    inline_positions = []
+    for idx, it in enumerate(items):
+        if it.html and it.figure is None:
+            for m in re.finditer(r"<sup>\s*(\d{1,3})\s*</sup>", it.html):
+                inline_positions.append((idx, int(m.group(1))))
+
+    for i, it in enumerate(list(items)):
         if it.figure is not None or not it.html:
             continue
         t = _strip_tags(it.html).strip()
@@ -3511,26 +3525,35 @@ def reattach_orphan_markers(items: list, furn_numbers: set) -> int:
             continue
         if t in furn_numbers:
             continue
+        val = int(t)
+        # advance last-seen over inline markers that precede this block
+        for idx, n in inline_positions:
+            if idx < i:
+                seq_state["last"] = n
+        nxt_inline = next((n for idx, n in inline_positions if idx > i), None)
+        fits = (seq_state["last"] is not None
+                and val == seq_state["last"] + 1)             or (val == 1 and nxt_inline == 2)
         prev = next((p for p in reversed(items[:i])
                      if p.html and p.figure is None), None)
-        if prev is None:
-            continue
-        prev_text = _strip_tags(prev.html)
-        if len(prev_text.split()) < 8:
-            continue                      # a marker annotates prose
-        # append the marker to the preceding block, inside its last close
-        m = re.search(r"</(p|li|h[1-6]|blockquote)>\s*$", prev.html)
-        sup = f"<sup>{t}</sup>"
-        if m:
-            new_html = (prev.html[:m.start()] + sup + prev.html[m.start():])
+        if fits and prev is not None \
+                and len(_strip_tags(prev.html).split()) >= 8:
+            m = re.search(r"</(p|li|h[1-6]|blockquote)>\s*$", prev.html)
+            sup = f"<sup>{t}</sup>"
+            nh = (prev.html[:m.start()] + sup + prev.html[m.start():]
+                  if m else prev.html + f"<p>{sup}</p>")
+            items[items.index(prev)] = prev._replace(html=nh)
+            items[i] = it._replace(html="")
+            seq_state["last"] = val
+            reattached += 1
         else:
-            new_html = prev.html + f"<p>{sup}</p>"
-        items[items.index(prev)] = prev._replace(html=new_html)
-        items[i] = it._replace(html="")
-        n += 1
-    if n:
-        items[:] = [it for it in items if it.html or it.figure is not None]
-    return n
+            items[i] = it._replace(html="")
+            suppressed += 1
+    if reattached or suppressed:
+        items[:] = [x for x in items if x.html or x.figure is not None]
+    # advance over any trailing inline markers for the next page
+    for idx, n in inline_positions:
+        seq_state["last"] = max(seq_state["last"] or 0, 0) or None             if False else n
+    return reattached, suppressed
 
 
 def promote_missing_chapter_heads(bodies: list[str]) -> int:
@@ -4861,6 +4884,8 @@ def build_epub(
     n_blank_figures = 0
     n_label_rules = 0
     n_reattached = 0
+    n_phantoms = 0
+    marker_seq_state: dict = {"last": None}
     label_heads: list = []      # (page, rank, text) from SectionHeader
     toc_label_pages: set = set()
     total = len(page_paths)
@@ -4955,7 +4980,10 @@ def build_epub(
                             for m in re.findall(r"\d{1,3}",
                                                 _strip_tags(it.html))}
             items = [it for it in items if not it.is_furniture]
-            n_reattached += reattach_orphan_markers(items, furn_numbers)
+            _ra, _sp = reattach_orphan_markers(items, furn_numbers,
+                                               marker_seq_state)
+            n_reattached += _ra
+            n_phantoms += _sp
             if strip_furniture:
                 items = strip_running_heads(items)
             items = recover_placeholder_figures(items, path)
@@ -5027,6 +5055,9 @@ def build_epub(
     if n_reattached:
         print(f"    reattached {n_reattached} superscript marker(s) the "
               f"layout had orphaned into standalone blocks")
+    if n_phantoms:
+        print(f"    suppressed {n_phantoms} phantom digit block(s) the "
+              f"layout invented over prose — verified against the ink")
 
     # Decoration that recurs down the book is furniture, not artwork, and is
     # dropped here — before anything downstream counts what a page holds, so
