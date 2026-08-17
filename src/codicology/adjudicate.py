@@ -17,16 +17,30 @@ The ladder, in the order the design settled it:
                 how coinages, Wade-Giles, chemical names and dialect get
                 adjudicated without an external dictionary voting for
                 standardisation
-    dictionary  a non-word loses TO A WORD; two non-words abstain
+    dictionary  a non-word loses TO A WORD; two non-words abstain. The
+                scholarly apparatus (ff., op. cit., ibid.) is lexical and
+                single letters other than a/I/O are not words — eagle
+                measured 92 of 105 verdicts against the shipped text to be
+                fluency standardizing the apparatus away
     vision      Apple Vision rereads the page, language correction off —
                 an engine we operate and can calibrate, unlike the source's
                 embedded layer, which is a different unknown engine per book
                 and holds no vote (its witness role elsewhere is unchanged)
     abstain     recorded, never guessed
 
+Each dispute row also records where the ink is: the witness token's bbox
+from the same TSV read that produced the reading, plus a crop box that
+follows a hyphen-joined word or a line-edge phrase across the wrap. The
+review sheet crops from these instead of relocating words at a render the
+engine may read differently — relocation was measured failing exactly on
+the unstable sites disputes live on.
+
 Calibration comes free from the born-digital shelf: books whose text was
 reconciled against the publisher's own layer are ground truth for scoring
-the engines we run.
+the engines we run. Downstream, the record feeds `codicology review` and,
+through the reviewer's exported decisions, `codicology apply` and
+`convert --apply-decisions`. The reporting stays here; the rewriting is a
+human act.
 """
 import json
 import re

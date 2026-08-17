@@ -1,4 +1,4 @@
-"""codicology — one command, five verbs.
+"""codicology — one command, seven verbs.
 
     codicology convert …    build the PDF/EPUB (the pipeline; see convert -h)
     codicology verify EPUB PDF
@@ -7,9 +7,25 @@
                             word-by-word disagreement with the source's layer
     codicology doctor       can this environment run a build? --full reads
                             one synthetic page through the real backend
+    codicology adjudicate EPUB PDF
+                            re-read the book with the witness engines and
+                            emit the dispute record — every word the readers
+                            disagreed on and which rung of the ladder settled
+                            it. Never changes the book
+    codicology review REPORT
+                            render the dispute record as a self-contained
+                            sheet: the ink beside every disputed word, ranked
+                            by how likely the shipped reading is wrong, with
+                            a field for the human's own reading — which
+                            outranks every rung
+    codicology apply EPUB DECISIONS
+                            feed the sheet's exported decisions back into the
+                            book. The same file, left beside the OCR cache,
+                            is picked up by the next rebuild via
+                            convert --apply-decisions
 
-The check subcommands take the book first and the source second, in both
-cases — the old standalone scripts disagreed with each other about the
+The check subcommands take the book first and the source second, in every
+case — the old standalone scripts disagreed with each other about the
 order, and one of the two had to move.
 """
 import argparse
