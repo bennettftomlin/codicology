@@ -85,15 +85,22 @@ def read_tesseract_tsv(png: str) -> "str | None":
         return None
 
 
-def _tsv_tokens(tsv: str, width: int, height: int) -> tuple:
-    """tesseract's TSV as a token stream with a parallel normalized bbox per
-    token — the geometry the review sheet's ink crops come from, recorded
-    here where the words are read instead of relocated afterward at a
-    render the engine may read differently.
+def _union(a: tuple, b: tuple) -> tuple:
+    return (min(a[0], b[0]), min(a[1], b[1]),
+            max(a[0] + a[2], b[0] + b[2]) - min(a[0], b[0]),
+            max(a[1] + a[3], b[1] + b[3]) - min(a[1], b[1]))
 
-    The line-break hyphen join is applied at word level, mirroring
-    fold_text, so a joined token keeps its first fragment's box: the crop
-    shows the line end where the dispute actually sits."""
+
+def _tsv_tokens(tsv: str, width: int, height: int) -> tuple:
+    """tesseract's TSV as a token stream with two parallel normalized boxes
+    per token — recorded here, where the words are read, instead of
+    relocated afterward at a render the engine may read differently.
+
+    box is the token's own ink. cbox is the box a CROP should show: a
+    hyphen-joined token unions all its fragments so both lines land in the
+    crop, and a token at a line edge takes the neighboring line's tail or
+    head along — its real context flows across the wrap, and a one-line
+    strip ending at "crys-" asks the reviewer to guess."""
     lines, cur_key, cur = [], None, []
     for f in (l.split("\t") for l in tsv.splitlines()[1:]):
         if len(f) == 12 and f[11].strip():
@@ -113,22 +120,47 @@ def _tsv_tokens(tsv: str, width: int, height: int) -> tuple:
                      and len(raw) >= 2 and raw.endswith("-")
                      and raw[-2].isalnum()
                      and lines[li + 1][0][4][:1].isalnum())
-            flat.append([raw, (x, y, w, h), joins])
-    toks, boxes = [], []
+            flat.append([raw, (x, y, w, h), joins,
+                         li, wi == 0, wi == len(words) - 1])
+    toks, boxes, cboxes = [], [], []
     i = 0
     while i < len(flat):
-        raw, (x, y, w, h), joins = flat[i]
+        raw, box, joins, li, first, last = flat[i]
+        joined = False
         while joins and i + 1 < len(flat):
             nxt = flat[i + 1]
             raw = raw[:-1] + nxt[0]
+            box = _union(box, nxt[1])
             joins = nxt[2]
+            joined = True
             i += 1
+        cbox = box
+        if not joined:
+            # context flows across the wrap: a line-initial token carries
+            # the previous line's tail, a line-final one the next line's
+            # head, so the crop shows the phrase and not a cliff edge.
+            # Only a vertically NEAR neighbor qualifies — the next entry in
+            # TSV order can be a distant block (a footnote after a
+            # paragraph), and a crop spanning the page helps nobody.
+            near = 3 * max(box[3], 1)
+            if first and li > 0:
+                prev = lines[li - 1][-1][:4]
+                if abs(prev[1] - box[1]) <= near:
+                    cbox = _union(cbox, prev)
+            if last and li + 1 < len(lines):
+                nxt_w = lines[li + 1][0][:4]
+                if abs(nxt_w[1] - box[1]) <= near:
+                    cbox = _union(cbox, nxt_w)
         for t in WORD.findall(raw):
             toks.append(t)
-            boxes.append([x / width, y / height,
-                          (x + w) / width, (y + h) / height])
+            boxes.append([box[0] / width, box[1] / height,
+                          (box[0] + box[2]) / width,
+                          (box[1] + box[3]) / height])
+            cboxes.append([cbox[0] / width, cbox[1] / height,
+                           (cbox[0] + cbox[2]) / width,
+                           (cbox[1] + cbox[3]) / height])
         i += 1
-    return toks, boxes
+    return toks, boxes, cboxes
 
 
 def read_vision(png: str) -> "str | None":
@@ -300,14 +332,15 @@ def main(epub: str, pdf: str, report: "str | None" = None,
         tsv = read_tesseract_tsv(png)
         if tsv is None:
             continue
-        t_tok, t_box = _tsv_tokens(tsv, img.width, img.height)
+        t_tok, t_box, t_cbox = _tsv_tokens(tsv, img.width, img.height)
         s_tok = surya_tokens[i]
         pairs = align_disputes(s_tok, t_tok)
         pair_set = {fold_word(a) for a, _, _ in pairs} | \
                    {fold_word(b) for _, b, _ in pairs}
         agreed.append([fold_word(w) for w in s_tok
                        if fold_word(w) not in pair_set])
-        per_page[i] = {"pairs": pairs, "png": png, "boxes": t_box}
+        per_page[i] = {"pairs": pairs, "png": png, "boxes": t_box,
+                       "cboxes": t_cbox}
 
     lexicon = build_lexicon(agreed)
     rungs = Counter()
@@ -326,12 +359,15 @@ def main(epub: str, pdf: str, report: "str | None" = None,
                     verdict = {"rung": "vision",
                                "winner": a if fa in vis_tok else b}
             rungs[verdict["rung"]] += 1
-            boxes = info["boxes"]
-            disputes.append({"page": i, "surya": a, "tesseract": b,
-                             "rung": verdict["rung"],
-                             "winner": verdict.get("winner"),
-                             "shipped": a,
-                             "box": boxes[j] if j < len(boxes) else None})
+            boxes, cboxes = info["boxes"], info["cboxes"]
+            row = {"page": i, "surya": a, "tesseract": b,
+                   "rung": verdict["rung"],
+                   "winner": verdict.get("winner"),
+                   "shipped": a,
+                   "box": boxes[j] if j < len(boxes) else None}
+            if j < len(cboxes) and cboxes[j] != row["box"]:
+                row["cbox"] = cboxes[j]
+            disputes.append(row)
 
     print(f"pages examined: {n_done}")
     print(f"book lexicon: {len(lexicon)} recurring agreed words")

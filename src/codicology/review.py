@@ -155,7 +155,9 @@ def crop_data_uris(report, dpi=200, ctx_px=240) -> dict:
         img = doc[pno].render(scale=dpi / 72).to_pil()
         words = None
         for idx, d, occ in rows:
-            rec = d.get("box")
+            # cbox is the crop's box when recorded: hyphen-joined fragments
+            # unioned and line-edge context pulled across the wrap
+            rec = d.get("cbox") or d.get("box")
             if rec:
                 x0, y0 = int(rec[0] * img.width), int(rec[1] * img.height)
                 x1, y1 = int(rec[2] * img.width), int(rec[3] * img.height)
@@ -298,7 +300,7 @@ h1 { font-size: 1.25rem; } h2 { font-size: 1rem; margin: 1.4rem 0 .4rem; }
        border-bottom: 1px solid #e4e2da; }
 .row:focus { outline: 2px solid #7a6a3a; }
 .row.staged { background: #f2ecd9; }
-.ink { max-height: 46px; max-width: 30rem; border: 1px solid #ddd; }
+.ink { max-height: 96px; max-width: 30rem; border: 1px solid #ddd; }
 .noink { color: #999; font-style: italic; min-width: 12rem; }
 .w { font-family: Georgia, serif; font-size: 1.1em; }
 .alt, .loc { color: #777; font-size: .85em; }
