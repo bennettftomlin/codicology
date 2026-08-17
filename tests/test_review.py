@@ -149,3 +149,83 @@ def test_repeated_abstains_sink_as_convention(vtb):
     tiers = review.build_tiers(rows)
     assert len(tiers["systematic"]) == 6
     assert [r["surya"] for r in tiers["open"]] == ["property"]
+
+
+def _epub(tmp_path, pages):
+    import zipfile
+    p = tmp_path / "book.epub"
+    with zipfile.ZipFile(p, "w") as z:
+        z.writestr("mimetype", "application/epub+zip",
+                   zipfile.ZIP_STORED)
+        for n, body in pages.items():
+            z.writestr(f"EPUB/page_{n:04d}.xhtml",
+                       f"<html><body>{body}</body></html>")
+    return str(p)
+
+
+def _decisions(tmp_path, rows):
+    p = tmp_path / "d.json"
+    p.write_text(json.dumps({"decisions": rows}))
+    return str(p)
+
+
+def test_apply_lands_at_the_recorded_occurrence(vtb, tmp_path):
+    epub = _epub(tmp_path, {7: "<p>the ff and the ff again</p>"})
+    dec = _decisions(tmp_path, [{"page": 7, "occurrence": 1, "old": "ff",
+                                 "new": "6", "source": "human",
+                                 "rung": "human"}])
+    r = review.apply_decisions(epub, dec)
+    assert len(r["applied"]) == 1 and not r["stale"]
+    import zipfile
+    got = zipfile.ZipFile(epub).read("EPUB/page_0007.xhtml").decode()
+    assert "the ff and the 6 again" in got
+
+
+def test_apply_never_touches_tags(vtb, tmp_path):
+    """A correction to the word 'i' must not rewrite <i> markup."""
+    epub = _epub(tmp_path, {1: "<p><i>emphasis</i> i said</p>"})
+    dec = _decisions(tmp_path, [{"page": 1, "occurrence": 0, "old": "i",
+                                 "new": "I", "source": "human",
+                                 "rung": "human"}])
+    review.apply_decisions(epub, dec)
+    import zipfile
+    got = zipfile.ZipFile(epub).read("EPUB/page_0001.xhtml").decode()
+    assert "<i>emphasis</i> I said" in got
+
+
+def test_stale_decisions_are_reported_never_guessed(vtb, tmp_path):
+    epub = _epub(tmp_path, {2: "<p>a re-read changed this text</p>"})
+    dec = _decisions(tmp_path, [{"page": 2, "occurrence": 0,
+                                 "old": "vanished", "new": "word",
+                                 "source": "human", "rung": "human"}])
+    r = review.apply_decisions(epub, dec)
+    assert not r["applied"] and len(r["stale"]) == 1
+    import zipfile
+    got = zipfile.ZipFile(epub).read("EPUB/page_0002.xhtml").decode()
+    assert "changed this text" in got, "stale must leave the page alone"
+
+
+def test_apply_preserves_the_epub_contract(vtb, tmp_path):
+    """mimetype stays the first entry and stored; a backup is kept."""
+    import os, zipfile
+    epub = _epub(tmp_path, {1: "<p>word</p>"})
+    dec = _decisions(tmp_path, [{"page": 1, "occurrence": 0, "old": "word",
+                                 "new": "world", "source": "ladder",
+                                 "rung": "dictionary"}])
+    review.apply_decisions(epub, dec)
+    z = zipfile.ZipFile(epub)
+    first = z.infolist()[0]
+    assert first.filename == "mimetype"
+    assert first.compress_type == zipfile.ZIP_STORED
+    assert os.path.exists(epub + ".preapply")
+
+
+def test_apply_word_boundaries_protect_substrings(vtb, tmp_path):
+    epub = _epub(tmp_path, {3: "<p>off ff offer</p>"})
+    dec = _decisions(tmp_path, [{"page": 3, "occurrence": 0, "old": "ff",
+                                 "new": "6", "source": "human",
+                                 "rung": "human"}])
+    review.apply_decisions(epub, dec)
+    import zipfile
+    got = zipfile.ZipFile(epub).read("EPUB/page_0003.xhtml").decode()
+    assert "off 6 offer" in got
