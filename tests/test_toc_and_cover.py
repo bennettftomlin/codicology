@@ -491,3 +491,27 @@ def test_all_parenthesized_rows_stay_flat(vtb):
             + "</table>")
     entries, _ = vtb.parse_printed_toc([body])
     assert all(e.depth == 2 for e in entries)
+
+
+def test_folio_less_part_headings_become_groupings(vtb):
+    """Eagle's contents groups chapters under 'BOOK SEVEN: The Revolt'
+    lines that carry no folio; dropping them flattened the book's own
+    declared structure."""
+    body = ("<p>Contents</p><table>"
+            + "<tr><td>BOOK SEVEN: The Revolt</td></tr>"
+            + _row("XXXI The New Altgeld", 321)
+            + _row("XXXII Government by Injunction", 332)
+            + "</table>")
+    entries, _ = vtb.parse_printed_toc([body])
+    assert [(e.title, e.depth) for e in entries][0] == \
+        ("BOOK SEVEN: The Revolt", 0)
+    assert all(e.depth == 2 for e in entries[1:])
+
+
+def test_folio_less_noise_rows_stay_dropped(vtb):
+    body = ("<p>Contents</p><table>"
+            + "<tr><td>stray ocr fragment without a number</td></tr>"
+            + _row("I One", 1) + _row("II Two", 9)
+            + "</table>")
+    entries, _ = vtb.parse_printed_toc([body])
+    assert all("stray" not in e.title for e in entries)
