@@ -76,6 +76,61 @@ def read_tesseract(png: str) -> "str | None":
         return None
 
 
+def read_tesseract_tsv(png: str) -> "str | None":
+    try:
+        r = subprocess.run(["tesseract", png, "stdout", "--psm", "3", "tsv"],
+                           capture_output=True, text=True, timeout=180)
+        return r.stdout
+    except Exception:
+        return None
+
+
+def _tsv_tokens(tsv: str, width: int, height: int) -> tuple:
+    """tesseract's TSV as a token stream with a parallel normalized bbox per
+    token — the geometry the review sheet's ink crops come from, recorded
+    here where the words are read instead of relocated afterward at a
+    render the engine may read differently.
+
+    The line-break hyphen join is applied at word level, mirroring
+    fold_text, so a joined token keeps its first fragment's box: the crop
+    shows the line end where the dispute actually sits."""
+    lines, cur_key, cur = [], None, []
+    for f in (l.split("\t") for l in tsv.splitlines()[1:]):
+        if len(f) == 12 and f[11].strip():
+            key = (f[1], f[2], f[3], f[4])
+            if key != cur_key:
+                if cur:
+                    lines.append(cur)
+                cur_key, cur = key, []
+            cur.append((int(f[6]), int(f[7]), int(f[8]), int(f[9]),
+                        f[11].translate(_TYPO)))
+    if cur:
+        lines.append(cur)
+    flat = []
+    for li, words in enumerate(lines):
+        for wi, (x, y, w, h, raw) in enumerate(words):
+            joins = (wi == len(words) - 1 and li + 1 < len(lines)
+                     and len(raw) >= 2 and raw.endswith("-")
+                     and raw[-2].isalnum()
+                     and lines[li + 1][0][4][:1].isalnum())
+            flat.append([raw, (x, y, w, h), joins])
+    toks, boxes = [], []
+    i = 0
+    while i < len(flat):
+        raw, (x, y, w, h), joins = flat[i]
+        while joins and i + 1 < len(flat):
+            nxt = flat[i + 1]
+            raw = raw[:-1] + nxt[0]
+            joins = nxt[2]
+            i += 1
+        for t in WORD.findall(raw):
+            toks.append(t)
+            boxes.append([x / width, y / height,
+                          (x + w) / width, (y + h) / height])
+        i += 1
+    return toks, boxes
+
+
 def read_vision(png: str) -> "str | None":
     """Apple Vision, language correction OFF: the dictionary is exactly what
     must not vote here — it mangles the proper nouns disputes live on."""
@@ -111,11 +166,31 @@ except OSError:
     _DICT = set()
 
 
+# The scholarly apparatus is lexical. Eagle measured why: 92 of its 105
+# verdicts against the shipped reading were the dictionary crowning 'f'
+# over 'ff' (242ff.) and 'of' over 'op' (op. cit.) — fluency standardizing
+# away the apparatus of a scholarly book. These tokens are words HERE.
+APPARATUS = {
+    "f", "ff", "op", "cit", "ibid", "cf", "pp", "seq", "vol", "vols",
+    "ed", "eds", "ch", "chs", "et", "al", "fig", "figs", "fol", "fols",
+    "no", "nos", "viz", "cp", "passim", "supra", "infra", "sic", "esp",
+    "repr", "rev", "trans",
+}
+
+
 def _is_word(w: str) -> bool:
     """Lexical, allowing inflection: the system word list is lemma-only —
     "prisoner" is in it and "prisoners" is not — and without morphology the
     dictionary rung would abstain on nearly every real dispute, since real
-    prose is mostly inflected."""
+    prose is mostly inflected.
+
+    The system list also contains all 26 single letters, which let a lone
+    'f' outvote the apparatus abbreviation 'ff'; only a, I, and O are words
+    of running English."""
+    if w in APPARATUS:
+        return True
+    if len(w) == 1:
+        return w in {"a", "i", "o"}
     if w in _DICT:
         return True
     for strip, add in (("s", ""), ("es", ""), ("ed", ""), ("ed", "e"),
@@ -180,7 +255,7 @@ def align_disputes(ours: list, theirs: list) -> list:
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
         if tag == "replace" and (i2 - i1) == (j2 - j1):
             for k in range(i2 - i1):
-                out.append((ours[i1 + k], theirs[j1 + k]))
+                out.append((ours[i1 + k], theirs[j1 + k], j1 + k))
     return out
 
 
@@ -220,24 +295,25 @@ def main(epub: str, pdf: str, report: "str | None" = None,
             break
         n_done += 1
         png = f"{tmp}/p{i}.png"
-        doc[i].render(scale=scale).to_pil().save(png)
-        tess = read_tesseract(png)
-        if tess is None:
+        img = doc[i].render(scale=scale).to_pil()
+        img.save(png)
+        tsv = read_tesseract_tsv(png)
+        if tsv is None:
             continue
-        t_tok = tokens(tess)
+        t_tok, t_box = _tsv_tokens(tsv, img.width, img.height)
         s_tok = surya_tokens[i]
         pairs = align_disputes(s_tok, t_tok)
-        pair_set = {fold_word(a) for a, _ in pairs} | \
-                   {fold_word(b) for _, b in pairs}
+        pair_set = {fold_word(a) for a, _, _ in pairs} | \
+                   {fold_word(b) for _, b, _ in pairs}
         agreed.append([fold_word(w) for w in s_tok
                        if fold_word(w) not in pair_set])
-        per_page[i] = {"pairs": pairs, "png": png}
+        per_page[i] = {"pairs": pairs, "png": png, "boxes": t_box}
 
     lexicon = build_lexicon(agreed)
     rungs = Counter()
     for i, info in per_page.items():
         vis_tok = None
-        for a, b in info["pairs"]:
+        for a, b, j in info["pairs"]:
             verdict = adjudicate_pair(a, b, lexicon)
             if verdict["rung"] == "fold":
                 continue                    # policy, not a dispute
@@ -250,10 +326,12 @@ def main(epub: str, pdf: str, report: "str | None" = None,
                     verdict = {"rung": "vision",
                                "winner": a if fa in vis_tok else b}
             rungs[verdict["rung"]] += 1
+            boxes = info["boxes"]
             disputes.append({"page": i, "surya": a, "tesseract": b,
                              "rung": verdict["rung"],
                              "winner": verdict.get("winner"),
-                             "shipped": a})
+                             "shipped": a,
+                             "box": boxes[j] if j < len(boxes) else None})
 
     print(f"pages examined: {n_done}")
     print(f"book lexicon: {len(lexicon)} recurring agreed words")
@@ -348,10 +426,10 @@ def calibrate(pdf: str, epub: "str | None" = None,
         if not wit:
             continue
         pairs = align_disputes(ours, wit)
-        pair_set = {fold_word(a) for a, _ in pairs} | \
-                   {fold_word(b) for _, b in pairs}
+        pair_set = {fold_word(a) for a, _, _ in pairs} | \
+                   {fold_word(b) for _, b, _ in pairs}
         agreed.append([w for w in ours if fold_word(w) not in pair_set])
-        for a, b in pairs:
+        for a, b, _ in pairs:
             fa, fb = fold_word(a), fold_word(b)
             dispute_rows.append({
                 "page": i, "a": a, "b": b,

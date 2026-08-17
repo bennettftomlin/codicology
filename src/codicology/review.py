@@ -73,6 +73,12 @@ def tier_of(d, counts) -> str:
     shipped = d.get("shipped") or d["surya"]
     winner = d.get("winner")
     if winner is None:
+        # identical abstains repeated across a book are convention too —
+        # the apparatus guard turns ff/f into abstains by the dozen, and
+        # they must not flood the tier reserved for genuine coin-flips.
+        # Damage does not repeat identically; convention does.
+        if counts[(d["surya"], d["tesseract"])] >= 4:
+            return "systematic"
         folded = fold_word(shipped)
         return "broken" if folded and not _is_word(folded) else "open"
     if winner == shipped:
@@ -129,9 +135,12 @@ def _locate(words, targets) -> list:
 
 
 def crop_data_uris(report, dpi=200, ctx_px=240) -> dict:
-    """Locate each dispute's ink through tesseract's word geometry and crop
-    a context strip. Rows whose token cannot be found render text-only —
-    a missing crop must never block the sheet."""
+    """Crop each dispute's ink. Reports written since geometry landed carry
+    a normalized bbox recorded at adjudication time — exact by construction.
+    Older reports fall back to relocating the word through a fresh
+    tesseract read, which fails precisely on the unstable sites disputes
+    live on. Rows without ink render text-only — a missing crop must never
+    block the sheet."""
     import pypdfium2 as pdfium
 
     by_page = collections.defaultdict(list)
@@ -144,23 +153,32 @@ def crop_data_uris(report, dpi=200, ctx_px=240) -> dict:
         if pno >= len(doc):
             continue
         img = doc[pno].render(scale=dpi / 72).to_pil()
-        with tempfile.NamedTemporaryFile(suffix=".png") as tf:
-            img.save(tf.name)
-            tsv = subprocess.run(["tesseract", tf.name, "stdout", "tsv"],
-                                 capture_output=True, text=True).stdout
-        words = []
-        for f in (l.split("\t") for l in tsv.splitlines()[1:]):
-            if len(f) == 12 and f[11].strip():
-                words.append((int(f[6]), int(f[7]), int(f[8]), int(f[9]),
-                              fold_word(f[11])))
+        words = None
         for idx, d, occ in rows:
-            hits = _locate(words, [fold_word(d["tesseract"]),
-                                   fold_word(d["surya"])])
-            if not hits:
-                continue
-            x, y, w, h, _ = hits[min(occ, len(hits) - 1)]
-            box = (max(0, x - ctx_px), max(0, y - 6),
-                   min(img.width, x + w + ctx_px), min(img.height, y + h + 6))
+            rec = d.get("box")
+            if rec:
+                x0, y0 = int(rec[0] * img.width), int(rec[1] * img.height)
+                x1, y1 = int(rec[2] * img.width), int(rec[3] * img.height)
+            else:
+                if words is None:
+                    with tempfile.NamedTemporaryFile(suffix=".png") as tf:
+                        img.save(tf.name)
+                        tsv = subprocess.run(
+                            ["tesseract", tf.name, "stdout", "tsv"],
+                            capture_output=True, text=True).stdout
+                    words = [(int(f[6]), int(f[7]), int(f[8]), int(f[9]),
+                              fold_word(f[11]))
+                             for f in (l.split("\t")
+                                       for l in tsv.splitlines()[1:])
+                             if len(f) == 12 and f[11].strip()]
+                hits = _locate(words, [fold_word(d["tesseract"]),
+                                       fold_word(d["surya"])])
+                if not hits:
+                    continue
+                x, y, w, h, _ = hits[min(occ, len(hits) - 1)]
+                x0, y0, x1, y1 = x, y, x + w, y + h
+            box = (max(0, x0 - ctx_px), max(0, y0 - 6),
+                   min(img.width, x1 + ctx_px), min(img.height, y1 + 6))
             buf = io.BytesIO()
             img.crop(box).save(buf, format="PNG")
             uris[idx] = ("data:image/png;base64,"
