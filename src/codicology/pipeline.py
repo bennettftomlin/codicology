@@ -124,6 +124,7 @@ import statistics
 from collections import Counter
 import sys
 import tempfile
+import time
 from typing import NamedTuple
 
 import cv2
@@ -4337,6 +4338,19 @@ def relabel_cache(cache_path: str, pdf_path: str, backend_name: str = "surya",
         from surya.layout import LayoutPredictor
         lp = LayoutPredictor()
         st = _Counter()
+        # The served model cold-starts, and a call against a waking server
+        # returns nothing — indistinguishable from a blank page. Warm up
+        # against a mid-book page (guaranteed ink) with patience, so the
+        # dry-streak guard below judges a live server only.
+        probe_path = page_paths[len(page_paths) // 2]
+        for _ in range(12):
+            if lp([Image.open(probe_path)])[0].bboxes:
+                break
+            time.sleep(8)
+        else:
+            print("  [!] layout server never came up after 96s; aborting "
+                  "with the cache untouched")
+            return dict(st)
         dry_streak = 0
         for pp in page_paths:
             key = cache._key(pp)
