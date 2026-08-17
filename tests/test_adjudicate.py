@@ -104,29 +104,50 @@ def test_single_letters_are_not_words_except_a_i_o(vtb):
 
 
 def _tsv(rows):
+    """Real TSV column order: level, page, block, par, line, word, then
+    geometry, conf, text — the line key is (page, block, par, line)."""
     head = "\t".join(["level"] * 12)
     return head + "\n" + "\n".join(
-        "\t".join(map(str, [5, b, p, ln, wn, 0, x, y, w, h, 96, t]))
+        "\t".join(map(str, [5, 1, b, p, ln, wn, x, y, w, h, 96, t]))
         for b, p, ln, wn, x, y, w, h, t in rows)
 
 
 def test_tsv_tokens_carry_normalized_boxes(vtb):
     tsv = _tsv([(1, 1, 1, 1, 100, 50, 80, 20, "the"),
                 (1, 1, 1, 2, 200, 50, 120, 20, "prisoners")])
-    toks, boxes = adj._tsv_tokens(tsv, 1000, 1000)
+    toks, boxes, _ = adj._tsv_tokens(tsv, 1000, 1000)
     assert toks == ["the", "prisoners"]
     assert boxes[1] == [0.2, 0.05, 0.32, 0.07]
 
 
-def test_tsv_hyphen_join_keeps_first_fragments_box(vtb):
-    """The joined token must exist (fold_text parity) and its crop must
-    show the line end where the dispute actually sits."""
+def test_tsv_hyphen_join_unions_both_fragments(vtb):
+    """A crop that ends at "crys-" asks the reviewer to guess; the joined
+    token's box spans both fragments so both lines land in the crop."""
     tsv = _tsv([(1, 1, 1, 1, 500, 50, 90, 20, "crys-"),
                 (1, 1, 2, 1, 100, 90, 110, 20, "tallized"),
                 (1, 1, 2, 2, 250, 90, 70, 20, "plan")])
-    toks, boxes = adj._tsv_tokens(tsv, 1000, 1000)
+    toks, boxes, _ = adj._tsv_tokens(tsv, 1000, 1000)
     assert toks == ["crystallized", "plan"]
-    assert boxes[0][0] == 0.5, "geometry points at the crys- fragment"
+    assert boxes[0] == [0.1, 0.05, 0.59, 0.11], \
+        "the union spans line end to next line's fragment"
+
+
+def test_line_edge_tokens_pull_context_across_the_wrap(vtb):
+    """request-whether at a line end reads as a cliff without the next
+    line's head; a line-initial word without the previous line's tail is
+    a phrase missing its start. cbox carries the neighbor along."""
+    tsv = _tsv([(1, 1, 1, 1, 100, 50, 80, 20, "she"),
+                (1, 1, 1, 2, 200, 50, 120, 20, "request"),
+                (1, 1, 2, 1, 100, 90, 90, 20, "whether"),
+                (1, 1, 2, 2, 210, 90, 70, 20, "any")])
+    toks, boxes, cboxes = adj._tsv_tokens(tsv, 1000, 1000)
+    assert toks == ["she", "request", "whether", "any"]
+    # "request" ends line 1: its crop box reaches down to "whether"
+    assert cboxes[1] == [0.1, 0.05, 0.32, 0.11]
+    # "whether" opens line 2: its crop box reaches up to "request"
+    assert cboxes[2] == [0.1, 0.05, 0.32, 0.11]
+    # mid-line tokens keep their own box
+    assert cboxes[0] == boxes[0]
 
 
 def test_tsv_tokens_match_the_plain_tokenizer(vtb):
@@ -134,6 +155,17 @@ def test_tsv_tokens_match_the_plain_tokenizer(vtb):
     tsv = _tsv([(1, 1, 1, 1, 0, 0, 9, 9, "don’t"),
                 (1, 1, 1, 2, 20, 0, 9, 9, "stop—ever"),
                 (1, 1, 1, 3, 40, 0, 9, 9, "242ff.")])
-    toks, boxes = adj._tsv_tokens(tsv, 100, 100)
+    toks, boxes, cboxes = adj._tsv_tokens(tsv, 100, 100)
     assert toks == adj.tokens("don’t stop—ever 242ff.")
-    assert len(toks) == len(boxes)
+    assert len(toks) == len(boxes) == len(cboxes)
+
+
+def test_edge_context_refuses_distant_neighbors(vtb):
+    """The entry after a paragraph's last line can be a footnote at the
+    page foot; a crop spanning the page helps nobody."""
+    tsv = _tsv([(1, 1, 1, 1, 100, 50, 80, 20, "paragraph"),
+                (1, 1, 1, 2, 200, 50, 90, 20, "ends"),
+                (2, 1, 1, 1, 100, 900, 70, 20, "footnote")])
+    toks, boxes, cboxes = adj._tsv_tokens(tsv, 1000, 1000)
+    assert toks == ["paragraph", "ends", "footnote"]
+    assert cboxes[1] == boxes[1], "the footnote is not this line's wrap"
