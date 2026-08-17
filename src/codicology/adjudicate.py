@@ -137,8 +137,16 @@ def build_lexicon(agreed_pages: list, min_count: int = 3) -> Counter:
     return Counter({w: n for w, n in lex.items() if n >= min_count})
 
 
-def adjudicate_pair(a: str, b: str, lexicon: Counter) -> dict:
-    """One dispute between two attested readings, through the ladder."""
+def adjudicate_pair(a: str, b: str, lexicon: Counter,
+                    attested_floor: int = 0) -> dict:
+    """One dispute between two attested readings, through the ladder.
+
+    attested_floor > 0 arms the dictionary gate the calibration battery
+    demanded: a dictionary winner must also occur at least that often in the
+    book's own agreed text. The battery measured 1-in-10 dictionary verdicts
+    wrong, and the wrong ones were misreads that accidentally landed on an
+    English word — accidents are words of the language, not words of the
+    book."""
     fa, fb = fold_word(a), fold_word(b)
     if fa == fb:
         return {"rung": "fold", "winner": a}
@@ -149,8 +157,12 @@ def adjudicate_pair(a: str, b: str, lexicon: Counter) -> dict:
         return {"rung": "lexicon", "winner": b, "count": lb}
     da, db = _is_word(fa), _is_word(fb)
     if da and not db:
+        if attested_floor and lexicon.get(fa, 0) < attested_floor:
+            return {"rung": "abstain", "winner": None, "note": "ungated word"}
         return {"rung": "dictionary", "winner": a}
     if db and not da:
+        if attested_floor and lexicon.get(fb, 0) < attested_floor:
+            return {"rung": "abstain", "winner": None, "note": "ungated word"}
         return {"rung": "dictionary", "winner": b}
     return {"rung": "abstain", "winner": None}
 
@@ -316,6 +328,7 @@ def calibrate(pdf: str, epub: "str | None" = None,
         img.save(png)
         truth_f = Counter(fold_word(w) for w in truth)
         reads = {}
+        vis_sets = {}
         for name, reader in (("tesseract", read_tesseract),
                              ("vision", read_vision)):
             got = reader(png)
@@ -323,6 +336,8 @@ def calibrate(pdf: str, epub: "str | None" = None,
                 continue
             reads[name] = got
             got_f = Counter(fold_word(w) for w in tokens(got))
+            if name == "vision":
+                vis_sets = set(got_f)
             inter = sum((truth_f & got_f).values())
             engines[name]["truth"] += sum(truth_f.values())
             engines[name]["got"] += sum(got_f.values())
@@ -337,29 +352,42 @@ def calibrate(pdf: str, epub: "str | None" = None,
                    {fold_word(b) for _, b in pairs}
         agreed.append([w for w in ours if fold_word(w) not in pair_set])
         for a, b in pairs:
-            dispute_rows.append((i, a, b, truth_f))
+            fa, fb = fold_word(a), fold_word(b)
+            dispute_rows.append({
+                "page": i, "a": a, "b": b,
+                "ta": truth_f.get(fa, 0) > 0, "tb": truth_f.get(fb, 0) > 0,
+                "va": fa in vis_sets, "vb": fb in vis_sets})
 
     lexicon = build_lexicon(agreed)
-    rung_score = {}
-    for i, a, b, truth_f in dispute_rows:
-        v = adjudicate_pair(a, b, lexicon)
-        rung = v["rung"]
-        rs = rung_score.setdefault(rung, Counter())
-        fa, fb = fold_word(a), fold_word(b)
-        ta, tb = truth_f.get(fa, 0) > 0, truth_f.get(fb, 0) > 0
-        if v["winner"] is None:
-            rs["settleable" if (ta != tb) else "truly_open"] += 1
-        else:
-            fw = fold_word(v["winner"])
-            tw = truth_f.get(fw, 0) > 0
-            other = fb if fw == fa else fa
-            to = truth_f.get(other, 0) > 0
-            if tw and not to:
-                rs["right"] += 1
-            elif to and not tw:
-                rs["WRONG"] += 1
+
+    def score(rows, floor):
+        table = {}
+        for r in rows:
+            v = adjudicate_pair(r["a"], r["b"], lexicon,
+                                attested_floor=floor)
+            rung = v["rung"]
+            winner = v["winner"]
+            if winner is None and rung == "abstain" and r["va"] != r["vb"]:
+                rung = "vision"
+                winner = r["a"] if r["va"] else r["b"]
+            rs = table.setdefault(rung, Counter())
+            if winner is None:
+                rs["settleable" if (r["ta"] != r["tb"]) else "truly_open"] += 1
             else:
-                rs["unjudgeable"] += 1
+                right = r["ta"] if fold_word(winner) == fold_word(r["a"])                     else r["tb"]
+                wrong = r["tb"] if fold_word(winner) == fold_word(r["a"])                     else r["ta"]
+                if right and not wrong:
+                    rs["right"] += 1
+                elif wrong and not right:
+                    rs["WRONG"] += 1
+                else:
+                    rs["unjudgeable"] += 1
+        return table
+
+    variants = {"ungated": score(dispute_rows, 0),
+                "gated(1)": score(dispute_rows, 1),
+                "gated(2)": score(dispute_rows, 2)}
+    rung_score = variants["ungated"]
 
     print(f"pages scored: {n}" + ("  (degraded renders)" if degrade else ""))
     for name, c in engines.items():
@@ -370,8 +398,17 @@ def calibrate(pdf: str, epub: "str | None" = None,
               f"precision {c['hit']/max(1,c['got']):.4f}")
     if dispute_rows:
         print(f"  ladder, on {len(dispute_rows)} real disputes with truth known:")
-        for rung, rs in sorted(rung_score.items()):
-            print(f"    {rung:<12} " + "  ".join(f"{k}={v}" for k, v in
-                                                 sorted(rs.items())))
+        for name, table in variants.items():
+            print(f"   [{name}]")
+            for rung, rs in sorted(table.items()):
+                print(f"    {rung:<12} " + "  ".join(f"{k}={v}" for k, v in
+                                                     sorted(rs.items())))
+        import os as _os
+        rows_path = _os.environ.get("CODICOLOGY_ROWS")
+        if rows_path:
+            with open(rows_path, "a") as fh:
+                for r in dispute_rows:
+                    fh.write(json.dumps(r) + "\n")
+            print(f"  rows appended: {rows_path}")
     return {"pages": n, "engines": {k: dict(v) for k, v in engines.items()},
             "rungs": {k: dict(v) for k, v in rung_score.items()}}
