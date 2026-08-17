@@ -310,6 +310,44 @@ def adjudicate_pair(a: str, b: str, lexicon: Counter,
     return {"rung": "abstain", "winner": None}
 
 
+def _stitch_page_turns(pages: dict, shipped_last: dict) -> int:
+    """Join the witness's page-turn hyphen fragments the way the built book
+    joined its own — and only then.
+
+    The builder rejoins words split across page turns, so the shipped page
+    ends with the whole word while the witness, whose world ends at the
+    page edge, legitimately reads only the fragment. Left alone, every
+    such join becomes a false dispute — and the ladder crowns the
+    fragment, since 'in-' folds to a word the book attests everywhere.
+    The stitch mirrors the builder exactly: the fragment joins the next
+    page's first token only when the result folds to what the shipped
+    page actually ends with. Where the builder refused (self- control),
+    the condition fails symmetrically and both pages stay silent.
+
+    Empty witness pages are skipped, not stitched across blindly — the
+    builder joins across dropped blanks, and the fold-mirror condition is
+    the gate that keeps a long gap honest.
+
+    pages: page index -> [tokens, boxes, cboxes], mutated in place."""
+    order = [i for i in sorted(pages) if pages[i][0]]
+    stitched = 0
+    for a, b in zip(order, order[1:]):
+        ta, tb = pages[a][0], pages[b][0]
+        frag = ta[-1]
+        if not (len(frag) >= 2 and frag.endswith("-")
+                and frag[-2].isalnum()):
+            continue
+        joined = frag[:-1] + tb[0]
+        if fold_word(joined) != shipped_last.get(a):
+            continue
+        ta[-1] = joined
+        del tb[0]
+        del pages[b][1][0]
+        del pages[b][2][0]
+        stitched += 1
+    return stitched
+
+
 def align_disputes(ours: list, theirs: list) -> list:
     """Word-level disagreements between two readings of one page, by
     sequence alignment on folded forms — replacements only. Insertions and
@@ -356,6 +394,7 @@ def main(epub: str, pdf: str, report: "str | None" = None,
     agreed, per_page = [], {}
     disputes = []
     n_done = 0
+    witness = {}
     for i in sorted(pages):
         if i >= len(doc):
             continue
@@ -368,7 +407,13 @@ def main(epub: str, pdf: str, report: "str | None" = None,
         tsv = read_tesseract_tsv(png)
         if tsv is None:
             continue
-        t_tok, t_box, t_cbox = _tsv_tokens(tsv, img.width, img.height)
+        witness[i] = list(_tsv_tokens(tsv, img.width, img.height)) + [png]
+    shipped_last = {i: fold_word(surya_tokens[i][-1])
+                    for i in witness if surya_tokens.get(i)}
+    n_stitched = _stitch_page_turns(
+        {i: w[:3] for i, w in witness.items()}, shipped_last)
+    for i in sorted(witness):
+        t_tok, t_box, t_cbox, png = witness[i]
         s_tok = surya_tokens[i]
         pairs = align_disputes(s_tok, t_tok)
         pair_set = {fold_word(a) for a, _, _ in pairs} | \
@@ -406,6 +451,9 @@ def main(epub: str, pdf: str, report: "str | None" = None,
             disputes.append(row)
 
     print(f"pages examined: {n_done}")
+    if n_stitched:
+        print(f"page-turn hyphens: {n_stitched} witness fragment(s) "
+              f"stitched to match the built book's own joins")
     print(f"book lexicon: {len(lexicon)} recurring agreed words")
     print(f"disputes: {len(disputes)}"
           + (f"  ({', '.join(f'{k}:{v}' for k, v in rungs.most_common())})"
