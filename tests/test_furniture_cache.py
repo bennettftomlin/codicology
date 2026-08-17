@@ -41,14 +41,30 @@ def test_an_old_cache_entry_is_not_mistaken_for_a_headless_page(vtb, cache, page
     furniture-keeping has UNKNOWN heads, not absent ones. Treating the two the
     same would audit an old cache as a book with no folios anywhere and report
     nothing wrong — silence indistinguishable from a clean bill.
+
+    The marker now settles that by re-reading rather than by flagging: an
+    entry below the current version is not served at all, so the page comes
+    back from the engine with its heads — and its labels — present.
     """
     cache.entries[cache._key(page)] = [{"html": "<p>body</p>", "fig": None,
                                         "cap": False}]          # v1 shape: a bare list
-    assert cache.get(page) is not None                          # still readable
-    assert not cache.knows_furniture(page)                      # but not trusted for heads
+    assert cache.get(page) is None                              # re-read, not served
+    assert not cache.knows_furniture(page)                      # and not trusted for heads
 
     cache.put(page, [item(vtb, "<p>body</p>")])
-    assert cache.knows_furniture(page)                          # v2: absence now means absence
+    assert cache.knows_furniture(page)                          # absence now means absence
+    assert cache.get(page) is not None                          # and it is a hit again
+
+
+def test_the_escape_hatch_still_reads_an_old_entry(vtb, tmp_path, page):
+    """--keep-stale-cache trades the labels for the hours: the old reading
+    is served, and still carries no claim about heads."""
+    cache = vtb.OCRCache(str(tmp_path / "c.gz"), "surya", ["en"],
+                         serve_stale=True)
+    cache.entries[cache._key(page)] = [{"html": "<p>body</p>", "fig": None,
+                                        "cap": False}]
+    assert cache.get(page) is not None
+    assert not cache.knows_furniture(page)
 
 
 def test_folios_come_straight_from_furniture_text(vtb):
@@ -95,16 +111,17 @@ def test_furniture_never_reaches_page_text_used_for_turn_detection(vtb, cache, p
 
 def test_legacy_reread_upgrades_the_cache_entry(vtb, cache, page):
     """
-    The second pass over a v1 cache costs hours on a long book; folding its
-    readings back in means it is paid once. Afterward the entry is v2: known,
-    with the head recorded — or recorded absent, which is then trusted.
+    The re-read is paid once. Afterward the entry is current: known, with the
+    head recorded — or recorded absent, which is then trusted — and the page
+    is served from cache ever after.
     """
     cache.entries[cache._key(page)] = [{"html": "<p>body</p>", "fig": None,
                                         "cap": False}]
     assert not cache.knows_furniture(page)
-    items = cache.get(page)
-    items = items + [vtb.PageItem(html="<p>Chapter 11 • 91</p>", is_furniture=True)]
-    cache.put(page, items)
+    assert cache.get(page) is None, "the stale entry sends the page back to OCR"
+    cache.put(page, [vtb.PageItem(html="<p>body</p>"),
+                     vtb.PageItem(html="<p>Chapter 11 • 91</p>",
+                                  is_furniture=True)])
     assert cache.knows_furniture(page)
     back = cache.get(page)
     assert any(it.is_furniture and "91" in it.html for it in back)

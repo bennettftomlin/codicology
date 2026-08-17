@@ -108,7 +108,7 @@ def test_no_page_of_a_multi_block_page_is_silently_dropped(vtb, tmp_path):
         assert t.split()[0] in got, f"lost {t.split()[0]}"
 
 
-def test_boxes_round_trip_through_the_cache_and_old_entries_stay_readable(vtb, tmp_path):
+def test_boxes_round_trip_and_old_entries_go_back_to_the_engine(vtb, tmp_path):
     page = _page_png(tmp_path)
     cache_path = str(tmp_path / "c.ocr.gz")
     c = vtb.OCRCache(cache_path, "surya", ["en"])
@@ -119,13 +119,17 @@ def test_boxes_round_trip_through_the_cache_and_old_entries_stay_readable(vtb, t
     got = c2.get(page)
     assert got[0].box == (0.1, 0.2, 0.3, 0.4)
     assert got[1].box is None
-    # a v2-era entry — written before boxes existed — still loads
+    # a v2-era entry — written before boxes existed — is read again rather
+    # than served geometry-less, and remains readable under the escape hatch
     key = c2._key(page)
     entry = c2.entries[key]
     for it in entry["items"]:
         it.pop("box", None)
     entry["v"] = 2
-    got_old = c2.get(page)
+    assert c2.get(page) is None
+    c3 = vtb.OCRCache(cache_path, "surya", ["en"], serve_stale=True)
+    c3.entries[key] = entry
+    got_old = c3.get(page)
     assert got_old[0].box is None and got_old[0].html == "<p>x</p>"
 
 
