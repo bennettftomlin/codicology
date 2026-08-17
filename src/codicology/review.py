@@ -134,6 +134,21 @@ def _locate(words, targets) -> list:
     return []
 
 
+def _outline_token(crop, rect):
+    """Mark the disputed token's own ink inside its crop. The crop carries
+    context — a neighboring line's tail, leader dots, the wrap — and eagle
+    proved a reviewer can read the context as the subject: a contents
+    entry's XXXII was overridden with the previous line's ALTGELD because
+    the leader dots dominated the strip. The box says: judge THIS ink."""
+    from PIL import ImageDraw
+    d = ImageDraw.Draw(crop)
+    x0, y0, x1, y1 = rect
+    d.rectangle((max(0, x0 - 2), max(0, y0 - 2),
+                 min(crop.width - 1, x1 + 2), min(crop.height - 1, y1 + 2)),
+                outline=(224, 122, 0), width=2)
+    return crop
+
+
 def crop_data_uris(report, dpi=200, ctx_px=240) -> dict:
     """Crop each dispute's ink. Reports written since geometry landed carry
     a normalized bbox recorded at adjudication time — exact by construction.
@@ -156,8 +171,10 @@ def crop_data_uris(report, dpi=200, ctx_px=240) -> dict:
         words = None
         for idx, d, occ in rows:
             # cbox is the crop's box when recorded: hyphen-joined fragments
-            # unioned and line-edge context pulled across the wrap
+            # unioned and line-edge context pulled across the wrap. tbox is
+            # the token's own ink, outlined inside the crop.
             rec = d.get("cbox") or d.get("box")
+            tbox = d.get("box")
             if rec:
                 x0, y0 = int(rec[0] * img.width), int(rec[1] * img.height)
                 x1, y1 = int(rec[2] * img.width), int(rec[3] * img.height)
@@ -179,10 +196,18 @@ def crop_data_uris(report, dpi=200, ctx_px=240) -> dict:
                     continue
                 x, y, w, h, _ = hits[min(occ, len(hits) - 1)]
                 x0, y0, x1, y1 = x, y, x + w, y + h
+                tbox = None
+                tpx = (x0, y0, x1, y1)
             box = (max(0, x0 - ctx_px), max(0, y0 - 6),
                    min(img.width, x1 + ctx_px), min(img.height, y1 + 6))
+            crop = img.crop(box).convert("RGB")
+            if tbox:
+                tpx = (int(tbox[0] * img.width), int(tbox[1] * img.height),
+                       int(tbox[2] * img.width), int(tbox[3] * img.height))
+            _outline_token(crop, (tpx[0] - box[0], tpx[1] - box[1],
+                                  tpx[2] - box[0], tpx[3] - box[1]))
             buf = io.BytesIO()
-            img.crop(box).save(buf, format="PNG")
+            crop.save(buf, format="PNG")
             uris[idx] = ("data:image/png;base64,"
                          + base64.b64encode(buf.getvalue()).decode())
     return uris

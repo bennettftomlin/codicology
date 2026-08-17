@@ -169,3 +169,24 @@ def test_edge_context_refuses_distant_neighbors(vtb):
     toks, boxes, cboxes = adj._tsv_tokens(tsv, 1000, 1000)
     assert toks == ["paragraph", "ends", "footnote"]
     assert cboxes[1] == boxes[1], "the footnote is not this line's wrap"
+
+
+def test_a_numeral_cannot_be_outvoted(vtb):
+    """Eagle's contents page: the lexicon crowned 'a' over XXXII, because
+    common words outnumber every numeral. Numerals are apparatus; only
+    ink evidence or a human settles a dispute touching one."""
+    lex = Counter({"a": 500})
+    v = adj.adjudicate_pair("XXXII", "a", lex)
+    assert v["rung"] == "abstain" and v.get("note") == "roman numeral"
+    v = adj.adjudicate_pair("xxxii", "xxxti", Counter())
+    assert v["rung"] == "abstain", "front-matter folios count too"
+
+
+def test_roman_syntax_keeps_real_words_out(vtb):
+    assert adj._is_roman("XXXII") and adj._is_roman("xxxii")
+    assert adj._is_roman("XVI.") , "contents entries carry punctuation"
+    assert not adj._is_roman("CIVIL"), "every letter Roman, grammar not"
+    assert not adj._is_roman("Mix"), "mixed case is prose"
+    assert not adj._is_roman("I"), "one letter stays a pronoun"
+    v = adj.adjudicate_pair("civil", "civii", Counter())
+    assert v["rung"] == "dictionary" and v["winner"] == "civil"

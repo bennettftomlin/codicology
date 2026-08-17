@@ -258,6 +258,22 @@ def build_lexicon(agreed_pages: list, min_count: int = 3) -> Counter:
     return Counter({w: n for w, n in lex.items() if n >= min_count})
 
 
+_ROMAN = re.compile(
+    r"^M{0,4}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$")
+
+
+def _is_roman(orig: str) -> bool:
+    """A numeral as the book prints one: two or more letters, one case
+    throughout (XXXII chapter heads, xxxii front-matter folios), valid
+    Roman syntax. Judged on the original, not the fold — case is part of
+    the signal — and strict syntax keeps real words out: CIVIL and MIDI
+    fail the grammar even though every letter is a Roman digit."""
+    t = orig.strip(".,;:")
+    if len(t) < 2 or not (t.isupper() or t.islower()):
+        return False
+    return bool(_ROMAN.match(t.upper()))
+
+
 def adjudicate_pair(a: str, b: str, lexicon: Counter,
                     attested_floor: int = 0) -> dict:
     """One dispute between two attested readings, through the ladder.
@@ -271,6 +287,12 @@ def adjudicate_pair(a: str, b: str, lexicon: Counter,
     fa, fb = fold_word(a), fold_word(b)
     if fa == fb:
         return {"rung": "fold", "winner": a}
+    if _is_roman(a) or _is_roman(b):
+        # a chapter numeral is apparatus: the book's common words and the
+        # dictionary both outnumber every numeral, and eagle's lexicon
+        # crowned 'a' over a contents-page XXXII on exactly that arithmetic.
+        # Only ink evidence or a human settles a dispute touching one.
+        return {"rung": "abstain", "winner": None, "note": "roman numeral"}
     la, lb = lexicon.get(fa, 0), lexicon.get(fb, 0)
     if la >= 3 and lb == 0:
         return {"rung": "lexicon", "winner": a, "count": la}
