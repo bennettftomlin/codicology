@@ -38,6 +38,75 @@ class CodicologyOCRAction(InterfaceAction):
         if icon:
             self.qaction.setIcon(icon)
         self.qaction.triggered.connect(self.start)
+        from qt.core import QMenu
+        self.menu = QMenu(self.gui)
+        act = self.menu.addAction('Import review decisions…')
+        act.triggered.connect(self.import_decisions)
+        self.qaction.setMenu(self.menu)
+
+    def import_decisions(self):
+        """The other half of the review loop: the sheet's exported
+        decisions land beside the cache where every future rebuild finds
+        them — and the rebuild is offered on the spot, so the corrections
+        do not wait for the user to remember."""
+        import json
+        import shutil
+        from qt.core import QFileDialog
+        from calibre.gui2 import question_dialog
+        from calibre_plugins.codicology_ocr import env
+
+        db = self.gui.current_db.new_api
+        book_id = self._selected_book()
+        if book_id is None:
+            return error_dialog(self.gui, 'No book selected',
+                                'Select the book the decisions belong to.',
+                                show=True)
+        pdf = db.format_abspath(book_id, 'PDF')
+        if not pdf:
+            return error_dialog(self.gui, 'No PDF in this book',
+                                'Decisions attach to a book converted from '
+                                'a PDF; this one has none.', show=True)
+        title = db.field_for('title', book_id) or 'this book'
+        cache = env.cache_path(getattr(db, 'library_id', 'default'),
+                               book_id, pdf)
+        report = cache.rsplit('.ocr.gz', 1)[0] + '-disputes.json'
+        target = report[:-len('.json')] + '.decisions.json'
+
+        src, _ = QFileDialog.getOpenFileName(
+            self.gui, f'Review decisions for "{title}"',
+            os.path.expanduser('~/Downloads'),
+            'Decisions files (*.decisions.json);;JSON files (*.json)')
+        if not src:
+            return
+        try:
+            with open(src) as fh:
+                data = json.load(fh)
+            rows = data.get('decisions')
+            if not isinstance(rows, list):
+                raise ValueError
+        except Exception:
+            return error_dialog(self.gui, 'Not a decisions file',
+                                'That file does not look like a review '
+                                "sheet's exported decisions.", show=True)
+        # a decisions file knows which record it came from; importing it
+        # onto the wrong book applies corrections at the wrong sites
+        expected = os.path.basename(report)[:-len('.json')]
+        claimed = data.get('name', '')
+        if claimed and claimed != expected:
+            if not question_dialog(
+                    self.gui, 'Different book?',
+                    f'This file says it belongs to "{claimed}", but the '
+                    f'selected book\'s record is "{expected}". '
+                    f'Import it here anyway?'):
+                return
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        shutil.copyfile(src, target)
+        if question_dialog(
+                self.gui, 'Decisions imported',
+                f'{len(rows)} correction(s) imported for "{title}".\n\n'
+                f'Rebuild now to apply them? They are also applied '
+                f'automatically on any later rebuild.'):
+            self.start()
 
     # ── entry point ─────────────────────────────────────────────────────
     def start(self):
