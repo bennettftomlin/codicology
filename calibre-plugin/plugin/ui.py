@@ -108,6 +108,17 @@ class CodicologyOCRAction(InterfaceAction):
                 f'automatically on any later rebuild.'):
             self.start()
 
+    def _open_sheet(self, path):
+        """Hand the sheet to the browser. Its decisions live in the
+        browser's own storage, so it must open as a real file:// page —
+        Calibre's internal viewer would give it nowhere to remember."""
+        try:
+            from calibre.gui2 import open_local_file
+            open_local_file(path)
+        except Exception:
+            import webbrowser
+            webbrowser.open('file://' + path)
+
     # ── entry point ─────────────────────────────────────────────────────
     def start(self):
         from calibre_plugins.codicology_ocr import env
@@ -266,16 +277,18 @@ class CodicologyOCRAction(InterfaceAction):
             m = _re.search(r'disputes: (\d+)', adj.get('output', ''))
             n_disp = int(m.group(1)) if m else None
             rev = result.get('review')
+            sheet = None
             sheet_note = ''
             if rev is not None and rev.get('rc') == 0:
                 ms = _re.search(r'review sheet: (.+)', rev.get('output', ''))
-                if ms:
+                if ms and os.path.exists(ms.group(1).strip()):
+                    sheet = ms.group(1).strip()
                     sheet_note = (
-                        f'\n\nA review sheet — the ink beside every disputed '
-                        f'word, and a field for your own reading — is at:\n'
-                        f'{ms.group(1).strip()}\n'
-                        f'Export decisions from it and drop the file beside '
-                        f'the cache; the next rebuild applies them.')
+                        f'\n\nThe review sheet — the ink beside every '
+                        f'disputed word, and a field for your own reading — '
+                        f'is opening in your browser. Export decisions from '
+                        f'it, then bring them back with OCR PDF → Import '
+                        f'review decisions.')
             if adj['rc'] != 0:
                 error_dialog(
                     self.gui, 'Dispute record could not be made',
@@ -283,6 +296,11 @@ class CodicologyOCRAction(InterfaceAction):
                     f'(exit {adj["rc"]}).',
                     det_msg=adj['output'], show=True)
             elif n_disp:
+                # Opened before the dialog blocks: the sheet is the thing
+                # worth looking at, and a sheet that waits for a click on
+                # an OK button is a sheet that gets forgotten.
+                if sheet and prefs['open_review_sheet']:
+                    self._open_sheet(sheet)
                 info_dialog(
                     self.gui, 'Where the readers disagreed',
                     f'"{title}": {n_disp} word(s) the OCR engines read '
