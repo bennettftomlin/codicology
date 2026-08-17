@@ -124,6 +124,18 @@ class CodicologyOCRAction(InterfaceAction):
                                 'This book has no PDF format for '
                                 'codicology to read.', show=True)
 
+        # One book at a time. Two conversions running together fight over
+        # the same inference server, and the loser's pages come back empty
+        # — which is indistinguishable from a blank leaf until a whole
+        # book has been read wrong.
+        if getattr(self, '_running', None):
+            return error_dialog(
+                self.gui, 'A conversion is already running',
+                f'"{self._running}" is still being read. Reading a book '
+                'uses the whole inference server, so they go one at a '
+                'time — wait for it to finish, then start this one.',
+                show=True)
+
         exe = env.resolve_codicology()
         if not exe:
             return error_dialog(
@@ -203,6 +215,7 @@ class CodicologyOCRAction(InterfaceAction):
                        if adjudicate_argv
                        and prefs['review_sheet_after_build'] else None)
 
+        self._running = title
         job = ThreadedJob(
             'codicology_ocr',
             f'OCR PDF — {title}',
@@ -223,6 +236,7 @@ class CodicologyOCRAction(InterfaceAction):
 
     # ── completion ──────────────────────────────────────────────────────
     def finished(self, job):
+        self._running = None
         if job.failed:
             exc = getattr(job, 'exception', None)
             if type(exc).__name__ == 'Aborted':
