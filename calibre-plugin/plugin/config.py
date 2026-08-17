@@ -16,10 +16,13 @@ prefs.defaults['verify_after_build'] = True
 prefs.defaults['adjudicate_after_build'] = True
 prefs.defaults['review_sheet_after_build'] = True
 prefs.defaults['lang'] = 'en'
+# The research conveniences default ON: linkers refuse rather than guess,
+# so on a book without the apparatus they cost nothing, and on a book
+# with it they are the point.
 prefs.defaults['link_notes'] = True
-prefs.defaults['link_citations'] = False
-prefs.defaults['typography'] = False
-prefs.defaults['link_index'] = False
+prefs.defaults['link_citations'] = True
+prefs.defaults['typography'] = True
+prefs.defaults['link_index'] = True
 prefs.defaults['check_folios'] = True
 prefs.defaults['embed_images'] = False
 prefs.defaults['keep_blank_pages'] = False
