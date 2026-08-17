@@ -4237,6 +4237,53 @@ def link_index(bodies: list[str], folio_to_page: dict, dropped: set) -> dict:
     return stats
 
 
+def apply_reviewer_decisions(bodies: list, decisions_path: str) -> dict:
+    """A review sheet's exported decisions, reapplied at rebuild time —
+    before the linkers run, so a corrected word can still earn its anchor.
+
+    Same contract as `codicology apply`: text nodes only, the recorded
+    occurrence, and a site that no longer exists is stale — reported and
+    left as read, never guessed at. The reviewer read the shipped book;
+    a rebuild may differ from it in quote shape, so the straight/curly
+    variants of the site are tried before declaring it stale."""
+    from .adjudicate import _TYPO
+    from .review import _apply_to_xhtml
+    try:
+        with open(decisions_path) as fh:
+            rows = json.load(fh).get("decisions", [])
+    except (OSError, ValueError) as exc:
+        print(f"    [!] decisions file unreadable, ignored: {exc}")
+        return {"applied": 0, "stale": 0}
+    curl = str.maketrans({"'": "’"})
+    applied = stale = 0
+    # highest occurrence first, so an earlier replacement of the same word
+    # on the same page cannot renumber a later one
+    for d in sorted(rows, key=lambda d: -d.get("occurrence", 0)):
+        i = d.get("page")
+        if not isinstance(i, int) or not (0 <= i < len(bodies)):
+            stale += 1
+            continue
+        got = None
+        tried = set()
+        for old in (d["old"], d["old"].translate(curl),
+                    d["old"].translate(_TYPO)):
+            if old in tried:
+                continue
+            tried.add(old)
+            got = _apply_to_xhtml(bodies[i], old, d["new"],
+                                  d.get("occurrence", 0))
+            if got is not None:
+                break
+        if got is None:
+            stale += 1
+            print(f"    stale decision: p{i} {d['old']!r} -> {d['new']!r} "
+                  f"— site changed since review, kept as read")
+        else:
+            bodies[i] = got
+            applied += 1
+    return {"applied": applied, "stale": stale}
+
+
 def link_citations(bodies: list[str], dropped: set) -> dict:
     """
     Bind in-text citations to the bibliography, driven from the bibliography.
@@ -4854,6 +4901,7 @@ def build_epub(
     link_citations_flag: bool = False,
     link_index_flag: bool = False,
     typography_flag: bool = False,
+    decisions_path: str | None = None,
 ) -> None:
     try:
         from ebooklib import epub
@@ -5270,6 +5318,13 @@ def build_epub(
             dropped |= blank
             print(f"    dropped {len(blank)} blank page(s) "
                   f"({total - len(dropped)} kept)")
+
+    if decisions_path:
+        dst = apply_reviewer_decisions(bodies, decisions_path)
+        if dst["applied"] or dst["stale"]:
+            print(f"    decisions: {dst['applied']} reviewer correction(s) "
+                  f"reapplied"
+                  + (f", {dst['stale']} stale" if dst["stale"] else ""))
 
     if link_notes_flag:
         # chapter starts, where the printed contents can supply them: a leaf
@@ -6779,6 +6834,7 @@ def _finish(
     link_index_flag: bool = False,
     typography_flag: bool = False,
     pdf_text_layer: bool = False,
+    decisions_path: str | None = None,
 ) -> None:
     """Write whichever outputs were asked for, from pages already on disk."""
     # Both numbered against the pages as they went in, which is what the review
@@ -6871,7 +6927,8 @@ def _finish(
                    cover_spec=cover_spec, link_notes_flag=link_notes_flag,
                    link_citations_flag=link_citations_flag,
                    link_index_flag=link_index_flag,
-                   typography_flag=typography_flag)
+                   typography_flag=typography_flag,
+                   decisions_path=decisions_path)
 
     if output_pdf and pdf_text_layer:
         # After the EPUB, so a shared cache is already warm — and the reads
@@ -6933,6 +6990,7 @@ def process_video(
     link_index_flag: bool = False,
     typography_flag: bool = False,
     pdf_text_layer: bool = False,
+    decisions_path: str | None = None,
 ) -> None:
     try:
         import img2pdf
@@ -6966,7 +7024,8 @@ def process_video(
                     embed_images, img2pdf, dedupe, review_sheet, drop_pages,
                     ocr_cache, swap_pairs, ids, drop_turns, check_folios, drop_blank,
                     cover_spec, link_notes_flag, link_citations_flag, link_index_flag,
-                    typography_flag, pdf_text_layer)
+                    typography_flag, pdf_text_layer,
+                    decisions_path=decisions_path)
             return
 
         if from_images:
@@ -6994,7 +7053,8 @@ def process_video(
                     embed_images, img2pdf, dedupe, review_sheet, drop_pages,
                     ocr_cache, swap_pairs, page_ids, drop_turns, check_folios, drop_blank,
                     cover_spec, link_notes_flag, link_citations_flag, link_index_flag,
-                    typography_flag, pdf_text_layer)
+                    typography_flag, pdf_text_layer,
+                    decisions_path=decisions_path)
             return
 
         print("\n[1/3] Scanning video for pages held still…")
@@ -7141,7 +7201,8 @@ def process_video(
                 embed_images, img2pdf, dedupe, review_sheet, drop_pages,
                 ocr_cache, swap_pairs, page_ids, drop_turns, check_folios, drop_blank,
                     cover_spec, link_notes_flag, link_citations_flag, link_index_flag,
-                    typography_flag, pdf_text_layer)
+                    typography_flag, pdf_text_layer,
+                    decisions_path=decisions_path)
 
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
@@ -7229,6 +7290,11 @@ def main(argv: "list[str] | None" = None) -> None:
                              "never touched, and neither are spaced ellipses — '. . .' is "
                              "how the book set them. Also reports characters that usually "
                              "mean the OCR stumbled")
+    parser.add_argument("--apply-decisions", metavar="JSON", default=None,
+                        help="review-sheet decisions to reapply at build time, "
+                             "before the linkers run — the reviewer's "
+                             "corrections survive rebuilds; sites that no "
+                             "longer exist are reported stale, never guessed")
     parser.add_argument("--cover", metavar="PAGE_OR_FILE", default="auto",
                         help="The EPUB's cover: a page named like --drop-pages names them, "
                              "a path to an image file, or 'none'. Default 'auto' takes the "
@@ -7450,6 +7516,7 @@ def _convert(args, parser) -> None:
         link_index_flag=args.link_index,
         typography_flag=args.typography,
         pdf_text_layer=args.pdf_text_layer,
+        decisions_path=args.apply_decisions,
     )
     progress.emit(event="result", epub=args.epub, pdf=output_pdf)
 

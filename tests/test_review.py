@@ -229,3 +229,48 @@ def test_apply_word_boundaries_protect_substrings(vtb, tmp_path):
     import zipfile
     got = zipfile.ZipFile(epub).read("EPUB/page_0003.xhtml").decode()
     assert "off 6 offer" in got
+
+
+def test_rebuild_reapply_lands_before_linkers(vtb, tmp_path):
+    dec = _decisions(tmp_path, [{"page": 1, "occurrence": 0,
+                                 "old": "beligerents", "new": "belligerents",
+                                 "source": "ladder", "rung": "dictionary"}])
+    bodies = ["<p>front</p>", "<p>the beligerents met</p>"]
+    st = vtb.apply_reviewer_decisions(bodies, dec)
+    assert st == {"applied": 1, "stale": 0}
+    assert bodies[1] == "<p>the belligerents met</p>"
+
+
+def test_rebuild_reapply_reports_stale_sites(vtb, tmp_path):
+    dec = _decisions(tmp_path, [{"page": 0, "occurrence": 0,
+                                 "old": "vanished", "new": "word",
+                                 "source": "human", "rung": "human"}])
+    bodies = ["<p>a re-read changed this</p>"]
+    st = vtb.apply_reviewer_decisions(bodies, dec)
+    assert st == {"applied": 0, "stale": 1}
+    assert "changed this" in bodies[0]
+
+
+def test_rebuild_reapply_tolerates_quote_shape(vtb, tmp_path):
+    """The reviewer read a typography-restored book; a rebuild's text may
+    carry the other quote shape. Both variants are tried before stale."""
+    dec = _decisions(tmp_path, [{"page": 0, "occurrence": 0,
+                                 "old": "don't", "new": "won't",
+                                 "source": "human", "rung": "human"}])
+    bodies = ["<p>they don’t know</p>"]
+    st = vtb.apply_reviewer_decisions(bodies, dec)
+    assert st["applied"] == 1
+    assert "won't" in bodies[0]
+
+
+def test_rebuild_reapply_highest_occurrence_first(vtb, tmp_path):
+    dec = _decisions(tmp_path, [
+        {"page": 0, "occurrence": 0, "old": "ff", "new": "6",
+         "source": "human", "rung": "human"},
+        {"page": 0, "occurrence": 1, "old": "ff", "new": "7",
+         "source": "human", "rung": "human"},
+    ])
+    bodies = ["<p>see ff and ff</p>"]
+    st = vtb.apply_reviewer_decisions(bodies, dec)
+    assert st["applied"] == 2
+    assert bodies[0] == "<p>see 6 and 7</p>"
