@@ -3474,6 +3474,65 @@ def normalize_list_markers(bodies: list[str]) -> int:
     return changed
 
 
+# A superscript marker the layout orphaned into its own block stands exactly
+# one text line tall. Measured on eagle's 274 specimens: markers 0.019-0.020
+# of page height, the shortest multi-line text block 0.038 — this sits in
+# the gap. A display chapter numeral is several times taller.
+MARKER_BLOCK_MAX_H = 0.03
+
+
+def reattach_orphan_markers(items: list, furn_numbers: set) -> int:
+    """
+    Give an orphaned superscript marker back to its sentence.
+
+    The layout model sometimes segments a marker into its own block, and
+    recognition then renders it as a bare paragraph or heading — <p>2</p> —
+    because block-internally there is nothing for it to be superscript TO.
+    Eagle shipped 272 of those as visible junk, and 220 of them were the
+    ONLY copy of their marker: unlinkable, uncounted, invisible to every
+    gate because the digits are real ink faithfully read.
+
+    Four guards, each carrying measured weight: the text is a bare 1-3
+    digit numeral (continuous numbering runs past 99 — Working the Phones
+    reaches 425); the block stands at most MARKER_BLOCK_MAX_H of the page,
+    which separates markers from display numerals with daylight on both
+    sides; its value is not among the page's furniture numbers, so a folio
+    the furniture pass missed cannot become a marker; and a prose block
+    precedes it, because a marker annotates something.
+    """
+    n = 0
+    for i, it in enumerate(items):
+        if it.figure is not None or not it.html:
+            continue
+        t = _strip_tags(it.html).strip()
+        if not re.fullmatch(r"\d{1,3}", t):
+            continue
+        if it.box is None or (it.box[3] - it.box[1]) > MARKER_BLOCK_MAX_H:
+            continue
+        if t in furn_numbers:
+            continue
+        prev = next((p for p in reversed(items[:i])
+                     if p.html and p.figure is None), None)
+        if prev is None:
+            continue
+        prev_text = _strip_tags(prev.html)
+        if len(prev_text.split()) < 8:
+            continue                      # a marker annotates prose
+        # append the marker to the preceding block, inside its last close
+        m = re.search(r"</(p|li|h[1-6]|blockquote)>\s*$", prev.html)
+        sup = f"<sup>{t}</sup>"
+        if m:
+            new_html = (prev.html[:m.start()] + sup + prev.html[m.start():])
+        else:
+            new_html = prev.html + f"<p>{sup}</p>"
+        items[items.index(prev)] = prev._replace(html=new_html)
+        items[i] = it._replace(html="")
+        n += 1
+    if n:
+        items[:] = [it for it in items if it.html or it.figure is not None]
+    return n
+
+
 def promote_missing_chapter_heads(bodies: list[str]) -> int:
     """
     Recover a chapter opening the layout pass ran into the prose.
@@ -4801,6 +4860,9 @@ def build_epub(
     n_figures = 0
     n_blank_figures = 0
     n_label_rules = 0
+    n_reattached = 0
+    label_heads: list = []      # (page, rank, text) from SectionHeader
+    toc_label_pages: set = set()
     total = len(page_paths)
 
     nonlocal_page_i = [0]      # the page emit_figure is currently working on
@@ -4877,7 +4939,23 @@ def build_epub(
                                    if it.is_furniture and it.html])
             furniture_known.append((hit is None)
                                    or (cache is not None and cache.knows_furniture(path)))
+            page_no_for_labels = len(bodies)
+            for it in items:
+                if it.label in ("SectionHeader", "Title") and it.html \
+                        and not it.is_furniture:
+                    _t = re.sub(r"\s+", " ", _strip_tags(it.html)).strip()
+                    _rk = re.match(r"\s*<h([1-6])", it.html)
+                    if _t and not re.fullmatch(r"\d{1,3}", _t):
+                        label_heads.append((page_no_for_labels,
+                                            int(_rk.group(1)) if _rk else 3,
+                                            _t[:90]))
+                if it.label == "TableOfContents" and not it.is_furniture:
+                    toc_label_pages.add(page_no_for_labels)
+            furn_numbers = {m for it in items if it.is_furniture and it.html
+                            for m in re.findall(r"\d{1,3}",
+                                                _strip_tags(it.html))}
             items = [it for it in items if not it.is_furniture]
+            n_reattached += reattach_orphan_markers(items, furn_numbers)
             if strip_furniture:
                 items = strip_running_heads(items)
             items = recover_placeholder_figures(items, path)
@@ -4946,6 +5024,9 @@ def build_epub(
     if n_label_rules:
         print(f"    drew {n_label_rules} footnote rule(s) the layout labels "
               f"assert but the page never showed")
+    if n_reattached:
+        print(f"    reattached {n_reattached} superscript marker(s) the "
+              f"layout had orphaned into standalone blocks")
 
     # Decoration that recurs down the book is furniture, not artwork, and is
     # dropped here — before anything downstream counts what a page holds, so
@@ -5413,6 +5494,34 @@ def build_epub(
             print(f"    contents: {len(placed)} printed lines, "
                   f"{verified} title-verified, {missed} unplaced"
                   + (f", {len(entries)} numbered entries" if entries else ""))
+    if not toc_built and len(label_heads) >= 4:
+        # The layout model NAMED the book's headings; after the running-head
+        # strip and the digit filter (markers masquerade as SectionHeader),
+        # what survives is the book's own skeleton — measured 107 distinct
+        # real heads on one book. Top rank becomes chapters, deeper ranks
+        # nest beneath the chapter they follow.
+        top = min(r for _, r, _ in label_heads)
+        outline = []
+        for pg, r, t in label_heads:
+            if pg not in pos_of:
+                continue
+            link = epub.Link(f"page_{pg:04d}.xhtml", t,
+                             f"lh{pg}-{len(outline)}")
+            if r == top or not outline:
+                outline.append([link, []])
+            else:
+                outline[-1][1].append(link)
+        if len(outline) >= 3:
+            toc_built = [(l, kids) if kids else l for l, kids in outline]
+            n_kids = sum(len(k) for _, k in outline)
+            print(f"    contents: no printed contents page; built "
+                  f"{len(outline)} chapter(s)"
+                  + (f" and {n_kids} nested section(s)" if n_kids else "")
+                  + " from the layout's own heading labels")
+    if not toc_built and toc_label_pages:
+        print(f"    [~] layout labels mark page(s) "
+              f"{sorted(toc_label_pages)[:4]} as a printed contents the "
+              f"parser did not use")
     if not toc_built:
         # No printed contents parsed. Before falling back to a list of pages —
         # which is not a table of contents, and which the page list now
