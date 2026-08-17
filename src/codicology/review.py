@@ -102,6 +102,32 @@ def _fingerprint(report) -> str:
     return hashlib.sha1(raw.encode()).hexdigest()[:12]
 
 
+def _locate(words, targets) -> list:
+    """Find a dispute's word among a page's tesseract reads. Exact folded
+    match first; then a target inside a larger token (ff inside 242ff);
+    then a lone close variant — dispute sites are where tesseract reads
+    unstably, so a fresh render often yields a third form. Every fallback
+    demands uniqueness: a wrong crop misleads the reviewer in a way the
+    honest "no crop" never does."""
+    import difflib
+
+    targets = [t for t in targets if t]
+    hits = [w for w in words if w[4] in targets]
+    if hits:
+        return hits
+    for t in targets:
+        if len(t) >= 2:
+            inside = [w for w in words if t in w[4]]
+            if len(inside) == 1:
+                return inside
+    for t in targets:
+        close = [w for w in words
+                 if difflib.SequenceMatcher(None, t, w[4]).ratio() >= 0.8]
+        if len(close) == 1:
+            return close
+    return []
+
+
 def crop_data_uris(report, dpi=200, ctx_px=240) -> dict:
     """Locate each dispute's ink through tesseract's word geometry and crop
     a context strip. Rows whose token cannot be found render text-only —
@@ -128,8 +154,8 @@ def crop_data_uris(report, dpi=200, ctx_px=240) -> dict:
                 words.append((int(f[6]), int(f[7]), int(f[8]), int(f[9]),
                               fold_word(f[11])))
         for idx, d, occ in rows:
-            targets = [fold_word(d["tesseract"]), fold_word(d["surya"])]
-            hits = [w for w in words if w[4] and w[4] in targets]
+            hits = _locate(words, [fold_word(d["tesseract"]),
+                                   fold_word(d["surya"])])
             if not hits:
                 continue
             x, y, w, h, _ = hits[min(occ, len(hits) - 1)]
