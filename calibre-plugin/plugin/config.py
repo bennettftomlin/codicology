@@ -15,6 +15,7 @@ prefs.defaults['codicology_path'] = ''      # empty: probe well-known dirs
 prefs.defaults['verify_after_build'] = True
 prefs.defaults['adjudicate_after_build'] = True
 prefs.defaults['review_sheet_after_build'] = True
+prefs.defaults['open_review_sheet'] = True
 prefs.defaults['lang'] = 'en'
 # The research conveniences default ON: linkers refuse rather than guess,
 # so on a book without the apparatus they cost nothing, and on a book
@@ -90,6 +91,15 @@ class ConfigWidget(QWidget):
         self.review_sheet_box.setChecked(
             bool(prefs['review_sheet_after_build']))
         layout.addWidget(self.review_sheet_box)
+
+        self.open_sheet_box = QCheckBox(
+            'Open the review sheet in the browser when a build finishes')
+        self.open_sheet_box.setToolTip(
+            'Only when the readers actually disagreed about something. '
+            'The sheet opens as a local file so your staged decisions '
+            'survive closing the tab.')
+        self.open_sheet_box.setChecked(bool(prefs['open_review_sheet']))
+        layout.addWidget(self.open_sheet_box)
         layout.addStretch(1)
 
     def _browse(self):
@@ -144,3 +154,4 @@ class ConfigWidget(QWidget):
         prefs['verify_after_build'] = self.verify_box.isChecked()
         prefs['adjudicate_after_build'] = self.adjudicate_box.isChecked()
         prefs['review_sheet_after_build'] = self.review_sheet_box.isChecked()
+        prefs['open_review_sheet'] = self.open_sheet_box.isChecked()
