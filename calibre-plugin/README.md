@@ -4,12 +4,15 @@ Select a book with a PDF, press **OCR PDF**, and get back a well-made EPUB
 attached to the same record: OCR'd text, the book's printed page numbers,
 notes linked both directions, figures at their own resolution — and
 `codicology verify` run automatically afterwards to say whether anything
-went missing.
+went missing. With the adjudication boxes checked (they are by default),
+the witness engines then re-read the book, the dispute record and its
+review sheet land beside the OCR cache, and decisions you export from the
+sheet are applied automatically by the next rebuild.
 
 > **Phase 1.** Real conversions, one book at a time, with live progress,
-> working cancel, and the verify verdict surfaced. The environment is
-> supplied by hand (below); the wizard that builds one arrives in Phase 2,
-> and batch queueing with it.
+> working cancel, and the verify verdict and dispute record surfaced. The
+> environment is supplied by hand (below); the wizard that builds one
+> arrives in Phase 2, and batch queueing with it.
 
 ## Why it needs a separate install
 
@@ -46,6 +49,14 @@ path is left empty the plugin probes `~/.local/bin`, `/opt/homebrew/bin`,
    log, and Cancel that actually kills the OCR process tree.
 4. On success the EPUB is added to the book and verify's verdict is
    shown — quietly when clean, loudly with the list of holes when not.
+5. With the adjudication boxes checked, the witness engines re-read the
+   book: the dispute record lands beside the OCR cache and the review
+   sheet — the ink beside every disputed word, ranked rows, a field for
+   your own reading, which outranks every rule — beside the record. The
+   completion dialog names both. Export decisions from the sheet, drop
+   the file beside the cache, and the next rebuild applies them before
+   the note, citation and index linkers run; a decision whose site no
+   longer exists is reported stale in the build log, never guessed at.
 
 ## Layout
 
@@ -88,6 +99,9 @@ rather than incidental output:
 | `convert --progress-json` | One JSON object per line on stderr; the human log stays on stdout. Scraping log text would break silently whenever a print was reworded. |
 | `doctor [--full] --json` | Quick mode is the gate before every run: binaries, packages, tesseract's languages, in under a second. `--full` OCRs a synthetic page — the only check that catches a surya that imports cleanly but cannot serve inference (0.2x without llama-server). |
 | `verify` | Exit 0 is clean, 1 is "LOOK AT THIS", anything else means the check itself failed. The verdict and detail are shown after every build. |
+| `adjudicate --report` | The dispute record, written beside the OCR cache: every word the witness engines disagreed on and which rung of the ladder settled it. Slow on purpose — it re-reads the whole book — and it never changes the EPUB. |
+| `review` | The record rendered as a single self-contained sheet, ink crops included; runs only when adjudication succeeded, and mostly just renders pages since the geometry was recorded during adjudication. |
+| `convert --apply-decisions` | A decisions file sitting beside the cache is passed automatically on every rebuild; corrections land before the linkers run, and stale sites are reported in the log, never guessed at. |
 
 The event stream:
 
@@ -105,7 +119,11 @@ stream in practice.
 
 OCR caches live at `<calibre config>/plugins/codicology_ocr/cache/
 <library>/<book_id>-<pdfhash8>.ocr.gz` — hashed so a replaced PDF format
-cannot silently reuse OCR read from the file it replaced.
+cannot silently reuse OCR read from the file it replaced. The dispute
+record (`…-disputes.json`), its review sheet (`…-disputes.html`), and any
+exported decisions (`…-disputes.decisions.json`) live beside the cache
+under the same stem, which is how a rebuild finds the decisions without
+being told.
 
 ## Requirements, honestly
 

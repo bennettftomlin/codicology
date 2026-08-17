@@ -59,7 +59,7 @@ start. `--without-witness` overrides that and reports at the end how many
 pages went unexamined. Its word boxes also position the searchable PDF text
 layer far more precisely than layout blocks can.
 
-## One command, three verbs
+## One command, seven verbs
 
 ```bash
 # build — from a PDF (the usual case), photographs, or video.
@@ -73,7 +73,21 @@ codicology verify book.epub book.pdf
 
 # audit — word-by-word disagreement with the source's own text layer
 codicology compare book.epub book.pdf
+
+# dispute — re-read the book with the witness engines; emit the record
+# of every word they disagreed on. Never changes the book
+codicology adjudicate book.epub book.pdf --report book-disputes.json
+
+# review — the record rendered for human eyes: the ink beside every
+# disputed word, and a field for your own reading
+codicology review book-disputes.json
+
+# apply — your exported decisions, fed back into the book
+codicology apply book.epub book-disputes.decisions.json
 ```
+
+(`codicology doctor` is the seventh — it checks the environment, and is
+documented under Install above.)
 
 `codicology convert -h` documents the full flag set: page dropping and
 swapping by stable run ids, review sheets for human adjudication, cover
@@ -143,8 +157,63 @@ the camera work is done exactly once.
 - A page whose OCR loops, or claims more words than its ink can account
   for, is re-read and then left empty rather than filled with invention —
   on born-digital sources it is restored from the publisher's own text.
+- Surya's layout labels are put to work: a one-line digit block the layout
+  invented over prose is verified against the ink and suppressed; an
+  orphaned note marker that fits the page's marker sequence is re-attached
+  as the superscript it was; a footnote region printed without its rule
+  gets one; a book with no printed contents page falls back to the labeled
+  heading hierarchy.
 - Where the source is born-digital its text is authority; where it is a
   scan, its text layer is somebody else's OCR and serves only as a witness.
+
+## Research conveniences, behind flags
+
+Each of these is opt-in on the command line and a checkbox in the Calibre
+plugin:
+
+- `--link-notes` — footnotes and endnotes linked both directions (see
+  above; the flag gates the whole family).
+- `--link-citations` — in-text citations bound to the bibliography,
+  driven *from* the bibliography, so a junk match is structurally
+  impossible; author–date and Chicago note styles.
+- `--link-index` — the index's printed page numbers become links, ranges
+  and abbreviated forms (167–8) included, guarded by the book's own folio
+  arithmetic.
+- `--typography` — restores what the recogniser flattened: directional
+  quotes, collapsed double spaces. Letters are never touched, spaced
+  ellipses stay as the book set them, and born-digital pages are never
+  overwritten.
+
+## Where the readers disagree
+
+`codicology adjudicate` re-reads every page with the witness engines
+beside the shipped text. The ~0.6% of words that genuinely differ go
+through a ladder: hyphenation and diacritics fold away first — they are
+policy, not disagreement; the book's own recurring vocabulary settles
+coinages, transliterations and proper nouns; a non-word loses to a word,
+with the scholarly apparatus (ff., op. cit., ibid.) counted as words so a
+book's conventions cannot lose to fluency; Apple Vision rereads the page
+where present; and what nothing settles is an abstain — recorded, never
+guessed. Measured on 2,591 truth-known disputes: lexicon 97.8% right,
+Vision 95.0%, dictionary 88.4%. The record never changes the book.
+
+`codicology review` renders that record as a single self-contained HTML
+sheet: the ink cropped beside every disputed word (geometry recorded at
+adjudication time, following hyphenated words across the line break),
+rows ranked by how likely the shipped reading is wrong, convention rows —
+the same pair repeating across a book — collapsed. Every row carries a
+free-text field, because the reader's own eye outranks every rung and may
+supply a reading no engine produced.
+
+Decisions exported from the sheet apply two ways: `codicology apply`
+corrects the EPUB in place (the original stays beside it as `.preapply`),
+or the file sits beside the OCR cache and the next rebuild picks it up
+via `convert --apply-decisions` — applied before the note, citation and
+index linkers run, so a corrected word can still earn its link. Either
+way, corrections land in text nodes only, at their recorded occurrence,
+and a decision whose site no longer exists is reported stale and left
+alone: a correction applied to the wrong site is worse than the misread
+it meant to fix.
 
 ## The discipline
 
