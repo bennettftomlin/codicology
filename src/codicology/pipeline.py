@@ -4335,7 +4335,16 @@ def relabel_cache(cache_path: str, pdf_path: str, backend_name: str = "surya",
         if not cache.entries:
             print(f"  [!] cache is cold or tagged differently: {cache_path}")
             return {"pages": 0}
+        # The guided-decoding schema surya attaches to the standalone
+        # layout task fails llama.cpp's grammar parser (tested through
+        # build 10450). The full recognition pass — the call every build
+        # actually makes — never sends it, so neither do we: unguided,
+        # the model emits the same JSON and surya parses it itself; a
+        # malformed page yields no blocks and is skipped, counted.
+        os.environ.setdefault("SURYA_GUIDED_LAYOUT", "false")
         from surya.layout import LayoutPredictor
+        from surya.settings import settings as _surya_settings
+        _surya_settings.SURYA_GUIDED_LAYOUT = False
         lp = LayoutPredictor()
         st = _Counter()
         # The served model cold-starts, and a call against a waking server
