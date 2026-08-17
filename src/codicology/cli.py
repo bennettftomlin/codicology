@@ -92,6 +92,22 @@ def main(argv: "list[str] | None" = None) -> "int | None":
                             "verdicts against this born-digital book's text "
                             "instead of emitting a dispute record")
 
+    p_rev = sub.add_parser(
+        "review",
+        help="render a dispute record into a self-contained review sheet: "
+             "the ink itself beside every disputed word, ranked by how "
+             "likely the shipped reading is wrong, with a field for the "
+             "human's own reading — which outranks every rung. Exports "
+             "decisions for apply or the next rebuild")
+    p_rev.add_argument("report", help="dispute record JSON from adjudicate")
+    p_rev.add_argument("--out", metavar="HTML",
+                       help="where to write the sheet (default: beside the "
+                            "report)")
+    p_rev.add_argument("--dpi", type=int, default=200,
+                       help="render resolution for ink crops (default: 200)")
+    p_rev.add_argument("--no-crops", action="store_true",
+                       help="text-only sheet, no page rendering")
+
     args = parser.parse_args(argv)
     if args.command == "verify":
         from . import verify
@@ -110,6 +126,10 @@ def main(argv: "list[str] | None" = None) -> "int | None":
             return 0
         return adjudicate.main(args.epub, args.pdf, report=args.report,
                                limit=args.limit)
+    if args.command == "review":
+        from . import review
+        return review.main(args.report, out=args.out, dpi=args.dpi,
+                           crops=not args.no_crops)
     return None
 
 
