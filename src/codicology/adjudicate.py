@@ -353,7 +353,26 @@ def _stitch_page_turns(pages: dict, shipped_last: dict) -> int:
     return stitched
 
 
-def align_disputes(ours: list, theirs: list) -> list:
+# A replace block this long is a REGION the two readers disagree about, not
+# a list of independent word disputes. Measured: a book both engines take in
+# the same order never exceeds two (Chinese Communism, 21 blocks), while a
+# book where tesseract's page segmentation walks the blocks in a different
+# order produces runs of three to six — and those runs pair words that were
+# never looking at the same ink ("nothing" against "a", "to" against
+# "geere").
+SEAM_RUN = 3
+# Inside such a region, a pair can still be a real disagreement about real
+# ink — a torn line garbles several words in a row. What separates the two
+# is whether the readings could be the same ink at all: two readings of one
+# word rhyme AND run to roughly the same length, because the letters are
+# still there to be miscounted. A seam pairs whatever happened to line up,
+# and pairs a whole word against a fragment of another one.
+SEAM_KEEP_RATIO = 0.5
+SEAM_KEEP_LEN = 2
+
+
+def align_disputes(ours: list, theirs: list, stats: "Counter | None" = None
+                   ) -> list:
     """Word-level disagreements between two readings of one page, by
     sequence alignment on folded forms — replacements only. Insertions and
     deletions are layout noise (furniture one side read and the other
@@ -364,9 +383,20 @@ def align_disputes(ours: list, theirs: list) -> list:
     sm = difflib.SequenceMatcher(None, fo, ft, autojunk=False)
     out = []
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
-        if tag == "replace" and (i2 - i1) == (j2 - j1):
-            for k in range(i2 - i1):
-                out.append((ours[i1 + k], theirs[j1 + k], j1 + k))
+        if tag != "replace" or (i2 - i1) != (j2 - j1):
+            continue
+        run = i2 - i1
+        for k in range(run):
+            a, b = ours[i1 + k], theirs[j1 + k]
+            fa, fb = fo[i1 + k], ft[j1 + k]
+            if run >= SEAM_RUN and (
+                    abs(len(fa) - len(fb)) > SEAM_KEEP_LEN
+                    or difflib.SequenceMatcher(
+                        None, fa, fb).ratio() < SEAM_KEEP_RATIO):
+                if stats is not None:
+                    stats["seam"] += 1
+                continue
+            out.append((a, b, j1 + k))
     return out
 
 
@@ -396,6 +426,7 @@ def main(epub: str, pdf: str, report: "str | None" = None,
     have_vision = read_vision.__doc__ is not None and _vision_present()
 
     surya_tokens = {i: tokens(t) for i, t in pages.items()}
+    align_stats = Counter()
     agreed, per_page = [], {}
     disputes = []
     n_done = 0
@@ -420,7 +451,7 @@ def main(epub: str, pdf: str, report: "str | None" = None,
     for i in sorted(witness):
         t_tok, t_box, t_cbox, png = witness[i]
         s_tok = surya_tokens[i]
-        pairs = align_disputes(s_tok, t_tok)
+        pairs = align_disputes(s_tok, t_tok, align_stats)
         pair_set = {fold_word(a) for a, _, _ in pairs} | \
                    {fold_word(b) for _, b, _ in pairs}
         agreed.append([fold_word(w) for w in s_tok
@@ -456,6 +487,10 @@ def main(epub: str, pdf: str, report: "str | None" = None,
             disputes.append(row)
 
     print(f"pages examined: {n_done}")
+    if align_stats["seam"]:
+        print(f"reading order: {align_stats['seam']} word pair(s) discarded "
+              f"where the readers walked the page in different orders — the "
+              f"words were never looking at the same ink")
     if n_stitched:
         print(f"page-turn hyphens: {n_stitched} witness fragment(s) "
               f"stitched to match the built book's own joins")

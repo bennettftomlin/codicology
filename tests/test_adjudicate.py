@@ -247,3 +247,40 @@ def test_stitch_reads_past_the_running_head(vtb):
     assert pages[0][0] == ["the", "consulate"]
     assert pages[1][0] == ["RUSSIAN", "PURGE", "was"]
     assert len(pages[1][1]) == 3
+
+
+def test_a_seam_is_not_a_list_of_disputes(vtb):
+    """When tesseract's segmentation walks a page's blocks in a different
+    order than surya's, the streams re-sync at seams, and the alignment
+    pairs words that were never looking at the same ink. Citadel of Sin
+    produced runs of three to six such pairs — "nothing" against "a", "to"
+    against "geere" — where a book both engines take in the same order
+    never exceeds two."""
+    ours = adj.tokens("alpha beta wanted nothing to gamma delta")
+    theirs = adj.tokens("alpha beta wa a geere gamma delta")
+    stats = Counter()
+    assert adj.align_disputes(ours, theirs, stats) == []
+    assert stats["seam"] == 3
+
+
+def test_damage_survives_the_seam_rule(vtb):
+    """A torn line garbles several words in a row and those ARE disputes:
+    inside a suspect run, readings that could still be the same ink stay."""
+    ours = adj.tokens("alpha the quick brown fox omega")
+    theirs = adj.tokens("alpha thc qmck browu fux omega")
+    stats = Counter()
+    pairs = adj.align_disputes(ours, theirs, stats)
+    assert [a for a, _, _ in pairs] == ["the", "quick", "brown", "fox"]
+    assert stats["seam"] == 0
+
+
+def test_short_blocks_are_never_second_guessed(vtb):
+    """One or two words disagreeing amid agreement is the ordinary shape of
+    a misread, and eagle's 'A' against 'Rasy' — a drop cap — must survive
+    even sharing no letters."""
+    ours = adj.tokens("chapter A the strike")
+    theirs = adj.tokens("chapter Rasy the strike")
+    stats = Counter()
+    pairs = adj.align_disputes(ours, theirs, stats)
+    assert pairs == [("A", "Rasy", 1)]
+    assert stats["seam"] == 0
