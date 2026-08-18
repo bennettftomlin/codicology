@@ -1665,6 +1665,19 @@ def _to_xhtml(fragment: str) -> str:
 os.environ.setdefault("SURYA_INFERENCE_PARALLEL", "4")
 
 
+def set_pages_in_flight(n: int) -> None:
+    """Set how many pages are read at once — both halves of it.
+
+    The batch the pipeline sends and the slots the server holds are one
+    number wearing two hats: a slot with no page in it is only memory, and
+    a page with no slot waits. Changing one alone is how a machine ends up
+    paying for capacity it cannot use, so this changes both, and does it
+    before surya reads its settings — the environment is consulted once, at
+    import, and the import is lazy for exactly this reason."""
+    os.environ["SURYA_INFERENCE_PARALLEL"] = str(n)
+    SuryaBackend.batch_size = n
+
+
 class SuryaBackend(OCRBackend):
     """
     Surya's API has shifted repeatedly across releases, so we probe for the
@@ -7525,6 +7538,17 @@ def main(argv: "list[str] | None" = None) -> None:
                              "layer from the OCR, so it searches and copies like a "
                              "born-digital file. Needs a cache written with geometry "
                              "(re-OCR with a fresh cache for books read before)")
+    parser.add_argument("--batch-size", type=int, default=None, metavar="N",
+                        help="how many pages are read at once (default: 4). "
+                             "This also sizes the inference server's slots, "
+                             "because a slot with no page in it is only "
+                             "memory. 4 is the measured knee on an M1 Pro — "
+                             "nine percent per page on the way up, nothing "
+                             "past it; a larger GPU may keep climbing, a "
+                             "smaller one may not reach it. Measure before "
+                             "trusting a number: run each setting twice, "
+                             "early and late, or a session's own drift will "
+                             "pose as a result")
     parser.add_argument("--ocr", choices=sorted(OCR_BACKENDS), default="surya",
                         help="OCR backend used for --epub (default: surya). "
                              "Surya is the only one this pipeline was built "
@@ -7678,6 +7702,10 @@ def main(argv: "list[str] | None" = None) -> None:
                              "sideways (default: 0)")
 
     args = parser.parse_args(argv)
+    if args.batch_size is not None:
+        if args.batch_size < 1:
+            parser.error("--batch-size must be at least 1")
+        set_pages_in_flight(args.batch_size)
     if args.progress_json:
         progress.enable()
     try:
