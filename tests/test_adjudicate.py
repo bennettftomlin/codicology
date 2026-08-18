@@ -284,3 +284,25 @@ def test_short_blocks_are_never_second_guessed(vtb):
     pairs = adj.align_disputes(ours, theirs, stats)
     assert pairs == [("A", "Rasy", 1)]
     assert stats["seam"] == 0
+
+
+def test_a_displaced_word_is_not_a_dispute(vtb):
+    """The seam's other half, in a block too short for the run rule: the
+    witness offers a word surya read elsewhere on this very page, looking
+    nothing like what surya read here. It was displaced, not misread."""
+    ours = adj.tokens("although the well-cultured man spoke although again")
+    theirs = adj.tokens("although the although man spoke although again")
+    stats = Counter()
+    assert adj.align_disputes(ours, theirs, stats) == []
+    assert stats["seam"] == 1
+
+
+def test_a_truncation_survives_a_page_that_repeats_the_word(vtb):
+    """'be' against 'been' rhymes, so it is judged on the ink and kept even
+    though the page says 'been' elsewhere."""
+    ours = adj.tokens("it had been said he would be there")
+    theirs = adj.tokens("it had been said he would been there")
+    stats = Counter()
+    pairs = adj.align_disputes(ours, theirs, stats)
+    assert pairs == [("be", "been", 6)]
+    assert stats["seam"] == 0

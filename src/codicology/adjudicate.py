@@ -369,6 +369,14 @@ SEAM_RUN = 3
 # and pairs a whole word against a fragment of another one.
 SEAM_KEEP_RATIO = 0.5
 SEAM_KEEP_LEN = 2
+# The other half of the same failure, in blocks too short for the run rule
+# to see. A seam can pair one word against another the page really does
+# contain — Citadel offered "well-cultured" against "although", "concluding"
+# against "its" — and the giveaway is that surya read that very word
+# somewhere else on this page. It was displaced, not misread. Only pairs
+# that could not be one word read twice are judged this way, so a genuine
+# truncation ("be" against "been") survives on a page that says "been"
+# elsewhere.
 
 
 def align_disputes(ours: list, theirs: list, stats: "Counter | None" = None
@@ -380,6 +388,7 @@ def align_disputes(ours: list, theirs: list, stats: "Counter | None" = None
     import difflib
     fo = [fold_word(w) for w in ours]
     ft = [fold_word(w) for w in theirs]
+    ours_bag = Counter(fo)
     sm = difflib.SequenceMatcher(None, fo, ft, autojunk=False)
     out = []
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
@@ -389,10 +398,12 @@ def align_disputes(ours: list, theirs: list, stats: "Counter | None" = None
         for k in range(run):
             a, b = ours[i1 + k], theirs[j1 + k]
             fa, fb = fo[i1 + k], ft[j1 + k]
-            if run >= SEAM_RUN and (
-                    abs(len(fa) - len(fb)) > SEAM_KEEP_LEN
-                    or difflib.SequenceMatcher(
-                        None, fa, fb).ratio() < SEAM_KEEP_RATIO):
+            could_be_one_word = (
+                abs(len(fa) - len(fb)) <= SEAM_KEEP_LEN
+                and difflib.SequenceMatcher(None, fa, fb).ratio()
+                >= SEAM_KEEP_RATIO)
+            if not could_be_one_word and (run >= SEAM_RUN
+                                          or ours_bag[fb]):
                 if stats is not None:
                     stats["seam"] += 1
                 continue
