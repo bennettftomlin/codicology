@@ -106,7 +106,9 @@ class CodicologyOCRAction(InterfaceAction):
                 f'{len(rows)} correction(s) imported for "{title}".\n\n'
                 f'Rebuild now to apply them? They are also applied '
                 f'automatically on any later rebuild.'):
-            self.start()
+            # the record was made before this review; making it again
+            # would spend the same minutes to say the same thing
+            self.start(adjudicate=False)
 
     def _open_sheet(self, path):
         """Hand the sheet to the browser. Its decisions live in the
@@ -120,7 +122,7 @@ class CodicologyOCRAction(InterfaceAction):
             webbrowser.open('file://' + path)
 
     # ── entry point ─────────────────────────────────────────────────────
-    def start(self):
+    def start(self, adjudicate=None):
         from calibre_plugins.codicology_ocr import env
 
         db = self.gui.current_db.new_api
@@ -177,7 +179,7 @@ class CodicologyOCRAction(InterfaceAction):
             self.gui, title, pdf, env.pdf_page_count(pdf),
             cache_exists=os.path.exists(cache),
             has_epub=db.has_format(book_id, 'EPUB'),
-            doctor=doctor)
+            doctor=doctor, adjudicate=adjudicate)
         if not dlg.exec():
             return
         opts = dlg.options()
@@ -221,7 +223,7 @@ class CodicologyOCRAction(InterfaceAction):
         # so re-running a conversion refreshes it in place.
         adjudicate_argv = ([exe, 'adjudicate', out.name, pdf,
                             '--report', report_path]
-                           if prefs['adjudicate_after_build'] else None)
+                           if opts.get('adjudicate') else None)
         review_argv = ([exe, 'review', report_path]
                        if adjudicate_argv
                        and prefs['review_sheet_after_build'] else None)

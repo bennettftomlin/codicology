@@ -18,7 +18,7 @@ from calibre_plugins.codicology_ocr.config import prefs
 class PreflightDialog(QDialog):
 
     def __init__(self, parent, title, pdf_path, pages, cache_exists,
-                 has_epub, doctor):
+                 has_epub, doctor, adjudicate=None):
         QDialog.__init__(self, parent)
         self.setWindowTitle("OCR PDF — codicology")
         layout = QVBoxLayout(self)
@@ -96,6 +96,21 @@ class PreflightDialog(QDialog):
         self.keep_blank.setChecked(bool(prefs["keep_blank_pages"]))
         form.addRow(self.keep_blank)
 
+        # Per-run, not a preference: the standing answer lives in the
+        # plugin's settings, and this is for the build where it differs.
+        # The rebuild that applies a reviewed decisions file is exactly
+        # that build — the record was made before the review, and making
+        # it again costs the same minutes to say the same thing.
+        self.adjudicate = QCheckBox("Re-read with the witnesses and make a "
+                                    "new dispute record")
+        self.adjudicate.setChecked(bool(prefs["adjudicate_after_build"])
+                                   if adjudicate is None else adjudicate)
+        self.adjudicate.setToolTip(
+            "Several minutes on a long book. Turn it off when the record "
+            "you already reviewed still describes this text — applying "
+            "decisions does not change what the readers saw.")
+        form.addRow(self.adjudicate)
+
         self.extra = QLineEdit(prefs["extra_flags"])
         self.extra.setPlaceholderText("--drop-pages r060p1  --cover none  …")
         self.extra.setToolTip("Any codicology convert flag not surfaced "
@@ -132,4 +147,7 @@ class PreflightDialog(QDialog):
         }
         for key, value in opts.items():
             prefs[key] = value
+        # deliberately not persisted: a build that skipped the record
+        # should not quietly make every later build skip it too
+        opts["adjudicate"] = self.adjudicate.isChecked()
         return opts
