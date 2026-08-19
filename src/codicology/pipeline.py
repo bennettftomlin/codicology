@@ -1534,6 +1534,36 @@ def _render_region(page, box, want_w: int) -> "Image.Image | None":
         return None
 
 
+def native_orientation(obj) -> "list | None":
+    """How an embedded image must be turned to face the way the page draws
+    it — or None when the shortcut of taking it should be declined.
+
+    A PDF image is painted into the unit square and placed by a matrix. The
+    stored raster's first row lands wherever that matrix sends y=1, so a
+    negative vertical scale hangs the picture upside down relative to its
+    own bytes, and a negative horizontal one mirrors it. FM 20-3's spectrum
+    chart is placed with d=-159: extracted as stored it shipped inverted,
+    and it passed the confirmation check because a broad banded diagram
+    correlates with its own reflection at thumbnail size.
+
+    A matrix with rotation or skew (b or c non-zero) is not a flip and is
+    not corrected here; the caller renders the region instead, which is
+    always right and only slower.
+    """
+    try:
+        m = obj.get_matrix()
+    except Exception:
+        return None
+    if abs(m.b) > 1e-6 or abs(m.c) > 1e-6:
+        return None
+    ops = []
+    if m.d < 0:
+        ops.append(Image.FLIP_TOP_BOTTOM)
+    if m.a < 0:
+        ops.append(Image.FLIP_LEFT_RIGHT)
+    return ops
+
+
 def better_figure(page_path: str, box, crop: "Image.Image") -> "Image.Image":
     """
     The best available rendering of a figure: the PDF's own image where one
@@ -1575,12 +1605,17 @@ def better_figure(page_path: str, box, crop: "Image.Image") -> "Image.Image":
             import tempfile
             with tempfile.TemporaryDirectory() as td:
                 stem = os.path.join(td, "fig")
-                best[1].extract(stem)
-                found = next(iter(sorted(glob.glob(stem + ".*"))), None)
+                turns = native_orientation(best[1])
+                found = None
+                if turns is not None:
+                    best[1].extract(stem)
+                    found = next(iter(sorted(glob.glob(stem + ".*"))), None)
                 if found:
                     with Image.open(found) as native:
                         native.load()
                         native = native.convert("RGB")
+                    for op in turns:
+                        native = native.transpose(op)
                     # Confirm against the page as DRAWN in this image's own
                     # footprint, not against the layout block's crop. The two
                     # framings differ — a block is often tighter than the
@@ -6303,7 +6338,11 @@ def load_pages_from_pdf(pdf_path: str, pages_dir: str) -> list[str]:
                     0.8 <= img_aspect / max(1e-6, page_aspect) <= 1.25)
             except Exception:
                 covers = False
-            if covers:
+            # A page placed by a flipping matrix must not be taken as its
+            # own bytes: the shortcut keeps the original encoding, which is
+            # its whole point, and re-encoding a turned copy would give
+            # that up. Render such a page instead — correct beats cheap.
+            if covers and native_orientation(images[0]) == []:
                 try:
                     images[0].extract(stem)  # keeps the original encoding
                     out = next(iter(sorted(glob.glob(stem + ".*"))), None)
