@@ -3298,15 +3298,21 @@ def link_chapter_notes(bodies: list[str], dropped: set) -> dict:
         pi, from_pos = hp, hpos
         while pi < len(bodies):
             found_here = False
-            for pat in (NOTE_ENTRY, NOTE_ENTRY_PLAIN, NOTE_ENTRY_LI):
-                for m in pat.finditer(bodies[pi]):
-                    if pi == hp and m.start() < from_pos:
-                        continue
-                    n = int(m.group(1))
-                    if n == expect:
-                        entries.setdefault(n, (pi, m.start()))
-                        expect += 1
-                        found_here = True
+            # all three entry forms gathered FIRST, then walked in page
+            # order with one ascending counter — three sequential passes
+            # shared the counter and a page whose entries alternate forms
+            # (sup 1, plain 2, sup 3) permanently skipped the later sup
+            matches = sorted(
+                ((m.start(), int(m.group(1)))
+                 for pat in (NOTE_ENTRY, NOTE_ENTRY_PLAIN, NOTE_ENTRY_LI)
+                 for m in pat.finditer(bodies[pi])
+                 if not (pi == hp and m.start() < from_pos)),
+                key=lambda t: t[0])
+            for pos, n in matches:
+                if n == expect:
+                    entries.setdefault(n, (pi, pos))
+                    expect += 1
+                    found_here = True
             if not found_here and pi > hp:
                 break
             pi += 1
@@ -3683,9 +3689,12 @@ def reattach_orphan_markers(items: list, furn_numbers: set,
             suppressed += 1
     if reattached or suppressed:
         items[:] = [x for x in items if x.html or x.figure is not None]
-    # advance over any trailing inline markers for the next page
-    for idx, n in inline_positions:
-        seq_state["last"] = max(seq_state["last"] or 0, 0) or None             if False else n
+    # the next page's fit test continues from this page's HIGHEST marker,
+    # not its last in reading order — a trailing backward re-citation
+    # ("16, 17, 2, 18" is real in this material) would otherwise reset the
+    # sequence and suppress the next page's genuine marker as a phantom
+    if inline_positions:
+        seq_state["last"] = max(n for _, n in inline_positions)
     return reattached, suppressed
 
 
