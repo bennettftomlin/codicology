@@ -1342,7 +1342,7 @@ def recover_orphan_artwork(items: list, page_path: str) -> list:
             if not isinstance(obj, pdfium.PdfImage):
                 continue
             b = obj.get_bounds()
-            placed = (b[0] / pw, 1 - b[3] / ph, b[2] / pw, 1 - b[1] / ph)
+            placed = _pdf_box_to_normalized(b, pw, ph)
             area = (placed[2] - placed[0]) * (placed[3] - placed[1])
             if not 0.02 <= area <= 0.9:
                 continue            # a logo, or the whole page
@@ -1488,18 +1488,6 @@ def recover_vector_artwork(items: list, page_path: str) -> list:
     return out
 
 
-def _box_iou(a, b) -> float:
-    ax0, ay0, ax1, ay1 = a
-    bx0, by0, bx1, by1 = b
-    ix0, iy0 = max(ax0, bx0), max(ay0, by0)
-    ix1, iy1 = min(ax1, bx1), min(ay1, by1)
-    if ix1 <= ix0 or iy1 <= iy0:
-        return 0.0
-    inter = (ix1 - ix0) * (iy1 - iy0)
-    union = (ax1 - ax0) * (ay1 - ay0) + (bx1 - bx0) * (by1 - by0) - inter
-    return inter / max(1e-9, union)
-
-
 def _looks_like_same_picture(a: "Image.Image", b: "Image.Image") -> bool:
     """
     Whether two renderings show the same artwork.
@@ -1526,6 +1514,13 @@ def _looks_like_same_picture(a: "Image.Image", b: "Image.Image") -> bool:
         return abs(x.mean() - y.mean()) < 8
     corr = float(np.corrcoef(x, y)[0, 1])
     return corr >= 0.85
+
+
+def _pdf_box_to_normalized(b, pw, ph):
+    """A PDF-space rect (bottom-up y) as this pipeline's normalized box
+    (top-down y). Written inline twice before being extracted; the y-flip
+    convention lives here and nowhere else (R6)."""
+    return (b[0] / pw, 1 - b[3] / ph, b[2] / pw, 1 - b[1] / ph)
 
 
 def _render_region(page, box, want_w: int) -> "Image.Image | None":
@@ -1602,7 +1597,7 @@ def better_figure(page_path: str, box, crop: "Image.Image") -> "Image.Image":
             if not isinstance(obj, pdfium.PdfImage):
                 continue
             b = obj.get_bounds()
-            placed = (b[0] / pw, 1 - b[3] / ph, b[2] / pw, 1 - b[1] / ph)
+            placed = _pdf_box_to_normalized(b, pw, ph)
             score = _box_iou(box, placed)
             if score >= 0.6 and (best is None or score > best[0]):
                 best = (score, obj, placed)
@@ -2147,48 +2142,6 @@ def review_pages(texts: list[str], window: int = DUPE_WINDOW) -> list[PageVerdic
             verdicts[i] = PageVerdict(i, "kept", best_j, best_score)
 
     return [verdicts[i] for i in range(len(texts))]
-
-
-def find_duplicate_pages(texts: list[str], window: int = DUPE_WINDOW) -> set[int]:
-    """
-    Indices of pages that repeat one already kept, judged on their OCR'd text.
-
-    A spread that is settled, nudged, and settled again is photographed twice,
-    and motion segmentation cannot tell that from two separate pages: nothing
-    moved differently. Pixels cannot settle it either — that is why detection
-    does not try, since two pages of prose look alike once downsampled and a
-    pixel rule that is strict enough to catch a re-shoot also deletes real
-    pages. The words are the first signal that actually distinguishes them: two
-    different pages of prose share almost no five-word runs, while the same page
-    twice shares nearly all of them, even through OCR noise.
-
-    Only a short window back is compared. Re-shoots land within a few pages of
-    each other, whereas a genuine repeat far later in a book — a part title, a
-    blank verso — is not a duplicate and must survive.
-    """
-    fingerprints = [_shingles(t) for t in texts]
-    duplicates: set[int] = set()
-    for i in range(len(texts)):
-        if len(fingerprints[i]) < MIN_SHINGLES:
-            continue  # too little text to judge; a blank verso is not a duplicate
-        for j in range(max(0, i - window), i):
-            if j in duplicates or len(fingerprints[j]) < MIN_SHINGLES:
-                continue
-            shared = len(fingerprints[i] & fingerprints[j])
-            smaller = min(len(fingerprints[i]), len(fingerprints[j]))
-            if not smaller:
-                continue
-            # Score by how much of the *smaller* page is contained in the larger,
-            # not by how much the two have in common overall. A page shot twice
-            # is often shot badly once — a hand across a column, a corner curled
-            # away — so the poorer read holds only part of the text. Against the
-            # union that scores as half a match and the repeat survives; against
-            # its own length it is what it is, a fragment of a page already kept.
-            if shared / smaller >= DUPE_SIMILARITY:
-                # Keep whichever read better; a re-shoot is often the cleaner one.
-                duplicates.add(i if len(texts[i]) <= len(texts[j]) else j)
-                break
-    return duplicates
 
 
 class OCRCache:
