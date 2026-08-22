@@ -94,3 +94,21 @@ def test_a_back_of_book_layout_falls_back_when_chapter_sections_find_nothing(vtb
     stats = vtb.link_notes(bodies, dropped=set())
     assert stats["linked"] == 3, stats
     assert 'epub:type="noteref"' in bodies[1]
+
+
+def test_entries_whose_forms_alternate_all_link(vtb):
+    """sup 1, plain 2, sup 3 on one page: three sequential per-pattern
+    passes shared one ascending counter, so the sup pass consumed 1, met
+    3 while expecting 2, and dropped it forever — entry 3's marker stayed
+    unlinked though the entry was on the page. One position-ordered scan
+    takes them as printed."""
+    bodies = [
+        "<p>Alpha.<sup>1</sup> Beta.<sup>2</sup> Gamma.<sup>3</sup></p>",
+        '<h2>Notes</h2><p><sup>1</sup> First source.</p>'
+        '<p>2. Second source.</p>'
+        '<p><sup>3</sup> Third source.</p>',
+        '<h2>Notes</h2><p>1. Unrelated next chapter.</p>',
+    ]
+    stats = vtb.link_chapter_notes(bodies, dropped=set())
+    assert stats["linked"] == 3, "the alternating-form entry must link"
+    assert 'href="page_0001.xhtml#note-c0-3"' in bodies[0]

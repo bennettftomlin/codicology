@@ -204,3 +204,24 @@ def test_a_patterned_band_still_groups_as_furniture(vtb):
         [["p0"], ["p1"], ["p2"]],
         {"p0": band, "p1": band, "p2": band})
     assert doomed == {"p0", "p1", "p2"}
+
+
+def test_a_trailing_backward_recitation_does_not_reset_the_sequence(vtb):
+    """A page whose inline markers run 16, 17, 2, 18 — the backward
+    re-citation is real in this material — must hand the NEXT page its
+    maximum (18), not its reading-order-last: the dead-branch expression
+    this replaces always stored the last one, and page N+1's genuine
+    marker 19 was suppressed as a phantom."""
+    seq = {"last": 15}
+    page1 = [_item(vtb, "<p>Long narrative prose that reaches its first "
+                        "marker here<sup>16</sup> then another"
+                        "<sup>17</sup> and a re-citation<sup>2</sup> then "
+                        "finally<sup>18</sup></p>",
+                   box=(0.1, 0.1, 0.9, 0.3))]
+    vtb.reattach_orphan_markers(page1, set(), seq)
+    assert seq["last"] == 18
+    page2 = [_item(vtb, PROSE.replace("<sup>1</sup>", ""),
+                   box=(0.1, 0.2, 0.9, 0.35)),
+             _item(vtb, "<p>19</p>", box=(0.1, 0.36, 0.13, 0.379))]
+    ra, sp = vtb.reattach_orphan_markers(page2, set(), seq)
+    assert (ra, sp) == (1, 0), "19 continues from 18 and must reattach"
