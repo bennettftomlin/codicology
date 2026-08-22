@@ -110,8 +110,10 @@ def test_missing_crop_never_blocks_the_row(vtb):
 
 def test_rung_chips_carry_measured_accuracy(vtb):
     sheet = review.render_sheet(_report([
-        _d(1, "Haisted", "Halsted", "lexicon", winner="Halsted")]))
+        _d(1, "Haisted", "Halsted", "lexicon", winner="Halsted"),
+        _d(2, "parently", "apparently", "dictionary", winner="apparently")]))
     assert "lexicon 97.8%" in sheet
+    assert "dictionary 92.3%" in sheet, "chips must carry battery v3"
 
 
 def test_fingerprint_is_stable_across_renders(vtb):
@@ -253,3 +255,20 @@ def test_rebuild_reapply_highest_occurrence_first(vtb, tmp_path):
     st = vtb.apply_reviewer_decisions(bodies, dec)
     assert st["applied"] == 2
     assert bodies[0] == "<p>see 6 and 7</p>"
+
+
+def test_apply_reaches_words_stored_as_entities(vtb, tmp_path):
+    """The reviewer corrects the printed &c.; the page stores &amp;c.
+    The escaped retry must land it, and the replacement must arrive
+    escaped — a raw ampersand would corrupt the xhtml."""
+    epub = _epub(tmp_path, {4: "<p>letters, &amp;c. sent to H&amp;M</p>"})
+    dec = _decisions(tmp_path, [
+        {"page": 4, "occurrence": 0, "old": "&c.", "new": "etc.",
+         "source": "human", "rung": "human"},
+        {"page": 4, "occurrence": 0, "old": "sent", "new": "s&nt",
+         "source": "human", "rung": "human"}])
+    r = review.apply_decisions(epub, dec)
+    assert len(r["applied"]) == 2 and not r["stale"]
+    import zipfile
+    got = zipfile.ZipFile(epub).read("EPUB/page_0004.xhtml").decode()
+    assert "letters, etc. s&amp;nt to H&amp;M" in got

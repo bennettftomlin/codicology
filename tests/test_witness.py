@@ -104,3 +104,23 @@ def test_compare_survives_a_malformed_byte(vtb, tmp_path):
     pages = compare.epub_pages(str(p))
     assert "fine" in pages[0][0]
     assert any("ken" in w or "bro" in w for w in pages[1][0])
+
+
+def test_entities_read_the_same_through_compare_and_adjudicate(vtb, tmp_path):
+    """The printed &c. is stored as &amp;c.; compare unescaped it and
+    adjudicate did not, so the two audits tokenized different books —
+    adjudicate's side grew a phantom 'amp' (R3, second half). Both
+    extraction paths must now hand the readers the printed text."""
+    import zipfile
+    from codicology import compare
+    from codicology.adjudicate import epub_page_texts
+    p = tmp_path / "b.epub"
+    with zipfile.ZipFile(p, "w") as z:
+        z.writestr("mimetype", "application/epub+zip")
+        z.writestr("EPUB/page_0000.xhtml",
+                   "<html><body><p>letters, &amp;c. by A &amp; B</p>"
+                   "</body></html>")
+    text = epub_page_texts(str(p))[0]
+    assert "&c." in text and "amp" not in text
+    body_words, _ = compare.epub_pages(str(p))[0]
+    assert "amp" not in body_words and "letters" in body_words

@@ -42,6 +42,7 @@ through the reviewer's exported decisions, `codicology apply` and
 `convert --apply-decisions`. The reporting stays here; the rewriting is a
 human act.
 """
+import html
 import json
 import re
 import subprocess
@@ -424,7 +425,10 @@ def epub_page_texts(epub_path: str) -> dict:
         h = z.read(n).decode("utf-8", "replace")
         b = re.sub(r"</body>.*$", "",
                    re.sub(r"^.*?<body[^>]*>", "", h, flags=re.S), flags=re.S)
-        out[int(m.group(1))] = re.sub(r"<[^>]+>", " ", b)
+        # entities unescape AFTER the tag strip, exactly as compare does:
+        # an escaped &amp;c. must reach the readers as the printed &c.,
+        # never tokenize as a phantom 'amp' (R3's second half)
+        out[int(m.group(1))] = html.unescape(re.sub(r"<[^>]+>", " ", b))
     return out
 
 

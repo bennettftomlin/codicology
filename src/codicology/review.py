@@ -42,7 +42,9 @@ from .adjudicate import _is_word, fold_word
 
 # battery v2, 2,591 truth-scored disputes — shown on the rung chips so the
 # reviewer knows how much each verdict is worth
-RUNG_ACCURACY = {"lexicon": "97.8%", "vision": "95.0%", "dictionary": "88.4%"}
+# battery v3, 2026-08-22: 2,545 truth-scored disputes over six born-digital
+# books, clean + degraded renders, post apparatus/roman guards + seam gates
+RUNG_ACCURACY = {"lexicon": "97.8%", "vision": "94.8%", "dictionary": "92.3%"}
 RUNG_ORDER = {"lexicon": 0, "vision": 1, "dictionary": 2}
 
 TIER_TITLES = {
@@ -410,15 +412,21 @@ def apply_one_decision(xhtml, d) -> "str | None":
     pass through here; a correction that lands via the rebuild but goes
     stale via `codicology apply` is the divergence the 2026-08-18 review
     confirmed (I2)."""
+    import html
     from .adjudicate import _TYPO
     curl = str.maketrans({"'": "\u2019"})
+    # the reviewer's words live in text space; the page is xhtml. old must
+    # also be tried entity-escaped (the printed &c. is stored as &amp;c.),
+    # and new must land escaped or an ampersand corrupts the page.
+    new = html.escape(d["new"], quote=False)
     tried = set()
     for old in (d["old"], d["old"].translate(curl),
-                d["old"].translate(_TYPO)):
+                d["old"].translate(_TYPO),
+                html.escape(d["old"], quote=False)):
         if old in tried:
             continue
         tried.add(old)
-        got = _apply_to_xhtml(xhtml, old, d["new"], d.get("occurrence", 0))
+        got = _apply_to_xhtml(xhtml, old, new, d.get("occurrence", 0))
         if got is not None:
             return got
     return None
