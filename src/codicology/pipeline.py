@@ -1226,7 +1226,16 @@ def _picture_signature(data: bytes) -> "tuple | None":
     if not px:
         return None
     avg = sum(px) / len(px)
-    return (len(px), tuple(p > avg for p in px))
+    bits = tuple(p > avg for p in px)
+    # A flat image has no pattern to fingerprint: every pixel sits at the
+    # mean and the signature collapses to all-False — identical for a
+    # solid divider, a blank plate, and a grey placeholder alike, which
+    # once grouped three unrelated images as "the same recurring picture"
+    # and deleted them all. Featureless means unidentifiable: decline to
+    # sign rather than sign everything the same (A2, 2026-08-18 ledger).
+    if not any(bits):
+        return None
+    return (len(px), bits)
 
 
 # How many separate pages must carry the same picture before it stops being a
