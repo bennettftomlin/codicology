@@ -25,6 +25,31 @@ LABELS = {
 }
 
 
+def _stage(out, key, argv, put, log, progress_at, label, timeout):
+    """One post-conversion stage, contained: the conversion has already
+    succeeded by the time these run, and a stage that times out or dies
+    must degrade into its own report line — never into a failed job that
+    throws away a finished EPUB."""
+    put(progress_at, label)
+    try:
+        r = subprocess.run([str(a) for a in argv],
+                           capture_output=True, text=True,
+                           env=runner.child_env(), timeout=timeout)
+        text = ((r.stdout or "") + (r.stderr or "")).strip()
+        rc = r.returncode
+    except subprocess.TimeoutExpired as exc:
+        text = (f"did not finish within {timeout}s and was stopped; "
+                f"the book itself is unaffected")
+        rc = -1
+    except Exception as exc:
+        text = f"could not run: {exc}"
+        rc = -1
+    if log is not None:
+        for line in text.splitlines():
+            log(line)
+    out[key] = {"rc": rc, "output": text}
+
+
 def convert_worker(argv, verify_argv, adjudicate_argv, review_argv,
                    book_id, epub_path, title,
                    abort=None, log=None, notifications=None):
@@ -73,31 +98,19 @@ def convert_worker(argv, verify_argv, adjudicate_argv, review_argv,
            "review": None}
 
     if verify_argv:
-        put(0.97, "Checking the EPUB for holes")
-        r = subprocess.run([str(a) for a in verify_argv],
-                           capture_output=True, text=True,
-                           env=runner.child_env(), timeout=600)
-        text = ((r.stdout or "") + (r.stderr or "")).strip()
-        if log is not None:
-            for line in text.splitlines():
-                log(line)
         # verify's exit status is a verdict, not a failure: 0 is clean,
-        # 1 is "LOOK AT THIS". Anything else means it could not run.
-        out["verify"] = {"rc": r.returncode, "output": text}
+        # 1 is "LOOK AT THIS", 2 is verify itself crashing. Anything else
+        # means it could not run.
+        _stage(out, "verify", verify_argv, put, log,
+               0.97, "Checking the EPUB for holes", 600)
 
     if adjudicate_argv and not (abort is not None and abort.is_set()):
         # Slow on purpose: it re-reads the whole book with the witness
         # engines. The record is why — every word the readers disagreed on,
         # and which rule settled it — and it never changes the book.
-        put(0.98, "Adjudicating: re-reading with the witness engines")
-        r = subprocess.run([str(a) for a in adjudicate_argv],
-                           capture_output=True, text=True,
-                           env=runner.child_env(), timeout=3600)
-        text = ((r.stdout or "") + (r.stderr or "")).strip()
-        if log is not None:
-            for line in text.splitlines():
-                log(line)
-        out["adjudicate"] = {"rc": r.returncode, "output": text}
+        _stage(out, "adjudicate", adjudicate_argv, put, log,
+               0.98, "Adjudicating: re-reading with the witness engines",
+               3600)
 
     if (review_argv and out["adjudicate"] is not None
             and out["adjudicate"]["rc"] == 0
@@ -105,15 +118,8 @@ def convert_worker(argv, verify_argv, adjudicate_argv, review_argv,
         # The record, rendered for a human's eyes: ink crops beside every
         # disputed word. Geometry was recorded during adjudication, so
         # this is mostly page rendering — minutes, not a re-read.
-        put(0.99, "Rendering the review sheet")
-        r = subprocess.run([str(a) for a in review_argv],
-                           capture_output=True, text=True,
-                           env=runner.child_env(), timeout=1800)
-        text = ((r.stdout or "") + (r.stderr or "")).strip()
-        if log is not None:
-            for line in text.splitlines():
-                log(line)
-        out["review"] = {"rc": r.returncode, "output": text}
+        _stage(out, "review", review_argv, put, log,
+               0.99, "Rendering the review sheet", 1800)
 
     put(1.0, "Done")
     return out

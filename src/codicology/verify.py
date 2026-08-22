@@ -62,6 +62,19 @@ if _WORDS is None:
 
 
 def main(epub_path, pdf_path):
+    # A crash must not impersonate a verdict: 0 is clean, 1 is "LOOK AT
+    # THIS", and an uncaught exception used to exit 1 as well — a
+    # traceback rendered as a holes report. Crashes exit 2.
+    try:
+        return _main(epub_path, pdf_path)
+    except SystemExit:
+        raise
+    except Exception as exc:
+        print(f"verify could not run: {type(exc).__name__}: {exc}")
+        return 2
+
+
+def _main(epub_path, pdf_path):
     pdf = pdfium.PdfDocument(pdf_path)
     z = zipfile.ZipFile(epub_path)
 

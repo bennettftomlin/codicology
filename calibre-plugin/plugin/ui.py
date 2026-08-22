@@ -37,7 +37,10 @@ class CodicologyOCRAction(InterfaceAction):
         icon = get_icons('images/icon.png')          # noqa: F821
         if icon:
             self.qaction.setIcon(icon)
-        self.qaction.triggered.connect(self.start)
+        # triggered(bool) would deliver its checked=False into start's first
+        # optional parameter, silently forcing the adjudicate checkbox off
+        # on every toolbar click; the lambda swallows the signal's bool
+        self.qaction.triggered.connect(lambda checked=False: self.start())
         from qt.core import QMenu
         self.menu = QMenu(self.gui)
         act = self.menu.addAction('Import review decisions…')

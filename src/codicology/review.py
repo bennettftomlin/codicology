@@ -33,6 +33,7 @@ import hashlib
 import html
 import io
 import json
+import os
 import re
 import subprocess
 import tempfile
@@ -350,8 +351,8 @@ details { margin: .3rem 0; } summary { cursor: pointer; color: #555; }
 def render_sheet(report, crops=None) -> str:
     crops = crops or {}
     tiers = build_tiers(report["disputes"])
-    name = re.sub(r"\.json$", "", str(report.get("name")
-                  or report.get("epub") or "book").rsplit("/", 1)[-1])
+    name = re.sub(r"\.json$", "", os.path.basename(str(report.get("name")
+                  or report.get("epub") or "book")))
     meta = json.dumps({"name": name, "pdf": report.get("pdf", ""),
                        "epub": report.get("epub", "")})
     parts = [
