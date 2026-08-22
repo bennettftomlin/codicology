@@ -5294,59 +5294,32 @@ def _restrict_page_list_to_pagebreaks() -> None:
 
     _eu.get_pages = only_pagebreaks
 
-def build_epub(
-    page_paths: list[str],
-    output_epub: str,
-    backend: OCRBackend,
-    title: str,
-    embed_images: bool,
-    dedupe: bool = True,
-    review_sheet: str | None = None,
-    ocr_cache: str | None = None,
-    strip_furniture: bool = True,
-    page_ids: list[str] | None = None,
-    check_folios: bool = False,
-    drop_blank: bool = True,
-    cover_spec: str | None = "auto",
-    link_notes_flag: bool = False,
-    link_citations_flag: bool = False,
-    link_index_flag: bool = False,
-    typography_flag: bool = False,
-    decisions_path: str | None = None,
-    serve_stale_cache: bool = False,
-    cache_obj: "OCRCache | None" = None,
-) -> None:
-    try:
-        from ebooklib import epub
-    except ImportError:
-        sys.exit("EPUB output needs ebooklib: pip install ebooklib")
-    _restrict_page_list_to_pagebreaks()
+class ReadPages(NamedTuple):
+    """Everything the reading half of a build produces: the text of every
+    page, the figures already added to the book, and the counters the
+    report speaks from. build_epub's assembly half consumes exactly this,
+    and nothing else crosses the boundary (S4)."""
+    bodies: list
+    page_figures: list
+    figure_data: dict
+    page_furniture: list
+    furniture_known: list
+    n_figures: int
+    n_blank_figures: int
+    n_label_rules: int
+    n_reattached: int
+    n_phantoms: int
+    label_heads: list
+    toc_label_pages: set
 
-    print(f"  OCR backend: {backend.name} (batch size {backend.batch_size})")
-    progress.emit(event="phase", phase="ocr",
-                  message=f"OCR backend: {backend.name}")
-    cache = cache_obj if cache_obj is not None else (
-        OCRCache(ocr_cache, backend.name, backend.langs,
-                 serve_stale=serve_stale_cache) if ocr_cache else None)
-    if cache and cache.entries:
-        print(f"  OCR cache: {len(cache.entries)} pages remembered in {ocr_cache}")
-        n_old = sum(1 for e in cache.entries.values()
-                    if not isinstance(e, dict) or e.get("v", 0) < CACHE_VERSION)
-        if n_old:
-            print(f"    {n_old} of them predate layout labels"
-                  + (" — served anyway (--keep-stale-cache); the label "
-                     "consumers stay dark on those pages"
-                     if serve_stale_cache else
-                     " and will be read again, which is what puts the "
-                     "labels there"))
 
-    book = epub.EpubBook()
-    book.set_title(title)
-    book.set_language(backend.langs[0] if backend.langs else "en")
-
-    # Load each batch from disk rather than holding every page in memory: a
-    # 300-page book at full resolution is several GB of decoded pixels. Figures
-    # go straight into the book for the same reason.
+def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
+    """The OCR-reading half of a build, extracted from build_epub so the
+    two jobs that shared one 790-line function can be reasoned about — and
+    driven by tests — separately. Figures are added to the passed book as
+    they are met, exactly as before; the assembly half receives the rest
+    as a bundle."""
+    from ebooklib import epub
     bodies: list[str] = []
     page_figures: list[list[str]] = []  # figure files each page put in the book
     figure_data: dict[str, bytes] = {}  # their bytes, for spotting repeats
@@ -5517,6 +5490,69 @@ def build_epub(
 
     if cache:
         cache.save()
+    return ReadPages(bodies, page_figures, figure_data, page_furniture,
+                     furniture_known, n_figures, n_blank_figures,
+                     n_label_rules, n_reattached, n_phantoms,
+                     label_heads, toc_label_pages)
+
+
+def build_epub(
+    page_paths: list[str],
+    output_epub: str,
+    backend: OCRBackend,
+    title: str,
+    embed_images: bool,
+    dedupe: bool = True,
+    review_sheet: str | None = None,
+    ocr_cache: str | None = None,
+    strip_furniture: bool = True,
+    page_ids: list[str] | None = None,
+    check_folios: bool = False,
+    drop_blank: bool = True,
+    cover_spec: str | None = "auto",
+    link_notes_flag: bool = False,
+    link_citations_flag: bool = False,
+    link_index_flag: bool = False,
+    typography_flag: bool = False,
+    decisions_path: str | None = None,
+    serve_stale_cache: bool = False,
+    cache_obj: "OCRCache | None" = None,
+) -> None:
+    try:
+        from ebooklib import epub
+    except ImportError:
+        sys.exit("EPUB output needs ebooklib: pip install ebooklib")
+    _restrict_page_list_to_pagebreaks()
+
+    print(f"  OCR backend: {backend.name} (batch size {backend.batch_size})")
+    progress.emit(event="phase", phase="ocr",
+                  message=f"OCR backend: {backend.name}")
+    cache = cache_obj if cache_obj is not None else (
+        OCRCache(ocr_cache, backend.name, backend.langs,
+                 serve_stale=serve_stale_cache) if ocr_cache else None)
+    if cache and cache.entries:
+        print(f"  OCR cache: {len(cache.entries)} pages remembered in {ocr_cache}")
+        n_old = sum(1 for e in cache.entries.values()
+                    if not isinstance(e, dict) or e.get("v", 0) < CACHE_VERSION)
+        if n_old:
+            print(f"    {n_old} of them predate layout labels"
+                  + (" — served anyway (--keep-stale-cache); the label "
+                     "consumers stay dark on those pages"
+                     if serve_stale_cache else
+                     " and will be read again, which is what puts the "
+                     "labels there"))
+
+    book = epub.EpubBook()
+    book.set_title(title)
+    book.set_language(backend.langs[0] if backend.langs else "en")
+
+    # Load each batch from disk rather than holding every page in memory: a
+    # 300-page book at full resolution is several GB of decoded pixels. Figures
+    # go straight into the book for the same reason.
+    rp = _read_pages(page_paths, backend, cache, book, strip_furniture)
+    (bodies, page_figures, figure_data, page_furniture, furniture_known,
+     n_figures, n_blank_figures, n_label_rules, n_reattached, n_phantoms,
+     label_heads, toc_label_pages) = rp
     if n_figures:
         print(f"    extracted {n_figures} figures")
     if n_blank_figures:
