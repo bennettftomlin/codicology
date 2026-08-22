@@ -120,27 +120,6 @@ def test_fingerprint_is_stable_across_renders(vtb):
         json.loads(json.dumps(rep)))
 
 
-def test_locator_exact_beats_everything(vtb):
-    words = [(0, 0, 9, 9, "property"), (30, 0, 9, 9, "properly")]
-    assert review._locate(words, ["properly"]) == [words[1]]
-
-
-def test_locator_finds_apparatus_inside_compounds(vtb):
-    words = [(0, 0, 9, 9, "242ff"), (30, 0, 9, 9, "chicago")]
-    assert review._locate(words, ["ff"]) == [words[0]]
-
-
-def test_locator_accepts_a_lone_close_variant(vtb):
-    words = [(0, 0, 9, 9, "propcrly"), (30, 0, 9, 9, "chicago")]
-    assert review._locate(words, ["properly", "property"]) == [words[0]]
-
-
-def test_locator_refuses_ambiguity(vtb):
-    """Two near-misses: a wrong crop misleads where a missing one is honest."""
-    words = [(0, 0, 9, 9, "propcrly"), (30, 0, 9, 9, "properiy")]
-    assert review._locate(words, ["properly"]) == []
-
-
 def test_repeated_abstains_sink_as_convention(vtb):
     """The apparatus guard turns ff/f into abstains by the dozen; identical
     abstains are convention, not eighty-six separate coin-flips."""

@@ -519,6 +519,7 @@ def main(epub: str, pdf: str, report: "str | None" = None,
         print(f"   … and {len(disputes) - 40} more")
     if report:
         json.dump({"epub": epub, "pdf": pdf, "pages": n_done,
+                   "page_files": len(pages),
                    "lexicon_size": len(lexicon),
                    "rungs": dict(rungs), "disputes": disputes},
                   open(report, "w"), indent=1)
