@@ -2545,7 +2545,10 @@ def audit_folios(folios: list[Folio]) -> FolioAudit:
     misreads: list[tuple[int, int]] = []
     kept: list[Folio] = []
     for k, f in enumerate(good):
-        prev = good[k - 1] if k > 0 else None
+        # the previous neighbour is the last reading that SURVIVED — a
+        # just-discarded misread must not vouch for the one after it, or
+        # two consecutive misreads slip a false anchor into kept (B5)
+        prev = kept[-1] if kept else None
         nxt = good[k + 1] if k + 1 < len(good) else None
         if prev is not None and nxt is not None:
             span = nxt.index - prev.index
@@ -2773,8 +2776,17 @@ def parse_printed_toc(bodies: list[str], limit: int = 25
                 title = re.sub(r"[\s.·…]+$", "", title)
                 m = re.fullmatch(r"(\d{1,3})", folio_text)
                 cm = re.fullmatch(r"(\d{1,2})-(\d{1,3})", folio_text)
+                # the appendix form the furniture reader already parses:
+                # "A-12" encodes exactly as folios_from_furniture encodes
+                # it, so folio_resolver can match the two (B4)
+                lm = re.fullmatch(r"([A-Z])-([1-9]\d{0,2})", folio_text)
                 roman = re.fullmatch(r"[ivxlc]+", folio_text.lower())
-                if cm and title:
+                if lm and title:
+                    entries.append(TocEntry(
+                        title,
+                        (100 + ord(lm.group(1)) - ord("A")) * 1000
+                        + int(lm.group(2)), folio_text, 2))
+                elif cm and title:
                     entries.append(TocEntry(title, int(cm.group(1)) * 1000
                                             + int(cm.group(2)), folio_text, 2))
                 elif m and title:
@@ -2814,8 +2826,15 @@ def _infer_row_depths(entries: "list[TocEntry]") -> "list[TocEntry]":
         if sub.match(entries[i].title):
             continue
         nxt = rows[k + 1] if k + 1 < len(rows) else None
-        if nxt is not None and sub.match(entries[nxt].title):
-            out[i] = entries[i]._replace(depth=1)
+        if nxt is None or not sub.match(entries[nxt].title):
+            continue
+        # the subsection must FOLLOW this chapter, not open the next BOOK:
+        # an intervening lower-depth heading between the two rows means
+        # the (1) belongs to someone else, and promoting across it makes
+        # exactly the empty grouping this pass exists to avoid (B3)
+        if any(e.depth < 2 for e in entries[i + 1:nxt]):
+            continue
+        out[i] = entries[i]._replace(depth=1)
     return out
 
 
@@ -3696,6 +3715,98 @@ def reattach_orphan_markers(items: list, furn_numbers: set,
     if inline_positions:
         seq_state["last"] = max(n for _, n in inline_positions)
     return reattached, suppressed
+
+
+def nav_from_placed(placed, pos_of, kept, bodies, toc_pages,
+                    make_link, make_section) -> tuple:
+    """The printed contents as a nav tree: links, nested sections, and the
+    hunt for folio-less lines. Extracted from build_epub so the invariants
+    the 2026-08-18 review found broken here are testable: every id unique
+    (C1/C2 — one monotonic counter, no frozen list lengths), the title
+    hunt always moving forward from the last thing placed, folio-resolved
+    or hunted alike (C3), and an unresolvable grouping degrading to a bare
+    heading.
+
+    make_link(href, title, uid) / make_section(title, href|None) keep
+    ebooklib out of the function's signature — tests pass plain tuples.
+    Returns (links, verified, missed)."""
+    links: list = []
+    verified = missed = 0
+    next_id = iter(range(10 ** 9))
+    # Titles are hunted in reading order, starting past the contents —
+    # a book's half-title repeats the chapter's words before the book
+    # has begun, and would otherwise win chapter one every time.
+    hunt_from = max(toc_pages) if toc_pages else -1
+    stack: list = [(-1, links)]
+    stripped_cache: dict = {}
+
+    def stripped(t):
+        if t not in stripped_cache:
+            stripped_cache[t] = _strip_tags(bodies[t])
+        return stripped_cache[t]
+
+    for e, target, ok in placed:
+        if ok:
+            verified += 1
+        elif target is not None and target not in pos_of:
+            target = None
+        if target is None:
+            # No folio to resolve: the title text is the only address the
+            # line has. Front matter sits in the opening pages, but a
+            # chapter list without page numbers points anywhere in the
+            # book, so the search runs forward from the last thing placed
+            # — which keeps the contents in their own order for free — and
+            # demands the title near the TOP of a page, where a chapter
+            # announces itself, so a passing mention in prose cannot win.
+            # The contents pages are excluded: every title appears there
+            # by definition, which is how "Foreword" once pointed at the
+            # table that listed it.
+            search = [t for t in kept if t > hunt_from and t not in toc_pages]
+            target = next((t for t in search
+                           if _title_names_this_page(
+                               e.title, stripped(t)[:300])),
+                          None)
+            if target is None and hunt_from < 0:
+                # Front matter — a Preface, a Foreword — sits in the
+                # opening pages and carries roman folios the audit never
+                # sees. Only before anything else has been placed, and
+                # only on the same strict terms: this fallback once put
+                # "Chapter 3: Demand and Supply" on chapter 2's opening
+                # page, which shared two of its three words.
+                target = next((t for t in kept[:30] if t not in toc_pages
+                               and _title_names_this_page(
+                                   e.title, stripped(t)[:400])),
+                              None)
+        if target is not None and target in pos_of:
+            # forward from the last thing placed means EVERY placement,
+            # folio-resolved included — leaving hunt_from behind on
+            # resolved entries let a later hunt match backward into an
+            # already-passed chapter (C3)
+            hunt_from = max(hunt_from, target)
+        if e.depth < 2:
+            # a grouping: BOOK SEVEN as printed, or a chapter promoted
+            # because subsections follow it. A chapter that nests
+            # children is still a destination, so it keeps its link
+            # when it resolved; a grouping that never resolves is a
+            # heading and no more.
+            sect: list = []
+            while stack and stack[-1][0] >= e.depth:
+                stack.pop()
+            head = (make_section(e.title, f"page_{target:04d}.xhtml")
+                    if target is not None and target in pos_of
+                    else make_section(e.title, None))
+            stack[-1][1].append((head, sect))
+            stack.append((e.depth, sect))
+            continue
+        if target is None or target not in pos_of:
+            missed += 1
+            continue
+        # one monotonic counter for every id: the old ids froze len(links)
+        # inside sections and reused page numbers across same-rank heads,
+        # shipping duplicate ids in nav.xhtml (C1/C2)
+        stack[-1][1].append(make_link(f"page_{target:04d}.xhtml", e.title,
+                                      f"toc{next(next_id)}-{pos_of[target]}"))
+    return links, verified, missed
 
 
 def promote_missing_chapter_heads(bodies: list[str]) -> int:
@@ -5672,6 +5783,12 @@ def build_epub(
                   f"reapplied"
                   + (f", {dst['stale']} stale" if dst["stale"] else ""))
 
+    # One placement of the printed contents serves every consumer below —
+    # link_notes' chapter scoping and the nav alike. Two independent calls
+    # could silently diverge as bodies mutate between them (C6).
+    placed_and_pages = (_place_toc_entries(bodies, folios, dropped)
+                        if folios is not None else ([], set()))
+
     if link_notes_flag:
         # chapter starts, where the printed contents can supply them: a leaf
         # titled "5 THE CASE OF…" placed at page P starts chapter 5 there.
@@ -5681,7 +5798,7 @@ def build_epub(
         # narrower rule here used to be for.
         chapter_starts = []
         if folios is not None:
-            placed_ch, _tocp = _place_toc_entries(bodies, folios, dropped)
+            placed_ch, _tocp = placed_and_pages
             for e, tgt, _ok in placed_ch:
                 mnum = re.match(r"^([IVXL]{1,6}|\d{1,2})\s+\S", e.title)
                 # depth 1 included: a chapter row promoted to section rank
@@ -5865,68 +5982,16 @@ def build_epub(
     pos_of = {orig: k for k, orig in enumerate(kept)}
     toc_built = None
     if folios is not None:
-        placed, toc_pages = _place_toc_entries(bodies, folios, dropped)
-        links: list = []
-        verified = missed = 0
-        # Titles are hunted in reading order, starting past the contents —
-        # a book's half-title repeats the chapter's words before the book
-        # has begun, and would otherwise win chapter one every time.
-        hunt_from = max(toc_pages) if toc_pages else -1
-        stack: list[tuple[int, list]] = [(-1, links)]
-        for e, target, ok in placed:
-            if ok:
-                verified += 1
-            elif target is not None and target not in pos_of:
-                target = None
-            if target is None:
-                # No folio to resolve: the title text is the only address the
-                # line has. Front matter sits in the opening pages, but a
-                # chapter list without page numbers points anywhere in the
-                # book, so the search runs forward from the last thing placed
-                # — which keeps the contents in their own order for free — and
-                # demands the title near the TOP of a page, where a chapter
-                # announces itself, so a passing mention in prose cannot win.
-                # The contents pages are excluded: every title appears there
-                # by definition, which is how "Foreword" once pointed at the
-                # table that listed it.
-                search = [t for t in kept if t > hunt_from and t not in toc_pages]
-                target = next((t for t in search
-                               if _title_names_this_page(
-                                   e.title, _strip_tags(bodies[t])[:300])),
-                              None)
-                if target is None and hunt_from < 0:
-                    # Front matter — a Preface, a Foreword — sits in the
-                    # opening pages and carries roman folios the audit never
-                    # sees. Only before anything else has been placed, and
-                    # only on the same strict terms: this fallback once put
-                    # "Chapter 3: Demand and Supply" on chapter 2's opening
-                    # page, which shared two of its three words.
-                    target = next((t for t in kept[:30] if t not in toc_pages
-                                   and _title_names_this_page(
-                                       e.title, _strip_tags(bodies[t])[:400])),
-                                  None)
-                if target is not None:
-                    hunt_from = target
-            if e.depth < 2:
-                # a grouping: BOOK SEVEN as printed, or a chapter promoted
-                # because subsections follow it. A chapter that nests
-                # children is still a destination, so it keeps its link
-                # when it resolved; a grouping that never resolves is a
-                # heading and no more.
-                sect: list = []
-                while stack and stack[-1][0] >= e.depth:
-                    stack.pop()
-                head = (epub.Section(e.title, href=f"page_{target:04d}.xhtml")
-                        if target is not None and target in pos_of
-                        else epub.Section(e.title))
-                stack[-1][1].append((head, sect))
-                stack.append((e.depth, sect))
-                continue
-            if target is None or target not in pos_of:
-                missed += 1
-                continue
-            stack[-1][1].append(epub.Link(f"page_{target:04d}.xhtml", e.title,
-                                          f"toc{len(links)}-{pos_of[target]}"))
+        # one placement drives BOTH consumers — link_notes' chapter_starts
+        # earlier and this nav — instead of two calls that could silently
+        # diverge as bodies mutate between them (C6)
+        placed, toc_pages = placed_and_pages
+        links, verified, missed = nav_from_placed(
+            placed, pos_of, kept, bodies, toc_pages,
+            make_link=lambda href, title, uid: epub.Link(href, title, uid),
+            make_section=lambda title, href: (
+                epub.Section(title, href=href) if href
+                else epub.Section(title)))
         entries = [(i, t) for i, t, _ in find_numbered_entries(bodies) if i in pos_of]
         if entries:
             sect = [epub.Link(f"page_{i:04d}.xhtml", t, f"entry{i}") for i, t in entries]
@@ -5944,11 +6009,15 @@ def build_epub(
         # nest beneath the chapter they follow.
         top = min(r for _, r, _ in label_heads)
         outline = []
+        lh_id = iter(range(10 ** 9))
         for pg, r, t in label_heads:
             if pg not in pos_of:
                 continue
+            # one monotonic counter: pg repeats when a page carries two
+            # heads and len(outline) freezes for non-top ranks — the old
+            # pair shipped duplicate ids (C1)
             link = epub.Link(f"page_{pg:04d}.xhtml", t,
-                             f"lh{pg}-{len(outline)}")
+                             f"lh{next(lh_id)}-{pg}")
             if r == top or not outline:
                 outline.append([link, []])
             else:
