@@ -62,11 +62,8 @@ def test_apostrophe_decision_survives_the_rebuild_path(vtb, tmp_path):
     assert "won't" in bodies[0]
 
 
-# ── the broken half, encoded (strict: phase 2 must flip these) ───────────
+# ── the formerly broken half, fixed in phase 2 and held green ───────────
 
-@pytest.mark.xfail(strict=True,
-                   reason="I2: codicology apply lacks the quote-variant "
-                          "retry the rebuild path has (phase 2)")
 def test_apostrophe_decision_survives_codicology_apply(vtb, tmp_path):
     dec = _decisions(tmp_path, [_row(0, 0, "don't", "won't")])
     epub = _epub(tmp_path, {0: "<p>they don’t know</p>"})
@@ -74,26 +71,18 @@ def test_apostrophe_decision_survives_codicology_apply(vtb, tmp_path):
     assert len(r["applied"]) == 1, "the two consumers must be equivalent"
 
 
-@pytest.mark.xfail(strict=True,
-                   reason="B1: decisions replay before the page-turn join "
-                          "in build_epub's hook order (phase 2). This test "
-                          "mirrors the shipped order at pipeline.py:5640-46; "
-                          "the phase-2 swap must update both together.")
 def test_pageturn_joined_word_survives_the_rebuild(vtb, tmp_path):
     """The reviewer read 'Russia' whole (the joiner shipped it that way);
     the rebuild must reproduce the join before decisions replay."""
     dec = _decisions(tmp_path, [_row(0, 0, "Russia", "RUSSIA")])
     bodies = ["<p>he fled to Rus-</p>", "<p>sia at last</p>"]
-    # build_epub's current order: decisions first, join second
-    st = pl.apply_reviewer_decisions(bodies, dec)
+    # build_epub's order since the B1 fix: join first, decisions second
     pl.join_page_break_hyphens(bodies, set())
+    st = pl.apply_reviewer_decisions(bodies, dec)
     assert st["stale"] == 0, "a decision on a joined word must not go stale"
     assert "RUSSIA" in bodies[0]
 
 
-@pytest.mark.xfail(strict=True,
-                   reason="I1: occurrence ordinals are folded-case-shared "
-                          "but applied case-sensitively (phase 2)")
 def test_case_variant_pair_lands_on_its_own_words(vtb, tmp_path):
     """Two disputes fold to one token; the sheet numbers them on one
     ordinal stream; apply must land each on its own literal word."""
@@ -113,10 +102,6 @@ def test_case_variant_pair_lands_on_its_own_words(vtb, tmp_path):
         f"second decision must hit the FIRST lowercase 'the', got: {got!r}"
 
 
-@pytest.mark.xfail(strict=True,
-                   reason="I3: string page numbers are silently counted "
-                          "stale with no diagnostic; the shared helper "
-                          "coerces defensively (phase 2)")
 def test_string_page_numbers_are_coerced_not_silently_staled(vtb, tmp_path):
     dec = _decisions(tmp_path, [dict(_row(0, 0, "word", "world"),
                                      page="0")])
@@ -125,13 +110,11 @@ def test_string_page_numbers_are_coerced_not_silently_staled(vtb, tmp_path):
     assert st["applied"] == 1, "a numeric-string page is a page"
 
 
-@pytest.mark.xfail(strict=True,
-                   reason="T4: no guard ties a decisions file to the build "
-                          "shape it was recorded against (phase 2)")
 def test_renumbered_build_refuses_the_whole_decisions_file(vtb, tmp_path):
     """Recorded against a 5-page build, replayed onto 4 pages: every
     decision must be refused loudly, not applied coincidentally."""
-    dec = _decisions(tmp_path, [_row(1, 0, "word", "world")], pages=5)
+    dec = _decisions(tmp_path, [_row(1, 0, "word", "world")],
+                     page_files=5)
     bodies = ["<p>x</p>", "<p>a word here</p>", "<p>y</p>", "<p>z</p>"]
     st = pl.apply_reviewer_decisions(bodies, dec)
     assert st["applied"] == 0, \

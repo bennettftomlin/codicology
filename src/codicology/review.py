@@ -64,7 +64,11 @@ def assign_occurrences(disputes) -> list:
     seen = collections.Counter()
     out = []
     for d in disputes:
-        key = (d["page"], fold_word(d.get("shipped") or d["surya"]))
+        # keyed by the LITERAL shipped token: the apply step counts
+        # occurrences of the literal string, so the ordinal must be
+        # assigned on the same basis — a folded key merged 'The' and
+        # 'the' into one stream and mis-addressed both (I1)
+        key = (d["page"], d.get("shipped") or d["surya"])
         out.append(seen[key])
         seen[key] += 1
     return out
@@ -109,32 +113,6 @@ def _fingerprint(report) -> str:
     return hashlib.sha1(raw.encode()).hexdigest()[:12]
 
 
-def _locate(words, targets) -> list:
-    """Find a dispute's word among a page's tesseract reads. Exact folded
-    match first; then a target inside a larger token (ff inside 242ff);
-    then a lone close variant — dispute sites are where tesseract reads
-    unstably, so a fresh render often yields a third form. Every fallback
-    demands uniqueness: a wrong crop misleads the reviewer in a way the
-    honest "no crop" never does."""
-    import difflib
-
-    targets = [t for t in targets if t]
-    hits = [w for w in words if w[4] in targets]
-    if hits:
-        return hits
-    for t in targets:
-        if len(t) >= 2:
-            inside = [w for w in words if t in w[4]]
-            if len(inside) == 1:
-                return inside
-    for t in targets:
-        close = [w for w in words
-                 if difflib.SequenceMatcher(None, t, w[4]).ratio() >= 0.8]
-        if len(close) == 1:
-            return close
-    return []
-
-
 def _outline_token(crop, rect):
     """Mark the disputed token's own ink inside its crop. The crop carries
     context — a neighboring line's tail, leader dots, the wrap — and eagle
@@ -150,26 +128,36 @@ def _outline_token(crop, rect):
     return crop
 
 
-def crop_data_uris(report, dpi=200, ctx_px=240) -> dict:
-    """Crop each dispute's ink. Reports written since geometry landed carry
-    a normalized bbox recorded at adjudication time — exact by construction.
-    Older reports fall back to relocating the word through a fresh
-    tesseract read, which fails precisely on the unstable sites disputes
-    live on. Rows without ink render text-only — a missing crop must never
-    block the sheet."""
+def crop_data_uris(report, dpi=200, ctx_px=240, base_dir=None) -> dict:
+    """Crop each dispute's ink from the geometry recorded at adjudication
+    time — exact by construction. Rows without recorded geometry render
+    text-only: the old relocate-by-fresh-OCR fallback conflated two
+    counting bases and re-parsed TSV without the hyphen join (I6/R4,
+    2026-08-18 ledger), so an honest "no crop" replaced it — a missing
+    crop must never block the sheet, and neither may a missing PDF: the
+    recorded path is tried as given and relative to the report's own
+    directory, and failure degrades to a crop-less sheet (T3)."""
     import pypdfium2 as pdfium
 
     by_page = collections.defaultdict(list)
     occs = assign_occurrences(report["disputes"])
     for idx, d in enumerate(report["disputes"]):
         by_page[d["page"]].append((idx, d, occs[idx]))
-    doc = pdfium.PdfDocument(report["pdf"])
+    pdf = report.get("pdf") or ""
+    for cand in ([pdf] + ([os.path.join(base_dir, pdf)] if base_dir else [])):
+        if cand and os.path.exists(cand):
+            pdf = cand
+            break
+    else:
+        print(f"  [!] source PDF not found ({report.get('pdf')!r}) — "
+              f"sheet renders without ink crops")
+        return {}
+    doc = pdfium.PdfDocument(pdf)
     uris = {}
     for pno, rows in sorted(by_page.items()):
         if pno >= len(doc):
             continue
         img = doc[pno].render(scale=dpi / 72).to_pil()
-        words = None
         for idx, d, occ in rows:
             # cbox is the crop's box when recorded: hyphen-joined fragments
             # unioned and line-edge context pulled across the wrap. tbox is
@@ -180,25 +168,7 @@ def crop_data_uris(report, dpi=200, ctx_px=240) -> dict:
                 x0, y0 = int(rec[0] * img.width), int(rec[1] * img.height)
                 x1, y1 = int(rec[2] * img.width), int(rec[3] * img.height)
             else:
-                if words is None:
-                    with tempfile.NamedTemporaryFile(suffix=".png") as tf:
-                        img.save(tf.name)
-                        tsv = subprocess.run(
-                            ["tesseract", tf.name, "stdout", "tsv"],
-                            capture_output=True, text=True).stdout
-                    words = [(int(f[6]), int(f[7]), int(f[8]), int(f[9]),
-                              fold_word(f[11]))
-                             for f in (l.split("\t")
-                                       for l in tsv.splitlines()[1:])
-                             if len(f) == 12 and f[11].strip()]
-                hits = _locate(words, [fold_word(d["tesseract"]),
-                                       fold_word(d["surya"])])
-                if not hits:
-                    continue
-                x, y, w, h, _ = hits[min(occ, len(hits) - 1)]
-                x0, y0, x1, y1 = x, y, x + w, y + h
-                tbox = None
-                tpx = (x0, y0, x1, y1)
+                continue
             box = (max(0, x0 - ctx_px), max(0, y0 - 6),
                    min(img.width, x1 + ctx_px), min(img.height, y1 + 6))
             crop = img.crop(box).convert("RGB")
@@ -354,7 +324,8 @@ def render_sheet(report, crops=None) -> str:
     name = re.sub(r"\.json$", "", os.path.basename(str(report.get("name")
                   or report.get("epub") or "book")))
     meta = json.dumps({"name": name, "pdf": report.get("pdf", ""),
-                       "epub": report.get("epub", "")})
+                       "epub": report.get("epub", ""),
+                       "page_files": report.get("page_files")})
     parts = [
         "<!doctype html><meta charset='utf-8'>",
         f"<title>{html.escape(name)} — dispute review</title>",
@@ -427,6 +398,54 @@ def _apply_to_xhtml(xhtml, old, new, occurrence) -> "str | None":
     return None
 
 
+def apply_one_decision(xhtml, d) -> "str | None":
+    """One decision against one page's xhtml, with the quote-shape retry
+    both consumers owe: the reviewer's old was recorded through the
+    adjudicator's fold (straight apostrophes), while the book may carry
+    curly ones — or the reverse. Both consumers of a decisions file MUST
+    pass through here; a correction that lands via the rebuild but goes
+    stale via `codicology apply` is the divergence the 2026-08-18 review
+    confirmed (I2)."""
+    from .adjudicate import _TYPO
+    curl = str.maketrans({"'": "\u2019"})
+    tried = set()
+    for old in (d["old"], d["old"].translate(curl),
+                d["old"].translate(_TYPO)):
+        if old in tried:
+            continue
+        tried.add(old)
+        got = _apply_to_xhtml(xhtml, old, d["new"], d.get("occurrence", 0))
+        if got is not None:
+            return got
+    return None
+
+
+def coerce_page(d) -> "int | None":
+    """A decision's page as an index, or None with the caller printing why.
+    Hand-edited files carry numeric strings; a rebuild must not crash on
+    them, and must not silently discard them either (I3)."""
+    try:
+        return int(d.get("page"))
+    except (TypeError, ValueError):
+        return None
+
+
+def pages_guard(recorded_page_files, actual_page_files) -> "str | None":
+    """The refusal that keeps decisions off renumbered builds (T4): a
+    decisions file recorded against N pages must not index a build with a
+    different count — --drop-pages shifts every later index, and a
+    coincidental word match would land a correction on the wrong page.
+    Returns the refusal message, or None when the shapes agree (or the
+    file predates the guard and carries no count)."""
+    if recorded_page_files is None or recorded_page_files == actual_page_files:
+        return None
+    return (f"decisions were recorded against {recorded_page_files} page "
+            f"file(s) but this build has {actual_page_files} — the page "
+            f"indices cannot "
+            f"be trusted; nothing applied. Re-adjudicate and re-review "
+            f"under the current build shape.")
+
+
 def apply_decisions(epub_path, decisions_path, out=None) -> dict:
     """Feed the reviewer's exported decisions back into the EPUB.
 
@@ -438,13 +457,26 @@ def apply_decisions(epub_path, decisions_path, out=None) -> dict:
     import zipfile
 
     dec = json.load(open(decisions_path))
+    zin = zipfile.ZipFile(epub_path)
+    page_files = [n for n in zin.namelist()
+                  if re.match(r".*page_(\d{4})\.xhtml$", n)]
+    refusal = pages_guard(dec.get("page_files"), len(page_files))
+    if refusal:
+        zin.close()
+        print(f"  refused: {refusal}")
+        return {"applied": [], "stale": list(dec.get("decisions", [])),
+                "refused": True}
     by_page = collections.defaultdict(list)
     for d in dec.get("decisions", []):
-        by_page[int(d["page"])].append(d)
+        i = coerce_page(d)
+        if i is None:
+            print(f"  stale: unreadable page {d.get('page')!r} for "
+                  f"{d.get('old')!r} — decision skipped")
+            continue
+        by_page[i].append(d)
     out = out or epub_path
     if out == epub_path:
         shutil.copy2(epub_path, epub_path + ".preapply")
-    zin = zipfile.ZipFile(epub_path)
     applied, stale = [], []
     changed = {}
     for name in zin.namelist():
@@ -454,8 +486,7 @@ def apply_decisions(epub_path, decisions_path, out=None) -> dict:
         xhtml = zin.read(name).decode("utf-8")
         for d in sorted(by_page[int(m.group(1))],
                         key=lambda d: -d.get("occurrence", 0)):
-            got = _apply_to_xhtml(xhtml, d["old"], d["new"],
-                                  d.get("occurrence", 0))
+            got = apply_one_decision(xhtml, d)
             if got is None:
                 stale.append(d)
             else:
@@ -487,7 +518,9 @@ def main(report_path, out=None, dpi=200, crops=True) -> int:
     report.setdefault("name", str(report_path))
     uris = {}
     if crops and report.get("pdf"):
-        uris = crop_data_uris(report, dpi=dpi)
+        uris = crop_data_uris(
+            report, dpi=dpi,
+            base_dir=os.path.dirname(os.path.abspath(report_path)))
         located = len(uris)
         print(f"ink located for {located} of {len(report['disputes'])} "
               f"disputes")

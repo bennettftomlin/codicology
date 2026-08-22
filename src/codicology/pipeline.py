@@ -4543,7 +4543,8 @@ def join_page_break_hyphens(bodies: list, dropped: "set[int]") -> dict:
     return {"joined": joined, "refused": refused}
 
 
-def apply_reviewer_decisions(bodies: list, decisions_path: str) -> dict:
+def apply_reviewer_decisions(bodies: list, decisions_path: str,
+                             kept_pages: "int | None" = None) -> dict:
     """A review sheet's exported decisions, reapplied at rebuild time —
     before the linkers run, so a corrected word can still earn its anchor.
 
@@ -4552,34 +4553,31 @@ def apply_reviewer_decisions(bodies: list, decisions_path: str) -> dict:
     left as read, never guessed at. The reviewer read the shipped book;
     a rebuild may differ from it in quote shape, so the straight/curly
     variants of the site are tried before declaring it stale."""
-    from .adjudicate import _TYPO
-    from .review import _apply_to_xhtml
+    from .review import apply_one_decision, coerce_page, pages_guard
     try:
         with open(decisions_path) as fh:
-            rows = json.load(fh).get("decisions", [])
+            dec = json.load(fh)
+        rows = dec.get("decisions", [])
     except (OSError, ValueError) as exc:
         print(f"    [!] decisions file unreadable, ignored: {exc}")
         return {"applied": 0, "stale": 0}
-    curl = str.maketrans({"'": "’"})
+    refusal = pages_guard(dec.get("page_files"),
+                          kept_pages if kept_pages is not None
+                          else len(bodies))
+    if refusal:
+        print(f"    refused: {refusal}")
+        return {"applied": 0, "stale": len(rows)}
     applied = stale = 0
     # highest occurrence first, so an earlier replacement of the same word
     # on the same page cannot renumber a later one
     for d in sorted(rows, key=lambda d: -d.get("occurrence", 0)):
-        i = d.get("page")
-        if not isinstance(i, int) or not (0 <= i < len(bodies)):
+        i = coerce_page(d)
+        if i is None or not (0 <= i < len(bodies)):
             stale += 1
+            print(f"    stale decision: page {d.get('page')!r} is not a "
+                  f"page of this build — {d.get('old')!r} skipped")
             continue
-        got = None
-        tried = set()
-        for old in (d["old"], d["old"].translate(curl),
-                    d["old"].translate(_TYPO)):
-            if old in tried:
-                continue
-            tried.add(old)
-            got = _apply_to_xhtml(bodies[i], old, d["new"],
-                                  d.get("occurrence", 0))
-            if got is not None:
-                break
+        got = apply_one_decision(bodies[i], d)
         if got is None:
             stale += 1
             print(f"    stale decision: p{i} {d['old']!r} -> {d['new']!r} "
@@ -5636,19 +5634,25 @@ def build_epub(
             print(f"    dropped {len(blank)} blank page(s) "
                   f"({total - len(dropped)} kept)")
 
-    if decisions_path:
-        dst = apply_reviewer_decisions(bodies, decisions_path)
-        if dst["applied"] or dst["stale"]:
-            print(f"    decisions: {dst['applied']} reviewer correction(s) "
-                  f"reapplied"
-                  + (f", {dst['stale']} stale" if dst["stale"] else ""))
-
+    # The joiner runs FIRST: decisions were recorded against the shipped
+    # book, whose page-turn words were already whole, so the rebuild must
+    # reproduce the joins before the corrections can find their sites —
+    # the other order stales every decision on a joined word (B1).
     jst = join_page_break_hyphens(bodies, dropped)
     if jst["joined"] or jst["refused"]:
         print(f"    page-break hyphens: {jst['joined']} split word(s) "
               f"rejoined across page turns"
               + (f", {jst['refused']} left as printed (compound or unknown)"
                  if jst["refused"] else ""))
+
+    if decisions_path:
+        dst = apply_reviewer_decisions(
+            bodies, decisions_path,
+            kept_pages=len(bodies) - len(dropped))
+        if dst["applied"] or dst["stale"]:
+            print(f"    decisions: {dst['applied']} reviewer correction(s) "
+                  f"reapplied"
+                  + (f", {dst['stale']} stale" if dst["stale"] else ""))
 
     if link_notes_flag:
         # chapter starts, where the printed contents can supply them: a leaf
