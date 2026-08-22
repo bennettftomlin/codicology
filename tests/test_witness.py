@@ -86,3 +86,21 @@ def test_surya_is_not_warned_about(vtb, capsys, monkeypatch):
     monkeypatch.setitem(vtb.OCR_BACKENDS, "surya", Fake)
     vtb.load_backend("surya", ["en"])
     assert capsys.readouterr().out == ""
+
+
+def test_compare_survives_a_malformed_byte(vtb, tmp_path):
+    """One bad byte in one page file degrades that page's words to a
+    replacement character; it must not crash the whole audit (R3) — the
+    other two extraction implementations already behaved this way."""
+    import zipfile
+    from codicology import compare
+    p = tmp_path / "b.epub"
+    with zipfile.ZipFile(p, "w") as z:
+        z.writestr("mimetype", "application/epub+zip")
+        z.writestr("EPUB/page_0000.xhtml",
+                   b"<html><body><p>fine text</p></body></html>")
+        z.writestr("EPUB/page_0001.xhtml",
+                   b"<html><body><p>bro\xffken byte</p></body></html>")
+    pages = compare.epub_pages(str(p))
+    assert "fine" in pages[0][0]
+    assert any("ken" in w or "bro" in w for w in pages[1][0])

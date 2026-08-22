@@ -47,7 +47,11 @@ def epub_pages(path):
             m = re.match(r".*page_(\d{4})\.xhtml$", n)
             if not m:
                 continue
-            t = z.read(n).decode("utf-8")
+            # 'replace', like verify and adjudicate: one malformed byte
+            # in one page file must degrade that page's words, not crash
+            # the whole audit (R3 — this was the only strict decode of
+            # the three page-extraction implementations)
+            t = z.read(n).decode("utf-8", "replace")
             t = re.sub(r"^.*?<body[^>]*>", "", t, flags=re.S)  # drop <title>
             caps = " ".join(re.findall(r"<figcaption[^>]*>(.*?)</figcaption>",
                                        t, flags=re.S))
