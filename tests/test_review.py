@@ -85,7 +85,7 @@ def test_sheet_is_self_contained(vtb):
         _d(1, "beligerents", "belligerents", "dictionary",
            winner="belligerents")]))
     assert "http://" not in sheet and "https://" not in sheet
-    assert "src=" not in sheet.replace('src="data:image/png', "")
+    assert "src=" not in sheet.replace('src="data:image/', "")
 
 
 def test_sheet_survives_html_hostile_words(vtb):

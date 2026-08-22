@@ -178,8 +178,12 @@ def crop_data_uris(report, dpi=200, ctx_px=240, base_dir=None) -> dict:
             _outline_token(crop, (tpx[0] - box[0], tpx[1] - box[1],
                                   tpx[2] - box[0], tpx[3] - box[1]))
             buf = io.BytesIO()
-            crop.save(buf, format="PNG")
-            uris[idx] = ("data:image/png;base64,"
+            # JPEG, not PNG: the crops are slices of a grayscale scan and
+            # the reviewer judges word identity, not pixels — a Citadel
+            # sheet weighed 79MB in lossless crops and ~a tenth of that in
+            # JPEG, with the amber outline baked in before encoding (E2)
+            crop.save(buf, format="JPEG", quality=85)
+            uris[idx] = ("data:image/jpeg;base64,"
                          + base64.b64encode(buf.getvalue()).decode())
     return uris
 
