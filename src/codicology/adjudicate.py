@@ -557,6 +557,7 @@ def calibrate(pdf: str, epub: "str | None" = None,
     doc = pdfium.PdfDocument(pdf)
     tmp = tempfile.mkdtemp(prefix="calibrate_")
     engines = {"tesseract": Counter(), "vision": Counter()}
+    cal_stats = Counter()
     shipped = epub_page_texts(epub) if epub else {}
     agreed, dispute_rows = [], []
     n = 0
@@ -597,7 +598,7 @@ def calibrate(pdf: str, epub: "str | None" = None,
         wit = tokens(reads.get("tesseract", ""))
         if not wit:
             continue
-        pairs = align_disputes(ours, wit)
+        pairs = align_disputes(ours, wit, cal_stats)
         pair_set = {fold_word(a) for a, _, _ in pairs} | \
                    {fold_word(b) for _, b, _ in pairs}
         agreed.append([w for w in ours if fold_word(w) not in pair_set])
@@ -646,6 +647,14 @@ def calibrate(pdf: str, epub: "str | None" = None,
             continue
         print(f"  {name:<10} recall {c['hit']/max(1,c['truth']):.4f}  "
               f"precision {c['hit']/max(1,c['got']):.4f}")
+    if cal_stats["seam"]:
+        # the battery's blind spot, closed: seam-discarded pairs were
+        # silently missing from the truth-scored rows, so a book whose
+        # reading order confuses the gate looked better-scored than it
+        # was (I5). The exclusion is still right — seam pairs are not
+        # disputes — but it must be visible in the record it shapes.
+        print(f"  seam-discarded: {cal_stats['seam']} pair(s) excluded "
+              f"from scoring (readers walked the page in different orders)")
     if dispute_rows:
         print(f"  ladder, on {len(dispute_rows)} real disputes with truth known:")
         for name, table in variants.items():

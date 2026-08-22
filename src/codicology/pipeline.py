@@ -6882,7 +6882,11 @@ def reconcile_native_text(bodies: list[str], page_paths: list[str]) -> int:
         try:
             with open(base + ".layer.txt", encoding="utf-8") as fh:
                 layer_words = fh.read().split()
-        except OSError:
+        except (OSError, Image.DecompressionBombError):
+            # this pipeline stores pages losslessly, so one unusually
+            # high-resolution page can trip Pillow's bomb guard — which is
+            # an Exception, not an OSError, and used to crash the whole
+            # folio audit instead of skipping the page (A6)
             continue
         if len(layer_words) < 10:
             continue

@@ -66,6 +66,18 @@ def _tesseract():
     return info
 
 
+def _vision():
+    """Apple Vision is the adjudication ladder's optional fourth rung —
+    macOS only, graceful everywhere else. Absent, books build identically
+    and review sheets simply carry more open abstains; this line exists
+    so a fat sheet on another platform explains itself."""
+    try:
+        import Vision  # noqa: F401
+        return {"present": True}
+    except ImportError:
+        return {"present": False}
+
+
 def _llama_server():
     override = os.environ.get("LLAMA_CPP_BINARY")
     if override and os.path.exists(override):
@@ -105,6 +117,7 @@ def report(full=False, ocr="surya", langs=("en",)):
         "packages": {p: _pkg_version(p) for p in PACKAGES},
         "tesseract": _tesseract(),
         "llama_server": _llama_server(),
+        "vision": _vision(),
         "nvidia": _nvidia(),
     }
 
@@ -229,6 +242,11 @@ def _human(rep):
         print("  tesseract: NOT FOUND")
     l = rep["llama_server"]
     print(f"  llama-server: {l['path'] if l['present'] else 'not found'}")
+    v = rep.get("vision", {})
+    print("  apple vision: " + ("present (adjudication's optional rung)"
+                                if v.get("present") else
+                                "absent — review sheets will carry more "
+                                "open abstains; builds are unaffected"))
     n = rep["nvidia"]
     print(f"  nvidia: {', '.join(n['gpus']) if n.get('gpus') else ('present' if n['present'] else 'none')}")
     s = rep.get("smoke")
