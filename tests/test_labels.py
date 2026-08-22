@@ -165,3 +165,42 @@ def test_relabel_matcher_never_overwrites(vtb):
     blocks = [("Text", [100, 100, 900, 300])]
     assert vtb._match_layout_labels(items, blocks, 1000, 1000) == 0
     assert items[0]["lab"] == "Footnote"
+
+
+def test_a_flat_image_declines_to_be_fingerprinted(vtb):
+    """Every pixel of a uniform image sits at its own mean, so its
+    signature collapsed to all-False — identical for a solid divider, a
+    blank plate, and a grey placeholder, which once grouped three
+    unrelated flat images as one recurring picture and deleted them all.
+    Featureless is unidentifiable: no signature, never a shared one."""
+    import io
+    from PIL import Image
+    def png(color):
+        im = Image.new("L", (200, 120), color)
+        buf = io.BytesIO(); im.save(buf, format="PNG")
+        return buf.getvalue()
+    assert vtb._picture_signature(png(255)) is None
+    assert vtb._picture_signature(png(0)) is None
+    assert vtb._picture_signature(png(128)) is None
+    doomed = vtb.find_image_furniture(
+        [["a"], ["b"], ["c"]],
+        {"a": png(255), "b": png(0), "c": png(128)})
+    assert doomed == set(), "unrelated flat images must never group"
+
+
+def test_a_patterned_band_still_groups_as_furniture(vtb):
+    """The fix must not break the feature's reason to exist: the
+    cooperation_mutualism decorative band — a patterned ornament — still
+    fingerprints and still strips when it recurs on three pages."""
+    import io
+    from PIL import Image
+    im = Image.new("L", (200, 120), 255)
+    for x in range(0, 200, 8):
+        for y in range(0, 120, 6):
+            im.putpixel((x, y), 0)
+    buf = io.BytesIO(); im.save(buf, format="PNG")
+    band = buf.getvalue()
+    doomed = vtb.find_image_furniture(
+        [["p0"], ["p1"], ["p2"]],
+        {"p0": band, "p1": band, "p2": band})
+    assert doomed == {"p0", "p1", "p2"}
