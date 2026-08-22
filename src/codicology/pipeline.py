@@ -2211,6 +2211,7 @@ class OCRCache:
         self.path = path
         self.tag = f"{backend_name}|{','.join(langs)}"
         self.entries: dict[str, list[dict]] = {}
+        self._key_memo: dict = {}
         self.hits = 0
         self.stale = 0
         self.serve_stale = serve_stale
@@ -2226,8 +2227,19 @@ class OCRCache:
                 pass  # an unreadable cache is a cold cache, never an error
 
     def _key(self, page_path: str) -> str:
+        # a warm build asks for the same page's key several times (get,
+        # knows_furniture, put) and each answer used to re-read and re-hash
+        # the whole file — a thousand-plus redundant hashes per rebuild
+        # (E1). The digest is remembered per (mtime, size); a touched file
+        # re-hashes, an unchanged one costs a stat.
+        st = os.stat(page_path)
+        memo = self._key_memo.get(page_path)
+        if memo and memo[0] == (st.st_mtime_ns, st.st_size):
+            return memo[1]
         with open(page_path, "rb") as fh:
-            return hashlib.sha256(fh.read()).hexdigest()
+            digest = hashlib.sha256(fh.read()).hexdigest()
+        self._key_memo[page_path] = ((st.st_mtime_ns, st.st_size), digest)
+        return digest
 
     def get(self, page_path: str) -> list[PageItem] | None:
         entry = self.entries.get(self._key(page_path))
@@ -2303,6 +2315,9 @@ class OCRCache:
         with gzip.open(tmp, "wt", encoding="utf-8") as fh:
             json.dump({"tag": self.tag, "pages": self.entries}, fh)
         os.replace(tmp, self.path)  # never leave a half-written cache behind
+        # clean now: without this, every later checkpoint rewrote the whole
+        # gzip even when nothing had changed since the previous save (A3)
+        self.dirty = False
 
 
 def _thumb_data_uri(path: str, width: int = REVIEW_THUMB_WIDTH) -> str:
@@ -4647,11 +4662,16 @@ def join_page_break_hyphens(bodies: list, dropped: "set[int]") -> dict:
     word, and a printed compound breaking at the page edge (self- |
     control) fails the join gate and keeps its hyphen, exactly as set."""
     from .adjudicate import _is_word, fold_word
+    kept = [i for i in range(len(bodies)) if i not in dropped]
+    # the whole-book vocabulary is only evidence for judging a join, so a
+    # book with no page ending mid-word — common in modern typesetting —
+    # pays nothing for it (E4)
+    if not any(PAGE_HYPHEN.search(bodies[i]) for i in kept):
+        return {"joined": 0, "refused": 0}
     vocab = set()
     for b in bodies:
         for w in re.findall(r"[A-Za-z][A-Za-z'’]*", _strip_tags(b)):
             vocab.add(fold_word(w))
-    kept = [i for i in range(len(bodies)) if i not in dropped]
     joined = refused = 0
     for a, b in zip(kept, kept[1:]):
         m = PAGE_HYPHEN.search(bodies[a])
@@ -4751,6 +4771,14 @@ def link_citations(bodies: list[str], dropped: set) -> dict:
     NOTE_P = re.compile(r"<(p|li)[^>]*(?:id=\"(?:note-|fn-)[^\"]*\")[^>]*>"
                         r"|<(p|li)[^>]*>\s*(?:<sup>|\d{1,3}[.)]\s)")
 
+    # entry patterns depend only on the bibliography, never the page —
+    # compiling them inside the page loop cost pages x entries compiles
+    # and could churn Python's regex cache on a large bibliography (E5)
+    ad_pats = [((form, year), (entry, spelling),
+                re.compile(re.escape(spelling)
+                           + r"(?:’s|'s)?(?:\s+et\s+al\.?)?[,\s]*\(?\s*"
+                           + re.escape(year) + r"(?!\d)"))
+               for (form, year), (entry, spelling) in ad.items()]
     for k in range(0, bib["start"]):
         if k in dropped:
             continue
@@ -4759,10 +4787,7 @@ def link_citations(bodies: list[str], dropped: set) -> dict:
         edits = []
 
         # author-date, in any prose on the page
-        for (form, year), (entry, spelling) in ad.items():
-            pat = re.compile(re.escape(spelling)
-                             + r"(?:’s|'s)?(?:\s+et\s+al\.?)?[,\s]*\(?\s*"
-                             + re.escape(year) + r"(?!\d)")
+        for (form, year), (entry, spelling), pat in ad_pats:
             for m in pat.finditer(body):
                 if not _outside_markup(body, m.start(), m.end()):
                     continue
@@ -5336,6 +5361,7 @@ def build_epub(
     typography_flag: bool = False,
     decisions_path: str | None = None,
     serve_stale_cache: bool = False,
+    cache_obj: "OCRCache | None" = None,
 ) -> None:
     try:
         from ebooklib import epub
@@ -5346,8 +5372,9 @@ def build_epub(
     print(f"  OCR backend: {backend.name} (batch size {backend.batch_size})")
     progress.emit(event="phase", phase="ocr",
                   message=f"OCR backend: {backend.name}")
-    cache = (OCRCache(ocr_cache, backend.name, backend.langs,
-                      serve_stale=serve_stale_cache) if ocr_cache else None)
+    cache = cache_obj if cache_obj is not None else (
+        OCRCache(ocr_cache, backend.name, backend.langs,
+                 serve_stale=serve_stale_cache) if ocr_cache else None)
     if cache and cache.entries:
         print(f"  OCR cache: {len(cache.entries)} pages remembered in {ocr_cache}")
         n_old = sum(1 for e in cache.entries.values()
@@ -6925,10 +6952,18 @@ def reconcile_native_text(bodies: list[str], page_paths: list[str]) -> int:
 
 
 def _collect_page_items(page_paths: list[str], backend: "OCRBackend",
-                        ocr_cache: str | None) -> list[list[PageItem]]:
-    """Every page's items, through the same cache the EPUB build fills."""
-    cache = OCRCache(ocr_cache, backend.name, getattr(backend, "langs", ["en"])) \
-        if ocr_cache else None
+                        ocr_cache: str | None,
+                        cache_obj: "OCRCache | None" = None
+                        ) -> list[list[PageItem]]:
+    """Every page's items, through the same cache the EPUB build fills.
+
+    The instance is shared when the caller already loaded it: this cache
+    embeds every figure as base64, and re-parsing the whole gzip for the
+    --epub + --pdf-text-layer combo — the module docstring's own example —
+    was the single largest avoidable cost in that invocation (E6)."""
+    cache = cache_obj if cache_obj is not None else (
+        OCRCache(ocr_cache, backend.name, getattr(backend, "langs", ["en"]))
+        if ocr_cache else None)
     out: list[list[PageItem]] = []
     for start in range(0, len(page_paths), backend.batch_size):
         chunk = page_paths[start:start + backend.batch_size]
@@ -7353,6 +7388,9 @@ def _finish(
             fh.write(img2pdf.convert(page_paths))
         print(f"  PDF saved: {output_pdf}  ({len(page_paths)} pages)")
 
+    shared_cache = (OCRCache(ocr_cache, backend.name, backend.langs,
+                             serve_stale=serve_stale_cache)
+                    if (ocr_cache and backend is not None) else None)
     if output_epub and backend is not None:
         print(f"\n[+] Building EPUB → {output_epub}")
         build_epub(page_paths, output_epub, backend, title, embed_images, dedupe,
@@ -7363,7 +7401,8 @@ def _finish(
                    link_index_flag=link_index_flag,
                    typography_flag=typography_flag,
                    decisions_path=decisions_path,
-                   serve_stale_cache=serve_stale_cache)
+                   serve_stale_cache=serve_stale_cache,
+                   cache_obj=shared_cache)
 
     if output_pdf and pdf_text_layer:
         # After the EPUB, so a shared cache is already warm — and the reads
@@ -7372,7 +7411,8 @@ def _finish(
         if backend is None:
             sys.exit("--pdf-text-layer needs an OCR backend")
         print(f"\n[+] Saving searchable PDF → {output_pdf}")
-        items_pp = _collect_page_items(page_paths, backend, ocr_cache)
+        items_pp = _collect_page_items(page_paths, backend, ocr_cache,
+                                       cache_obj=shared_cache)
         placed, forced, wordp = build_searchable_pdf(page_paths, items_pp,
                                                      output_pdf)
         boxed = sum(1 for pg in items_pp for it in pg if it.box is not None)
