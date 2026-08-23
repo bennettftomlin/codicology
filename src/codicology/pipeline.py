@@ -5732,7 +5732,7 @@ def build_epub(
             book.items = [it for it in book.items
                           if getattr(it, "file_name", None) not in orphans]
             print(f"    dropped {len(dropped)} duplicate pages "
-                  f"({total - len(dropped)} kept)")
+                  f"({len(page_paths) - len(dropped)} kept)")
     else:
         dropped = set()
 
@@ -5777,7 +5777,7 @@ def build_epub(
                           if getattr(it, "file_name", None) not in orphans]
             dropped |= blank
             print(f"    dropped {len(blank)} blank page(s) "
-                  f"({total - len(dropped)} kept)")
+                  f"({len(page_paths) - len(dropped)} kept)")
 
     # The joiner runs FIRST: decisions were recorded against the shipped
     # book, whose page-turn words were already whole, so the rebuild must

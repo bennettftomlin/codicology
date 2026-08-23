@@ -259,8 +259,10 @@ class CodicologyOCRAction(InterfaceAction):
                 self.gui.status_bar.show_message('Codicology: cancelled.',
                                                  5000)
                 return
-            return self.gui.job_manager.launch_job_error_dialog(job,
-                                                                self.gui)
+            # gui.job_exception is calibre's own failed-job dialog (verified
+            # present in the 9.13 bundle; the JobManager has no dialog API)
+            return self.gui.job_exception(
+                job, dialog_title='Codicology job failed')
 
         result = job.result or {}
         book_id, epub = result.get('book_id'), result.get('epub')

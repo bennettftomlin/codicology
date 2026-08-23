@@ -76,3 +76,35 @@ def test_a_full_build_ships_a_valid_epub(vtb, tmp_path, book_pages,
     nav = z.read(next(n for n in names if n.endswith("nav.xhtml"))).decode()
     ids = re.findall(r'id="([^"]+)"', nav)
     assert len(ids) == len(set(ids)), "nav ids must be unique (C1/C2)"
+
+
+def test_the_calibre_flag_set_survives_a_blank_page(vtb, tmp_path,
+                                                    book_pages, monkeypatch,
+                                                    capsys):
+    """The field failure of 2026-08-23: Calibre runs dedupe and drop_blank
+    ON, the smoke test above ran them off, and both 'kept' report lines
+    referenced a local the S4 extraction had moved into _read_pages. A
+    blank fourth page drives the exact print that NameError'd on a real
+    241-page book."""
+    monkeypatch.setattr(vtb, "tesseract_words_on_page", lambda p: 12,
+                        raising=False)
+    monkeypatch.setattr(vtb, "_classical_word_count", lambda p, min_len=3:
+                        None, raising=False)
+    import numpy as np, cv2
+    blank = tmp_path / "page_0003.png"
+    cv2.imwrite(str(blank), np.full((400, 300, 3), 255, np.uint8))
+    pages = book_pages + [str(blank)]
+    backend = ScriptedBackend(vtb, [
+        ["<p>he fled to Rus-</p>"],
+        ["<p>sia at last, and the beligerents met him there.</p>"],
+        ["<p>the end of the matter.</p>"],
+        [],
+    ])
+    out = tmp_path / "book.epub"
+    vtb.build_epub(pages, str(out), backend, "E2E", False,
+                   dedupe=True, drop_blank=True)
+    got = capsys.readouterr().out
+    assert "dropped 1 blank page(s) (3 kept)" in got
+    z = zipfile.ZipFile(out)
+    shipped = [n for n in z.namelist() if re.search(r"page_\d{4}\.xhtml$", n)]
+    assert len(shipped) == 3
