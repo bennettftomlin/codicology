@@ -177,3 +177,38 @@ def test_an_unruled_structure_would_not_be_found(vtb):
     # deliberate, because without the border the same test cannot tell a
     # drawing from the paragraph beside it.
     assert vtb.find_ruled_boxes(_boxed_structure_page(border=False)) == []
+
+
+def test_a_cmyk_plate_can_be_encoded_both_ways(vtb):
+    """After Queer Theory lost a whole 225-page build to one press-ready
+    plate: figures are encoded as JPEG and PNG so the smaller ships, and PNG
+    cannot hold CMYK. JPEG accepts it, so the crash landed on the second
+    encode with the first already done."""
+    import io
+    from PIL import Image
+    cmyk = Image.new("CMYK", (40, 30), (0, 120, 200, 8))
+    out = vtb._encodable(cmyk)
+    assert out.mode == "RGB"
+    out.save(io.BytesIO(), "PNG", optimize=True)
+    out.save(io.BytesIO(), "JPEG", quality=88)
+
+
+def test_alpha_is_composited_onto_white_not_dropped(vtb):
+    """The twin crash, on the other encoder: JPEG cannot hold alpha. What
+    hides under a transparent mask is not the page it was drawn for, so the
+    mask is honoured against white rather than discarded."""
+    import io
+    from PIL import Image
+    img = Image.new("RGBA", (10, 10), (255, 0, 0, 0))     # fully transparent
+    out = vtb._encodable(img)
+    assert out.mode == "RGB"
+    assert out.getpixel((5, 5)) == (255, 255, 255), "transparent must read white"
+    out.save(io.BytesIO(), "JPEG", quality=88)
+
+
+def test_an_already_encodable_image_is_passed_through_untouched(vtb):
+    from PIL import Image
+    rgb = Image.new("RGB", (8, 8), (10, 20, 30))
+    assert vtb._encodable(rgb) is rgb
+    grey = Image.new("L", (8, 8), 128)
+    assert vtb._encodable(grey) is grey

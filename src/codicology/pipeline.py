@@ -1528,7 +1528,8 @@ def _render_region(page, box, want_w: int) -> "Image.Image | None":
     try:
         pw, _ = page.get_size()
         scale = max(0.5, min(8.0, want_w / max(1e-6, (box[2] - box[0]) * pw)))
-        full = page.render(scale=scale).to_pil().convert("RGB")
+        full = page.render(scale=scale,
+                           draw_annots=False).to_pil().convert("RGB")
         x0, y0 = int(box[0] * full.width), int(box[1] * full.height)
         x1, y1 = int(box[2] * full.width), int(box[3] * full.height)
         if x1 - x0 < 8 or y1 - y0 < 8:
@@ -1566,6 +1567,27 @@ def native_orientation(obj) -> "list | None":
     if m.a < 0:
         ops.append(Image.FLIP_LEFT_RIGHT)
     return ops
+
+
+def _encodable(img: "Image.Image") -> "Image.Image":
+    """The same picture in a mode BOTH encoders accept, or it unchanged.
+
+    A figure is encoded as JPEG and as PNG so the smaller can ship, and each
+    format refuses a mode the other takes. PNG cannot hold CMYK, which is
+    how a plate arrives from a press-ready PDF — After Queer Theory lost a
+    whole 225-page build to one such plate — and JPEG cannot hold alpha, the
+    same crash waiting on the other line. Alpha is composited onto white
+    rather than dropped, because dropping it uncovers whatever colour was
+    hiding under a transparent mask instead of the page it was drawn for.
+    """
+    if img.mode in ("L", "RGB"):
+        return img
+    if img.mode == "P" or "A" in img.mode:
+        rgba = img.convert("RGBA")
+        flat = Image.new("RGB", rgba.size, "white")
+        flat.paste(rgba, mask=rgba.split()[-1])
+        return flat
+    return img.convert("RGB")
 
 
 def better_figure(page_path: str, box, crop: "Image.Image") -> "Image.Image":
@@ -5426,6 +5448,10 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
         # — because JPEG spends its bits ringing the hard black edges that
         # made this artwork look harsh in the first place. A photograph goes
         # the other way by more than four to one, and takes JPEG on merit.
+        enc = _encodable(art)
+        if enc is not art and art is not item.figure:
+            art.close()
+        art = enc
         jb = io.BytesIO()
         art.save(jb, "JPEG", quality=88)
         pb = io.BytesIO()
@@ -6546,7 +6572,8 @@ def load_pages_from_pdf(pdf_path: str, pages_dir: str) -> list[str]:
             # plate it is larger, and that costs scratch space in a
             # directory this run deletes when it ends.
             out = stem + ".png"
-            page.render(scale=300 / 72).to_pil().convert("RGB").save(
+            page.render(scale=300 / 72,
+                        draw_annots=False).to_pil().convert("RGB").save(
                 out, "PNG", dpi=(300, 300)
             )
         page_paths.append(out)

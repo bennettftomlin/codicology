@@ -471,7 +471,8 @@ def main(epub: str, pdf: str, report: "str | None" = None,
             break
         n_done += 1
         png = f"{tmp}/p{i}.png"
-        img = doc[i].render(scale=scale).to_pil()
+        img = doc[i].render(scale=scale,
+                            draw_annots=False).to_pil()
         img.save(png)
         tsv = read_tesseract_tsv(png)
         if tsv is None:
@@ -592,7 +593,8 @@ def calibrate(pdf: str, epub: "str | None" = None,
             continue
         n += 1
         png = f"{tmp}/p{i}.png"
-        img = doc[i].render(scale=scale).to_pil()
+        img = doc[i].render(scale=scale,
+                            draw_annots=False).to_pil()
         if degrade:
             from PIL import ImageFilter
             img = img.convert("L").filter(ImageFilter.GaussianBlur(1.1))

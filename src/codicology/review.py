@@ -159,7 +159,7 @@ def crop_data_uris(report, dpi=200, ctx_px=240, base_dir=None) -> dict:
     for pno, rows in sorted(by_page.items()):
         if pno >= len(doc):
             continue
-        img = doc[pno].render(scale=dpi / 72).to_pil()
+        img = doc[pno].render(scale=dpi / 72, draw_annots=False).to_pil()
         for idx, d, occ in rows:
             # cbox is the crop's box when recorded: hyphen-joined fragments
             # unioned and line-edge context pulled across the wrap. tbox is
