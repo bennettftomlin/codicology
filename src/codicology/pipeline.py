@@ -115,6 +115,7 @@ import glob
 import gzip
 import hashlib
 import json
+import difflib
 import html
 import io
 import os
@@ -2370,6 +2371,246 @@ def parse_folio(text: str) -> int | None:
         return None
     n = int(m.group(1))
     return n if 1 <= n <= 999 else None
+
+
+class Chapter(NamedTuple):
+    """A chapter as the running heads describe it: a title and the span of
+    pages that carried it."""
+    title: str
+    start: int           # first page index whose head named this chapter
+    end: int             # last such page, inclusive
+
+
+def head_title(line: str) -> str:
+    """A running head with its folio, and whatever separated them, taken off.
+
+    parse_folio reads the number out of the same line; this reads the rest.
+    Books set the pair a dozen ways — "60 · Citadel of Sin", "THE NEW CAREER
+    51", "Chapter 7 — 61" — so both ends are tried and the separator goes
+    with the number.
+    """
+    t = html.unescape(" ".join((line or "").split()))
+    t = re.sub(r"^\d{1,3}\s*[•·|:.\-–—]*\s*", "", t)
+    t = re.sub(r"\s*[•·|:.\-–—]*\s*\d{1,3}$", "", t)
+    # Front matter paginates in roman, and a lone "vi" left standing becomes
+    # a two-page chapter called vi. Only a bare numeral is taken — a chapter
+    # actually titled "I" keeps company with words and survives.
+    if re.fullmatch(r"(?i)[ivxlcdm]{1,7}", t):
+        return ""
+    return " ".join(t.strip(" •·|:.-–—").split())
+
+
+def _same_head(a: str, b: str) -> bool:
+    """Whether two lines are the same running head read twice.
+
+    A head is re-recognised on every page it appears, and the readings
+    differ: one page's TIHKAL is another's THIKAL, one escapes an
+    apostrophe where the next prints it. Exact matching splits a single
+    chapter into several — measured, one stray misread turned an 18-page
+    chapter into a 12 and a 6 — so heads are compared for closeness.
+    """
+    if not a or not b:
+        return False
+    a, b = a.lower(), b.lower()
+    if a == b:
+        return True
+    if min(len(a), len(b)) < 4:
+        return False
+    # A single substituted letter is the commonest misreading of a head, and
+    # on a short title it does not survive a ratio test: "Invasiom" against
+    # "Invasion" scores 0.875 and would open a second chapter halfway
+    # through the first. Same length, one letter apart, is that misreading.
+    if len(a) == len(b) and sum(x != y for x, y in zip(a, b)) == 1:
+        return True
+    return difflib.SequenceMatcher(None, a, b).ratio() >= 0.90
+
+
+# A stream of heads that changes on nearly every page is not chapters — it is
+# marginal notes, or an edited volume naming a different contributor each
+# leaf. Measured across the shelf: real chapter partitions run 8-12 pages to
+# the run, degenerate ones run 1.0-1.2, and nothing legitimate falls between.
+CHAPTER_RUN_MIN_MEAN = 4.0
+
+
+def chapters_from_furniture(page_furniture: list[list[str]]
+                            ) -> "tuple[list[Chapter], dict]":
+    """The book's chapters, as its own running heads report them.
+
+    A running head is the one piece of structure a book repeats on every
+    page, and it names the chapter the reader is inside. Two streams share
+    the position — the verso usually carries the book's title and the recto
+    the chapter's — so the constant one is identified and set aside, and
+    what varies is the chapter.
+
+    This is evidence the printed contents cannot give: a span asserted
+    twenty times over rather than a single line whose page must be inferred
+    from a folio. Where a contents page parses it still outranks this, being
+    the book's own declaration of hierarchy; where none does, or where it
+    parses badly, this is the better skeleton.
+
+    Returns (chapters, stats). An empty list means the heads did not
+    describe chapters, which is a real answer for a book whose head is only
+    its own title, and for a field manual whose head is a document number.
+    """
+    n = len(page_furniture)
+    stats = {"pages": n, "with_head": 0, "runs": 0, "mean_run": 0.0,
+             "refused": ""}
+    if n < 8:
+        stats["refused"] = "too few pages"
+        return [], stats
+    titles = [[head_title(t) for t in (page or [])] for page in page_furniture]
+    flat = [t for page in titles for t in page if t]
+    if not flat:
+        stats["refused"] = "no running heads carry text"
+        return [], stats
+    # Which stream is the book's own title? Not the most frequent one —
+    # frequency alone mistakes a long chapter for the title and eats it.
+    # The distinguishing property is SPREAD: a title recurs from the first
+    # leaf to the last, while a chapter head owns a band and no more. Where
+    # no head spans the book, there is no title stream to set aside, and
+    # every head is a chapter — some books print the chapter on both leaves.
+    from collections import Counter
+    seed = Counter(flat).most_common(1)[0][0]
+    seen_at = [i for i, page in enumerate(titles)
+               if any(_same_head(t, seed) for t in page if t)]
+    spans_book = (seen_at and
+                  (seen_at[-1] - seen_at[0] + 1) >= 0.6 * n)
+    varying: list[str | None] = []
+    for page in titles:
+        rest = [t for t in page
+                if t and not (spans_book and _same_head(t, seed))]
+        varying.append(rest[0] if rest else None)
+    stats["with_head"] = sum(1 for v in varying if v)
+    if stats["with_head"] < 4:
+        stats["refused"] = "no second head stream (the head is the title)"
+        return [], stats
+    # Walk the book. A page with no chapter head does not end a chapter — a
+    # verso carrying only the book's title sits INSIDE one, and so does the
+    # chapter's own opening page, which by convention prints no head at all.
+    runs: list[list] = []
+    for i, v in enumerate(varying):
+        if v is None:
+            continue
+        if runs and _same_head(runs[-1][0], v):
+            runs[-1][2] = i
+        else:
+            runs.append([v, i, i])
+    # A single page bearing a head unlike its neighbours, between two that
+    # agree, is a misread — not a one-page chapter between two halves of the
+    # same one.
+    merged: list[list] = []
+    for k, r in enumerate(runs):
+        if (r[1] == r[2] and merged and k + 1 < len(runs)
+                and _same_head(merged[-1][0], runs[k + 1][0])):
+            continue
+        if merged and _same_head(merged[-1][0], r[0]):
+            merged[-1][2] = r[2]
+        else:
+            merged.append(list(r))
+    stats["runs"] = len(merged)
+    if len(merged) < 3:
+        stats["refused"] = "fewer than three chapters"
+        return [], stats
+    stats["mean_run"] = round(stats["with_head"] / len(merged), 2)
+    if stats["mean_run"] < CHAPTER_RUN_MIN_MEAN:
+        stats["refused"] = (f"heads change every {stats['mean_run']} pages — "
+                            f"marginalia, not chapters")
+        return [], stats
+    # If one head owns most of the book it is not a chapter, it is the
+    # constant stream wearing the varying one's clothes — a manual whose
+    # every page names the manual, where the head set aside as "the title"
+    # was something rarer. Measured: a legitimate widest chapter takes a
+    # quarter of its book, this failure took 96% of one.
+    widest = max(b - a + 1 for _, a, b in merged)
+    if widest > 0.6 * n:
+        stats["refused"] = (f"one head spans {widest} of {n} pages — the "
+                            f"book's own title, not a chapter")
+        return [], stats
+    # A partition that is mostly one-page runs is a list of section names
+    # repeating, not a book divided into chapters.
+    if sum(1 for _, a, b in merged if b - a + 1 >= 3) < 3:
+        stats["refused"] = "fewer than three chapters span three pages"
+        return [], stats
+    # A chapter's opening page prints no running head — that is the
+    # convention, the drop cap stands where the head would be — so the first
+    # page NAMING a chapter is usually its second. Step back onto the
+    # opening where no other chapter has claimed it.
+    claimed = {p for _, a, b in merged for p in range(a, b + 1)}
+    out = []
+    for t, a, b in merged:
+        if a - 1 >= 0 and (a - 1) not in claimed:
+            a -= 1
+        out.append(Chapter(t, a, b))
+    return out, stats
+
+
+def _names_chapter(heading: str, head: str) -> bool:
+    """Whether a heading on the page is the chapter this running head names.
+
+    A running head ABBREVIATES, and it abbreviates in one particular way: it
+    drops the SUBTITLE. The head reads "INTRODUCTION" where the page is
+    titled "Introduction: Going Inside", "BEING THERE" where the page says
+    "Being There: Social Life in the Centre" — scoring 0.59 and 0.48, so
+    similarity alone matches neither. What licenses the match is the colon.
+    A plain space does not: "Border" must not claim the section called
+    "Border security", and on real books every abbreviation observed was cut
+    at punctuation, never mid-phrase.
+    """
+    a = " ".join(heading.lower().split())
+    b = " ".join(head.lower().split())
+    if _same_head(a, b):
+        return True
+    if len(b) < 6 or len(a) < 6:
+        return False
+    lo, hi = (b, a) if len(b) <= len(a) else (a, b)
+    return hi.startswith(lo) and hi[len(lo):len(lo) + 1] in (":", ".", ",",
+                                                             "—", "–", "-")
+
+
+def promote_chapter_headings(bodies: list[str],
+                             chapters: "list[Chapter]") -> int:
+    """Put each chapter's own title at the top of the document outline.
+
+    Measured across the shelf, h1 is mostly occupied by the title page —
+    often in pieces, and often misread ("Inthropology'sWorld", "SEX &
+    POLYNER") — while the chapters that actually structure the book sit at
+    h2 or h3, and one manual reached the reader with no h1 at all. A
+    reading system builds its outline from these tags, so the book's
+    skeleton was the one thing they did not describe.
+
+    Only a heading whose text is the chapter's own name, on the page where
+    that chapter opens or the one after, is promoted. Nothing is demoted:
+    a title page's h1 is not wrong, it is just not a chapter, and moving it
+    would trade one arguable outline for another.
+    """
+    n = 0
+    floor = 0
+    for c in chapters:
+        # The head names a chapter from the page AFTER its opening, and on a
+        # verso-title book the opening can be two leaves back. Search a small
+        # window, never past where the previous chapter ended.
+        window = [p for p in range(c.start - 2, c.start + 2)
+                  if floor <= p < len(bodies)]
+        floor = c.end + 1
+        for pi in window:
+            if not 0 <= pi < len(bodies):
+                continue
+            hit = False
+            for m in re.finditer(r"<h([1-6])([^>]*)>(.*?)</h\1>",
+                                 bodies[pi], re.S):
+                rank, attrs, inner = m.group(1), m.group(2), m.group(3)
+                text = " ".join(_strip_tags(inner).split())
+                if rank == "1" or not _names_chapter(text, c.title):
+                    continue
+                bodies[pi] = (bodies[pi][:m.start()]
+                              + f"<h1{attrs}>{inner}</h1>"
+                              + bodies[pi][m.end():])
+                n += 1
+                hit = True
+                break
+            if hit:
+                break
+    return n
 
 
 def folios_from_furniture(page_furniture: list[list[str]]) -> list[Folio]:
@@ -6055,6 +6296,19 @@ def build_epub(
         print("    index: needs --check-folios for the folio map — nothing "
               "linked")
 
+    # The book's own running heads, which name the chapter a reader is
+    # inside and assert it on every page of it. Computed whether or not a
+    # printed contents parsed: where one did, this cross-checks it; where
+    # none did, it is a better skeleton than the layout's isolated labels,
+    # because a span repeated twenty times is stronger evidence than a
+    # single block that happened to be tagged a heading.
+    furn_chapters, furn_stats = chapters_from_furniture(page_furniture)
+    if furn_chapters:
+        n_promoted = promote_chapter_headings(bodies, furn_chapters)
+        if n_promoted:
+            print(f"    lifted {n_promoted} chapter title(s) to the top of "
+                  f"the heading outline")
+
     chapters = []
     for i, page_body in enumerate(bodies):
         if i in dropped:
@@ -6121,6 +6375,25 @@ def build_epub(
             print(f"    contents: {len(placed)} printed lines, "
                   f"{verified} title-verified, {missed} unplaced"
                   + (f", {len(entries)} numbered entries" if entries else ""))
+    if toc_built and furn_chapters:
+        # Reported, never merged: the printed contents is the book's own
+        # declaration and outranks an inference from its margins. A wide
+        # disagreement means one of them is wrong and a human should look.
+        print(f"    running heads independently describe "
+              f"{len(furn_chapters)} chapter(s)")
+    if not toc_built and furn_chapters:
+        links = [epub.Link(f"page_{c.start:04d}.xhtml", c.title,
+                           f"rh{k}-{c.start}")
+                 for k, c in enumerate(furn_chapters) if c.start in pos_of]
+        if len(links) >= 3:
+            toc_built = links
+            print(f"    contents: no printed contents page; built "
+                  f"{len(links)} chapter(s) from the book's own running "
+                  f"heads ({furn_stats['with_head']} pages carried one)")
+    elif not toc_built and furn_stats.get("refused"):
+        print(f"    [~] running heads did not describe chapters: "
+              f"{furn_stats['refused']}")
+
     if not toc_built and len(label_heads) >= 4:
         # The layout model NAMED the book's headings; after the running-head
         # strip and the digit filter (markers masquerade as SectionHeader),

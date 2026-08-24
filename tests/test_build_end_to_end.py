@@ -108,3 +108,65 @@ def test_the_calibre_flag_set_survives_a_blank_page(vtb, tmp_path,
     z = zipfile.ZipFile(out)
     shipped = [n for n in z.namelist() if re.search(r"page_\d{4}\.xhtml$", n)]
     assert len(shipped) == 3
+
+
+class FurnishedBackend:
+    """A book set the ordinary way: each chapter opens on a headless recto,
+    then alternates a verso carrying the book's title with a recto carrying
+    the chapter's."""
+    batch_size = 4
+    name = "fake"
+    langs = ["en"]
+
+    def __init__(self, vtb, chapters):
+        self.vtb = vtb
+        self.pages = []
+        for title, heading in chapters:
+            self.pages.append([("<h2>%s</h2><p>It opens here.</p>" % heading,
+                                False)])
+            for k in range(5):
+                self.pages.append([("<p>A Book of Tests</p>", True),
+                                   ("<p>Verso prose %d.</p>" % k, False)])
+                self.pages.append([("<p>%s</p>" % title, True),
+                                   ("<p>Recto prose %d.</p>" % k, False)])
+
+    def run_items(self, images):
+        out = []
+        for _ in images:
+            page = self.pages.pop(0) if self.pages else []
+            out.append([self.vtb.PageItem(html=h, is_furniture=f)
+                        for h, f in page])
+        return out
+
+
+def test_a_chapter_title_reaches_the_shipped_page_as_h1(vtb, tmp_path,
+                                                        monkeypatch):
+    """The running heads name three chapters; the pages that open them are
+    tagged h2 by the layout. The lift has to happen BEFORE the pages are
+    written — it once ran forty lines too late, reported three promotions,
+    and shipped none of them."""
+    monkeypatch.setattr(vtb, "tesseract_words_on_page", lambda p: 12,
+                        raising=False)
+    backend = FurnishedBackend(vtb, [
+        ("INTRODUCTION", "Introduction: Going Inside"),
+        ("BEING THERE", "Being There"),
+        ("DRAWING THE LINE", "Drawing the Line"),
+    ])
+    n_pages = len(backend.pages)
+    paths = []
+    for i in range(n_pages):
+        img = np.full((400, 300, 3), 255, np.uint8)
+        cv2.rectangle(img, (40, 60), (260, 90), (30,) * 3, -1)
+        p = tmp_path / f"page_{i:04d}.png"
+        cv2.imwrite(str(p), img)
+        paths.append(str(p))
+    out = tmp_path / "book.epub"
+    vtb.build_epub(paths, str(out), backend, "Furnished", False,
+                   dedupe=False, drop_blank=False)
+    z = zipfile.ZipFile(out)
+    shipped = "".join(
+        z.read(n).decode() for n in sorted(z.namelist())
+        if re.search(r"page_\d{4}\.xhtml$", n))
+    for want in ("Introduction: Going Inside", "Being There",
+                 "Drawing the Line"):
+        assert f"<h1>{want}</h1>" in shipped, f"{want} did not ship as h1"
