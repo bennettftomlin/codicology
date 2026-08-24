@@ -7153,8 +7153,19 @@ def _read_pages_resiliently(paths: list[str], images: list,
     itself is genuinely blank.
     """
     def has_text(items):
-        return any(_strip_tags(it.html).strip() for it in items
-                   if it.html and not it.is_furniture)
+        """Whether the read produced anything the book is made of.
+
+        A picture counts. A plate, a map, a frontispiece has no words on it,
+        and judging such a page by its text alone calls a perfectly good
+        read a failure: it is retried on every build, never cached (an
+        "empty" read of an inked page is deliberately withheld), and re-read
+        live for ever after — so the one time the server is slow, the page
+        reads empty, ships no figure, and is dropped as blank. Two full-page
+        plates left a book that way.
+        """
+        return any((it.figure is not None
+                    or (it.html and _strip_tags(it.html).strip()))
+                   for it in items if not it.is_furniture)
 
     out: dict[str, list[PageItem]] = {}
     for path, img, items in zip(paths, images, backend.run_items(images)):

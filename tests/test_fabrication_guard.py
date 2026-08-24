@@ -457,3 +457,46 @@ def test_a_page_read_as_empty_but_readable_is_not_dropped_as_blank(vtb, monkeypa
     keep = {i for i in blank
             if (n := vtb._classical_word_count(paths[i], min_len=3)) and n >= 10}
     assert keep == {0}, "only the page with real text survives the drop"
+
+
+def test_a_picture_page_is_content_and_gets_cached(vtb, tmp_path):
+    """A plate, a map, a frontispiece carries no words. Judging such a page
+    by its text alone calls a good read a failure: an "empty" read of an
+    inked page is deliberately withheld from the cache, so the page is
+    re-read live on EVERY later build — and the one time the inference
+    server is slow it comes back empty, ships no figure, and is dropped as
+    blank. Two full-page plates left a book that way, and 87 pages across
+    the shelf were being re-read live for this reason."""
+    import numpy as np, cv2
+    from PIL import Image
+    img = np.full((400, 300, 3), 255, np.uint8)
+    cv2.rectangle(img, (30, 40), (270, 360), (20,) * 3, -1)   # a big plate
+    p = tmp_path / "plate.png"
+    cv2.imwrite(str(p), img)
+
+    class PlateBackend:
+        batch_size = 1
+        name = "fake"
+        langs = ["en"]
+        calls = 0
+
+        def run_items(self, images):
+            PlateBackend.calls += 1
+            return [[vtb.PageItem(html="", figure=Image.open(str(p)))]]
+
+    class Cache:
+        def __init__(self):
+            self.stored = {}
+
+        def get(self, path):
+            return None
+
+        def put(self, path, items):
+            self.stored[path] = items
+
+    cache = Cache()
+    out = vtb._read_pages_resiliently([str(p)], [Image.open(str(p))],
+                                      PlateBackend(), cache)
+    assert str(p) in cache.stored, "a picture page must be cached"
+    assert PlateBackend.calls == 1, "and must not be retried as a failed read"
+    assert out[str(p)], "the picture survives the read"
