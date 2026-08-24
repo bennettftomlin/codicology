@@ -306,3 +306,30 @@ def test_a_truncation_survives_a_page_that_repeats_the_word(vtb):
     pairs = adj.align_disputes(ours, theirs, stats)
     assert pairs == [("be", "been", 6)]
     assert stats["seam"] == 0
+
+
+def test_a_folded_count_cannot_settle_a_case_shape_disagreement(vtb):
+    """As If Already Free p120 printed "artificial intelligence (AI)". The
+    book's twelve 'et al.' citations attested 'al' twelve times and 'ai'
+    never, so the lexicon crowned the witness's 'Al' — a lowercase
+    abbreviation vouching for a title-case word it never appears as.
+    Capital-I and lowercase-l are the same ink in a serif face; the ink
+    and the reader settle this, not a case-blind tally."""
+    v = adj.adjudicate_pair("AI", "Al", Counter({"al": 12}))
+    assert v["winner"] is None and v["rung"] == "abstain"
+
+
+def test_the_apparatus_still_wins_on_its_own_attestation(vtb):
+    """The guard must not cost the 214 verdicts the apparatus fix earned:
+    242ff. and its kin are lowercase on both sides, so the lexicon rung
+    keeps ruling exactly as measured."""
+    v = adj.adjudicate_pair("ff", "f", Counter({"ff": 5}))
+    assert v == {"rung": "lexicon", "winner": "ff", "count": 5}
+
+
+def test_two_acronyms_are_still_settled_by_the_book(vtb):
+    """The guard fires on DISAGREEMENT about case shape, not on capitals:
+    when both readers see an acronym the fold is comparing like with like
+    and the book's own counts remain evidence."""
+    v = adj.adjudicate_pair("USA", "USB", Counter({"usa": 9}))
+    assert v["winner"] == "USA" and v["rung"] == "lexicon"

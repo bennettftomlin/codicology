@@ -225,6 +225,12 @@ APPARATUS = {
 }
 
 
+def _acronym(w: str) -> bool:
+    """All-caps of two letters or more — the shape of an abbreviation, and
+    the one piece of evidence `fold_word` destroys."""
+    return len(w) >= 2 and w.isalpha() and w.isupper()
+
+
 def _is_word(w: str) -> bool:
     """Lexical, allowing inflection: the system word list is lemma-only —
     "prisoner" is in it and "prisoners" is not — and without morphology the
@@ -295,10 +301,22 @@ def adjudicate_pair(a: str, b: str, lexicon: Counter,
         # Only ink evidence or a human settles a dispute touching one.
         return {"rung": "abstain", "winner": None, "note": "roman numeral"}
     la, lb = lexicon.get(fa, 0), lexicon.get(fb, 0)
-    if la >= 3 and lb == 0:
-        return {"rung": "lexicon", "winner": a, "count": la}
-    if lb >= 3 and la == 0:
-        return {"rung": "lexicon", "winner": b, "count": lb}
+    # The lexicon counts FOLDED tokens, so its counts may not be about the
+    # candidate at all when the readers disagree on case shape: 'As If
+    # Already Free' p120 printed "artificial intelligence (AI)", and the
+    # book's twelve 'et al.' citations attested 'al' twelve times against
+    # 'ai''s zero — crowning 'Al' on the strength of a lowercase
+    # abbreviation that appears nowhere near the disputed site. Capital-I
+    # and lowercase-l are the same ink in most serif faces, so this
+    # disagreement is common and the folded count is never evidence about
+    # it. The rungs below are unharmed and stay in charge: on the banked
+    # v3 rows the dictionary settles this class 45:2, above its own
+    # average, and Vision reads the ink at 96.6%.
+    if _acronym(a) == _acronym(b):
+        if la >= 3 and lb == 0:
+            return {"rung": "lexicon", "winner": a, "count": la}
+        if lb >= 3 and la == 0:
+            return {"rung": "lexicon", "winner": b, "count": lb}
     da, db = _is_word(fa), _is_word(fb)
     if da and not db:
         if attested_floor and lexicon.get(fa, 0) < attested_floor:
