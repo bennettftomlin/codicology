@@ -212,3 +212,25 @@ def test_too_few_entries_to_be_a_notes_section(vtb):
               "<h1>Notes</h1><ol><li>1. Only one.</li></ol>"]
     _, groups = vtb.parse_notes_section(bodies)
     assert groups == []
+
+
+def test_a_group_head_may_number_without_a_period(vtb):
+    """Beyond Money heads its note groups "1 capital and crises" where other
+    books write "1. Capital and crises". Requiring the dot cost that book
+    every one of its 410 links: no head parsed, so no group ever opened and
+    all its entries were discarded before pairing."""
+    bodies = ["<p>Prose with a marker.<sup>1</sup> And another.<sup>2</sup></p>",
+              "<h1>Notes</h1><h2>1 capital and crises</h2>"
+              "<ol><li>1. Schor and Jorgenson, 2019.</li>"
+              "<li>2. Piketty, 2014.</li></ol>"]
+    start, groups = vtb.parse_notes_section(bodies)
+    assert start == 1
+    assert [len(g) for g in groups] == [2]
+
+
+def test_the_numbered_head_still_parses_with_its_period(vtb):
+    bodies = ["<p>A marker.<sup>1</sup> Another.<sup>2</sup></p>",
+              "<h1>Notes</h1><h2>1. Capital and crises</h2>"
+              "<p><sup>1</sup> First.</p><p><sup>2</sup> Second.</p>"]
+    start, groups = vtb.parse_notes_section(bodies)
+    assert [len(g) for g in groups] == [2]

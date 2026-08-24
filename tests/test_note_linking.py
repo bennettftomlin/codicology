@@ -215,3 +215,50 @@ def test_bold_before_the_notes_section_is_never_touched(vtb):
     ]
     assert vtb.normalize_note_heads(bodies) == 0
     assert "<b>3. An emphatic opener</b>" in bodies[0]
+
+
+def _folio(vtb, i, n):
+    return vtb.Folio(i, n, "", True)
+
+
+def test_a_page_number_set_as_a_marker_is_dropped_and_the_marker_restored(vtb):
+    """Anthropology's World ended a page with '…locations.1<sup>59</sup>' on
+    the leaf whose folio is 59: the layout lifted the page number into a
+    superscript and left the real marker glued to the prose as plain text.
+    Two such phantoms cost that book all 167 of its note links, because the
+    chapter-reset test looks one marker ahead and a stray 59 hides the
+    boundary."""
+    bodies = ["<p>proper locations.1<sup>59</sup></p>"]
+    n = vtb.strip_folio_superscripts(bodies, [_folio(vtb, 0, 59)])
+    assert n == 1
+    assert bodies[0] == "<p>proper locations.<sup>1</sup></p>"
+
+
+def test_a_real_marker_that_matches_the_folio_is_left_alone(vtb):
+    """The rule is narrow on purpose: only the last superscript on the page,
+    and only when nothing but markup follows it. A marker mid-paragraph is
+    prose, whatever number it carries."""
+    bodies = ["<p>A citation<sup>12</sup> and then more prose follows.</p>"]
+    assert vtb.strip_folio_superscripts(bodies, [_folio(vtb, 0, 12)]) == 0
+    assert "<sup>12</sup>" in bodies[0]
+
+
+def test_a_last_marker_unlike_the_folio_is_left_alone(vtb):
+    bodies = ["<p>The chapter ends here.<sup>7</sup></p>"]
+    assert vtb.strip_folio_superscripts(bodies, [_folio(vtb, 0, 59)]) == 0
+    assert "<sup>7</sup>" in bodies[0]
+
+
+def test_nothing_is_restored_when_no_digit_is_glued_to_the_prose(vtb):
+    """No marker to recover is the ordinary case — the folio simply goes."""
+    bodies = ["<p>The chapter ends here.<sup>59</sup></p>"]
+    assert vtb.strip_folio_superscripts(bodies, [_folio(vtb, 0, 59)]) == 1
+    assert bodies[0] == "<p>The chapter ends here.</p>"
+
+
+def test_a_spaced_number_is_prose_not_a_demoted_marker(vtb):
+    """'in 1995' must never become a superscript: only digits GLUED to the
+    preceding word are a marker the layout flattened."""
+    bodies = ["<p>It happened in 1995<sup>59</sup></p>"]
+    assert vtb.strip_folio_superscripts(bodies, [_folio(vtb, 0, 59)]) == 1
+    assert bodies[0] == "<p>It happened in 1995</p>"

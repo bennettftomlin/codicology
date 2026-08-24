@@ -2408,6 +2408,57 @@ def folios_from_furniture(page_furniture: list[list[str]]) -> list[Folio]:
     return out
 
 
+def strip_folio_superscripts(bodies: list[str],
+                             folios: "list[Folio] | None") -> int:
+    """A page's own printed number, mistaken for a note marker.
+
+    Anthropology's World ended a page with `…Anthropology?”2<sup>38</sup>` on
+    the leaf whose folio is 38: the layout lifted the page number into a
+    superscript and left the real marker beside it as plain text. Two such
+    phantoms cost that book all 167 of its note links — the chapter-reset
+    test looks one marker ahead, so a stray 38 sitting just after a chapter's
+    opening 1 hides the boundary, merges three chapters into one run, and the
+    body's group count no longer matches the notes'; the misalignment guard
+    then correctly refuses to link anything at all.
+
+    Deliberately narrow, and the narrowness is measured: across 3,253 books
+    on the shelf this fires on exactly those two pages. A superscript
+    qualifies only as the last one on its page, only when nothing but markup
+    follows it, and only when it reads as that page's own folio. The demoted
+    marker beside it is left alone — recovering it would be a guess, and one
+    unlinked note is a smaller loss than a wrong link.
+    """
+    if not folios:
+        return 0
+    n = 0
+    for f in folios:
+        if f is None or f.number is None or not 0 <= f.index < len(bodies):
+            continue
+        b = bodies[f.index]
+        marks = list(BODY_MARKER.finditer(b))
+        if not marks:
+            continue
+        m = marks[-1]
+        if int(m.group(1)) != f.number:
+            continue
+        if _strip_tags(b[m.end():]).strip():
+            continue                      # prose follows: a real marker
+        # The layout merged marker and folio into one run and superscripted
+        # only its tail, so the marker is sitting in the prose as digits
+        # GLUED to the preceding word — "locations.1" is note 1 on the leaf
+        # whose folio is 59. Restoring it is what puts the chapter boundary
+        # back, and it cannot ship a wrong link even if it is wrong: the
+        # group-alignment check downstream refuses to pair what it cannot
+        # reconcile, exactly as it did before this ran.
+        head, rest = b[:m.start()], b[m.end():]
+        dm = re.search(r"(?<=[^\s\d>])(\d{1,3})\Z", head)
+        if dm:
+            head = head[:dm.start(1)] + f"<sup>{dm.group(1)}</sup>"
+        bodies[f.index] = head + rest
+        n += 1
+    return n
+
+
 def read_folios(page_paths: list[str], backend: "OCRBackend",
                 locate_width: int = 1100, batch: int = 8) -> list[Folio]:
     """
@@ -3392,7 +3443,11 @@ NOTE_ENTRY_PLAIN = re.compile(r"<p>\s*(\d{1,3})\.\s+\S")
 # convention, two renderings — both must parse or every group after the odd
 # page is silently lost.
 NOTE_ENTRY_LI = re.compile(r"<li[^>]*>\s*(\d{1,3})\.\s+\S")
-GROUP_HEAD_NUMBERED = re.compile(r"<h\d[^>]*>\s*(\d{1,2})\.\s")
+# The period is optional: Beyond Money heads its note groups "1 capital and
+# crises" where another book writes "1. Capital and crises", and requiring
+# the dot cost it every one of its 410 links — no head parsed, so no group
+# ever opened and every entry was discarded before it could be paired.
+GROUP_HEAD_NUMBERED = re.compile(r"<h\d[^>]*>\s*(\d{1,2})\.?\s+\S")
 GROUP_HEAD_NUMBERED_B = re.compile(r"<b>\s*(\d{1,2})\.\s+\S")
 # A book may number its chapters in Roman, and then its endnote groups are
 # headed "I.", "II.", "III." where another book heads them "1.". Schwartz's
@@ -5631,6 +5686,11 @@ def build_epub(
               f"already carry their own number or bullet")
     texts = [_strip_tags(b) for b in bodies]
     folios = folios_from_furniture(page_furniture) if page_furniture else None
+    n_folio_sup = strip_folio_superscripts(bodies, folios)
+    if n_folio_sup:
+        print(f"    dropped {n_folio_sup} page number(s) the layout had set "
+              f"as a note marker")
+        texts = [_strip_tags(b) for b in bodies]
 
     if check_folios:
         print("  Reading printed page numbers…")
