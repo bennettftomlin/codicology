@@ -73,14 +73,27 @@ def test_the_book_reprinting_its_title_does_not_adopt_the_chapters(vtb):
     below it — chapters, notes and index all hung under 'AFTER QUEER
     THEORY' in one book's nav."""
     entries, _ = vtb.parse_printed_toc(
-        contents(book_rows(), head="AFTER QUEER THEORY"))
+        contents(book_rows(), head="AFTER QUEER THEORY"),
+        book_title="After Queer Theory")
     assert not any(e.title == "AFTER QUEER THEORY" for e in entries)
 
 
-def test_a_real_part_division_is_still_a_grouping(vtb):
-    """The fix must not cost the part headings it was built around."""
+def test_a_division_that_names_no_division_is_still_a_grouping(vtb):
+    """The test is identity with the book's title, not a vocabulary of
+    division words: one book heads its parts 'HOW THE NORTHWEST WAS LOST
+    TO FRANCE', which contains no such word and is unmistakably a part.
+    Requiring BOOK/PART/VOLUME cost that book its structure."""
     entries, _ = vtb.parse_printed_toc(
-        contents(book_rows(), head="PART ONE: THE EARLY YEARS"))
+        contents(book_rows(), head="HOW THE NORTHWEST WAS LOST TO FRANCE"),
+        book_title="The Conquest of the Old Northwest")
+    parts = [e for e in entries if e.title.startswith("HOW THE NORTHWEST")]
+    assert parts and parts[0].depth == 0
+
+
+def test_a_named_part_division_is_still_a_grouping(vtb):
+    entries, _ = vtb.parse_printed_toc(
+        contents(book_rows(), head="PART ONE: THE EARLY YEARS"),
+        book_title="Some Other Book")
     parts = [e for e in entries if e.title.startswith("PART ONE")]
     assert parts and parts[0].depth == 0
 

@@ -3040,7 +3040,8 @@ class TocEntry(NamedTuple):
     indent: int = 0
 
 
-def parse_printed_toc(bodies: list[str], limit: int = 25
+def parse_printed_toc(bodies: list[str], limit: int = 25,
+                      book_title: "str | None" = None
                       ) -> tuple[list[TocEntry], set[int]]:
     """
     The book's own contents pages, read back as structure.
@@ -3105,16 +3106,17 @@ def parse_printed_toc(bodies: list[str], limit: int = 25
         for el in root.iter():
             if el.tag in ("h1", "h2", "h3", "h4"):
                 t = " ".join((el.text_content() or "").split())
-                # A heading on a contents page is a part division — or it is
-                # the book announcing itself again. A contents running to a
-                # second page reprints its own title at the head of it, and
-                # taken as a division that title adopted every chapter below
-                # it: chapters 5 and 6, the notes and the index all hung
-                # under "AFTER QUEER THEORY" in one book's nav. Divisions
-                # name themselves the way the row branch already requires,
-                # so the same test governs both.
+                # A heading on a contents page is a part division — or it
+                # is the book announcing itself again. A contents running
+                # onto a second page reprints its own title at the head of
+                # it, and taken as a division that title adopted every
+                # chapter below: chapters 5 and 6, the notes and the index
+                # all hung under "AFTER QUEER THEORY" in one book's nav.
+                # The test is that identity, not a vocabulary of division
+                # words — one book's parts are headed "HOW THE NORTHWEST
+                # WAS LOST TO FRANCE", which names no division and is one.
                 if t and "contents" not in t.lower() \
-                        and PART_HEAD.match(t):
+                        and not (book_title and _same_head(t, book_title)):
                     entries.append(TocEntry(t, None, "", 0 if el.tag in ("h1", "h2", "h3") else 1))
             elif el.tag == "tr":
                 tds = list(el.iter("td", "th"))
@@ -3349,7 +3351,8 @@ def _title_names_this_page(title: str, text: str) -> bool:
 
 
 def _place_toc_entries(bodies: list[str], folios,
-                       dropped: "set[int]" = frozenset()):
+                       dropped: "set[int]" = frozenset(),
+                       book_title: "str | None" = None):
     """Resolve each printed-contents line to a page, refusing placements that
     break the contents' own order.
 
@@ -3362,7 +3365,7 @@ def _place_toc_entries(bodies: list[str], folios,
     order, so the pages they resolve to must ascend. Placements off the
     longest non-decreasing run are refused rather than emitted wrong.
     """
-    printed, toc_pages = parse_printed_toc(bodies)
+    printed, toc_pages = parse_printed_toc(bodies, book_title=book_title)
     resolve = folio_resolver(folios)
     placed: list[tuple] = []          # (entry, target | None, verified)
     for e in printed:
@@ -6306,7 +6309,8 @@ def build_epub(
     # One placement of the printed contents serves every consumer below —
     # link_notes' chapter scoping and the nav alike. Two independent calls
     # could silently diverge as bodies mutate between them (C6).
-    placed_and_pages = (_place_toc_entries(bodies, folios, dropped)
+    placed_and_pages = (_place_toc_entries(bodies, folios, dropped,
+                                           book_title=title)
                         if folios is not None else ([], set()))
 
     if link_notes_flag:
