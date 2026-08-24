@@ -4278,6 +4278,14 @@ AD_ENTRY = re.compile(
     r"((?:[A-Z][A-Za-z’'\-]*\s+){0,2}[A-Z][A-Za-z’'\-]{2,})[^<(]{0,120}?"
     r"\((\d{4}[a-z]?)\)")
 YEAR_ALONE = re.compile(r"\((\d{4}[a-z]?)\)")
+# An author-date bibliography that sets its year BARE, straight after the
+# author block, rather than in parentheses: "Abrahams, Roger D., 1964, Deep
+# Down in the Jungle" and "Amani, B. 2013. 'Access Copyright…'". Anchored
+# twice over — to the head of the entry, and to the FIRST such year — which
+# is what stops "(1974 Proceedings of the American Ethnological Society)"
+# late in an entry from outranking the 1976 that actually names it. A year
+# in parentheses cannot match: its neighbour is a bracket, not a comma.
+BARE_YEAR_ENTRY = re.compile(r"^.{0,160}?[.,]\s*(\d{4}[a-z]?)\s*[.,]", re.S)
 # how a cited surname may be spelled ahead of its particle
 _PARTICLES = {"van", "von", "de", "der", "den", "di", "du", "la", "le",
               "mac", "mc", "o", "ten", "ter"}
@@ -4360,6 +4368,16 @@ def parse_bibliography(bodies: list[str]) -> "dict | None":
                     last_surname = sm.group(1)
                 elif not lead and last_surname:
                     surnames = _surname_forms(last_surname)
+            if surnames and not years:
+                # The entry names an author but no parenthesised year, which
+                # is how a whole style of bibliography is set. Strictly a
+                # top-up: the entry keeps the branch, surnames and title key
+                # it already earned, and only gains the (surname, year) key
+                # it was missing. Anthropology's World holds 260 such entries
+                # and could bind none of its author-date citations.
+                bym = BARE_YEAR_ENTRY.match(re.sub(r"<[^>]+>", "", own))
+                if bym:
+                    years = {bym.group(1)}
             if not surnames:
                 continue
             entry = {"id": eid, "page": k, "surnames": surnames,

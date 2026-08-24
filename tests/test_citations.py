@@ -166,3 +166,65 @@ def test_a_field_manual_references_appendix_binds_nothing(vtb):
     st = vtb.link_citations(bodies, dropped=set())
     assert st["authordate"] == 0 and st["chicago"] == 0
     assert st["entries"] == 1
+
+
+def bare_year_book():
+    """Anthropology's World sets its years bare, after the author block,
+    where another book parenthesises them."""
+    return [
+        "<p>The point was made earlier (Hannerz 1992a: ix) and taken up "
+        "again by Collins (1976). Abrahams (1964) had said as much.</p>",
+        "<h1>References</h1>"
+        "<p>Abrahams, Roger D., 1964, <i>Deep Down in the Jungle</i>, "
+        "Hatboro, PA: Folklore Associates.</p>"
+        "<p>Collins, June M., 1976, “Discussion,” in John V. Murra (ed.), "
+        "<i>American Ethnology: The Early Years</i> (1974 Proceedings of "
+        "the American Ethnological Society), Austin: Texas.</p>"
+        "<p>Hannerz, Ulf, 1992a, <i>Cultural Complexity</i>, "
+        "New York: Columbia University Press.</p>",
+    ]
+
+
+def test_a_bare_year_after_the_author_binds_its_citations(vtb):
+    bodies = bare_year_book()
+    st = vtb.link_citations(bodies, set())
+    assert st["authordate"] == 3, st
+    assert st["reverted"] == 0
+
+
+def test_the_year_that_names_the_entry_beats_one_buried_in_a_title(vtb):
+    """Collins is a 1976 paper reprinted in a volume of 1974 proceedings.
+    The year is taken from the author block, not from the first four digits
+    in the entry — and notably the parenthesised rule would have taken the
+    wrong one here."""
+    bib = vtb.parse_bibliography(bare_year_book())
+    collins = [e for e in bib["entries"] if "Collins" in e["surnames"]][0]
+    assert collins["years"] == {"1976"}
+
+
+def test_an_editor_marker_does_not_hide_the_year(vtb):
+    bib = vtb.parse_bibliography([
+        "<p>Prose citing Amit (2000).</p>",
+        "<h1>References</h1>"
+        "<p>Amit, Vered (ed.), 2000, <i>Constructing the Field</i>, "
+        "London: Routledge.</p>"])
+    assert bib["entries"][0]["years"] == {"2000"}
+
+
+def test_the_period_form_is_read_too(vtb):
+    """Shadow Libraries writes "Amani, B. 2013." where Anthropology's World
+    writes "Abrahams, Roger D., 1964,"."""
+    bib = vtb.parse_bibliography([
+        "<p>Prose citing Amani (2013).</p>",
+        "<h1>References</h1>"
+        "<p>Amani, B. 2013. “Access Copyright and the Model Licence,” "
+        "<i>Journal</i>.</p>"])
+    assert bib["entries"][0]["years"] == {"2013"}
+
+
+def test_a_parenthesised_bibliography_is_untouched(vtb):
+    """The top-up only fires where no year was found, so the style that
+    already worked keeps the exact keys it had."""
+    bib = vtb.parse_bibliography(ad_book())
+    assert {tuple(sorted(e["years"])) for e in bib["entries"]} == {
+        ("2019a",), ("2019",), ("2015",)}
