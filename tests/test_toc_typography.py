@@ -83,11 +83,27 @@ def test_a_division_that_names_no_division_is_still_a_grouping(vtb):
     division words: one book heads its parts 'HOW THE NORTHWEST WAS LOST
     TO FRANCE', which contains no such word and is unmistakably a part.
     Requiring BOOK/PART/VOLUME cost that book its structure."""
+    half = book_rows()[:5], book_rows()[5:]
+    page = (["<p>front</p>", "<h1>Contents</h1>"
+             + "<h2>HOW THE NORTHWEST WAS LOST TO FRANCE</h2>"
+             + contents(half[0])[1].split("</h1>", 1)[1]
+             + "<h2>THE WINNING OF THE NORTHWEST</h2>"
+             + contents(half[1])[1].split("</h1>", 1)[1]])
     entries, _ = vtb.parse_printed_toc(
-        contents(book_rows(), head="HOW THE NORTHWEST WAS LOST TO FRANCE"),
-        book_title="The Conquest of the Old Northwest")
+        page, book_title="The Conquest of the Old Northwest")
     parts = [e for e in entries if e.title.startswith("HOW THE NORTHWEST")]
-    assert parts and parts[0].depth == 0
+    assert parts and parts[0].depth == 0, [(e.depth, e.title) for e in entries]
+
+
+def test_a_lone_unnamed_heading_wrapping_the_book_is_the_title(vtb):
+    """One manual's contents was headed by its own name and shipped a nav
+    of a single parent holding all 129 other entries. A heading that opens
+    the list, adopts nearly all of it, and names no division is the book
+    announcing itself — whatever string was passed as the title."""
+    entries, _ = vtb.parse_printed_toc(
+        contents(book_rows(), head="FM 21-76 US ARMY SURVIVAL MANUAL"),
+        book_title="FM-21-76 Survival Manual")
+    assert not any(e.title.startswith("FM 21-76") for e in entries)
 
 
 def test_a_named_part_division_is_still_a_grouping(vtb):

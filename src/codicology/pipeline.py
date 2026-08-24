@@ -3023,6 +3023,15 @@ APPARATUS_ROW = re.compile(
     r"glossary|appendix|appendices|abbreviations|contributors|"
     r"further reading|about the author|credits|permissions)\b", re.I)
 
+# What a contents row can name that is not a division of the book. A
+# figure caption set in the same weight as a chapter title reads as a
+# chapter to any typographic test — one book promoted "Exhibit 3.2",
+# "Exhibit 3.5" and "Exhibit 3.6" to chapter rank and left Chapter One and
+# Chapter Two as leaves beneath them.
+NOT_A_DIVISION = re.compile(
+    r"\s*(exhibit|figure|fig\.|table|plate|map|chart|diagram|box|"
+    r"illustration|appendix table)\b", re.I)
+
 PART_HEAD = re.compile(
     r"\s*(BOOK|PART|VOLUME|SECTION|APPENDI(X|CES))\b", re.I)
 
@@ -3038,6 +3047,7 @@ class TocEntry(NamedTuple):
     # survive recognition and both were being discarded at parse time.
     bold: bool = False
     indent: int = 0
+    src_page: int = -1
 
 
 def parse_printed_toc(bodies: list[str], limit: int = 25,
@@ -3146,14 +3156,14 @@ def parse_printed_toc(bodies: list[str], limit: int = 25,
                     entries.append(TocEntry(
                         title,
                         (100 + ord(lm.group(1)) - ord("A")) * 1000
-                        + int(lm.group(2)), folio_text, 2, bold, indent))
+                        + int(lm.group(2)), folio_text, 2, bold, indent, page_i))
                 elif cm and title:
                     entries.append(TocEntry(title, int(cm.group(1)) * 1000
                                             + int(cm.group(2)), folio_text, 2,
-                                            bold, indent))
+                                            bold, indent, page_i))
                 elif m and title:
                     entries.append(TocEntry(title, int(m.group(1)), folio_text,
-                                            2, bold, indent))
+                                            2, bold, indent, page_i))
                 elif roman and title:
                     entries.append(TocEntry(title, None, folio_text, 2,
                                             bold, indent))
@@ -3170,10 +3180,68 @@ def parse_printed_toc(bodies: list[str], limit: int = 25,
     # The prefix rule first: where a book numbers its subsections (1)…(6)
     # that is an explicit declaration and outranks an inference from type.
     # Where it does not, the page's own setting is the declaration.
+    # Indentation is relative to the page it was set on. One manual sets
+    # its early chapters at four spaces with their sections at eight, and
+    # then, pages later, sets chapters flush left — so a baseline taken
+    # across the whole contents made the flush chapters heads and demoted
+    # the indented ones to sit beside their own sections. Each page's
+    # setting is measured against itself.
+    # Only rows carry a measured indent. A heading on the page — a part
+    # division, or the book's own name — is not set in the table and
+    # arrives at zero by default, which would make it the page's baseline
+    # and every real row look indented beneath it.
+    by_page: dict = {}
+    for e in entries:
+        if e.depth == 2:
+            by_page.setdefault(e.src_page, []).append(e.indent)
+    # Per page, and by the same test: the floor is the shallowest indent
+    # that several rows share. A single flush-left row — the manual's own
+    # name above its chapters — is an outlier, not the page's baseline.
+    from collections import Counter as _C
+    floor = {}
+    for pg, v in by_page.items():
+        tally = _C(v)
+        real = [ind for ind, n in tally.items() if n >= 2]
+        floor[pg] = min(real) if real else min(v)
+    entries = [e._replace(indent=e.indent - floor.get(e.src_page, 0))
+               for e in entries]
+
     ranked = _infer_row_depths(entries)
     if ranked == entries:            # the prefix rule found nothing to read
         ranked = _depths_from_typography(ranked)
-    return ranked, toc_pages
+    return _drop_wrapper_grouping(ranked), toc_pages
+
+
+def _drop_wrapper_grouping(entries: "list[TocEntry]") -> "list[TocEntry]":
+    """A grouping that holds the whole book is not a division of it.
+
+    A contents page headed by the book's own name gives that name a
+    grouping, and everything printed below it becomes its child: one
+    manual shipped a nav of a single parent, "FM 21-76 US ARMY SURVIVAL
+    MANUAL", wrapping all 129 of its other entries. Comparing the heading
+    against the book's title catches the plain cases and misses the
+    dressed-up ones — the title passed in was "FM-21-76 Survival Manual",
+    which is the same book and not the same string.
+
+    The shape gives it away without knowing the title at all: a real
+    division shares the contents with its siblings. One that opens the
+    list and adopts nearly all of it is a wrapper, and wrapping is what a
+    nav does anyway.
+    """
+    if len(entries) < 6:
+        return entries
+    tops = [i for i, e in enumerate(entries) if e.depth == 0]
+    if len(tops) != 1 or tops[0] != 0:
+        return entries
+    # A book may genuinely open with one part that holds everything printed
+    # after it, and such a part says so — "PART ONE", "BOOK 1". A wrapper
+    # that names no division is the title.
+    if PART_HEAD.match(entries[0].title):
+        return entries
+    below = len(entries) - 1
+    if below and sum(1 for e in entries[1:] if e.depth > 0) >= 0.9 * below:
+        return entries[1:]
+    return entries
 
 
 def _infer_row_depths(entries: "list[TocEntry]") -> "list[TocEntry]":
@@ -3203,6 +3271,8 @@ def _infer_row_depths(entries: "list[TocEntry]") -> "list[TocEntry]":
         # the (1) belongs to someone else, and promoting across it makes
         # exactly the empty grouping this pass exists to avoid (B3)
         if any(e.depth < 2 for e in entries[i + 1:nxt]):
+            continue
+        if NOT_A_DIVISION.match(entries[i].title):
             continue
         out[i] = entries[i]._replace(depth=1)
     return out
@@ -3234,8 +3304,20 @@ def _depths_from_typography(entries: "list[TocEntry]") -> "list[TocEntry]":
     if len(heads) < 3 or len(heads) == len(rows):
         # Nothing bold, or everything: fall back to the indentation, which
         # says the same thing when the compositor used it instead.
-        base = min(entries[i].indent for i in rows)
-        heads = [i for i in rows if entries[i].indent <= base]
+        # The baseline is the shallowest indent that is a LEVEL rather than
+        # an outlier. One manual prints its own name as a single flush-left
+        # row above chapters set at four spaces; taking the plain minimum
+        # made that one row the baseline, left every chapter looking
+        # indented beneath it, and wrapped the book's nav in its own title.
+        # Taking the commonest indent instead fails the other way, since
+        # subsections usually outnumber chapters. A level needs members.
+        from collections import Counter
+        tally = Counter(entries[i].indent for i in rows)
+        levels = [ind for ind, n in tally.items() if n >= 3]
+        if not levels:
+            return entries
+        base = min(levels)
+        heads = [i for i in rows if entries[i].indent == base]
         if len(heads) < 3 or len(heads) == len(rows):
             return entries
         subs = {i for i in rows if i not in heads}
@@ -3258,6 +3340,8 @@ def _depths_from_typography(entries: "list[TocEntry]") -> "list[TocEntry]":
         if nxt is None or nxt not in subs:
             continue
         if any(e.depth < 2 for e in entries[i + 1:nxt]):
+            continue
+        if NOT_A_DIVISION.match(entries[i].title):
             continue
         out[i] = entries[i]._replace(depth=1)
     return out
