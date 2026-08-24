@@ -2972,12 +2972,26 @@ def figure_has_content(img: Image.Image) -> bool:
     return float(((bg - a) > 12).mean()) >= FIGURE_MIN_DETAIL
 
 
+# What a division of a book calls itself, in the contents and on its own
+# title page: "BOOK SEVEN", "Part III", "SECTION 2". The row branch has
+# always required this before grouping a folio-less line; the heading
+# branch now does too, so a book's own title reprinted atop a second
+# contents page cannot adopt the chapters beneath it.
+PART_HEAD = re.compile(
+    r"\s*(BOOK|PART|VOLUME|SECTION|APPENDI(X|CES))\b", re.I)
+
+
 class TocEntry(NamedTuple):
     """One line of a book's own table of contents, as printed."""
     title: str
     folio: int | None        # None: a roman-numbered or unnumbered line
     folio_text: str          # the number as printed, roman numerals included
     depth: int               # 0 = top grouping, 1 = subgroup, 2 = leaf
+    # How the page itself declared this line's rank. A typesetter marks a
+    # chapter by setting it bold and indents what belongs under it; both
+    # survive recognition and both were being discarded at parse time.
+    bold: bool = False
+    indent: int = 0
 
 
 def parse_printed_toc(bodies: list[str], limit: int = 25
@@ -3045,10 +3059,27 @@ def parse_printed_toc(bodies: list[str], limit: int = 25
         for el in root.iter():
             if el.tag in ("h1", "h2", "h3", "h4"):
                 t = " ".join((el.text_content() or "").split())
-                if t and "contents" not in t.lower():
+                # A heading on a contents page is a part division — or it is
+                # the book announcing itself again. A contents running to a
+                # second page reprints its own title at the head of it, and
+                # taken as a division that title adopted every chapter below
+                # it: chapters 5 and 6, the notes and the index all hung
+                # under "AFTER QUEER THEORY" in one book's nav. Divisions
+                # name themselves the way the row branch already requires,
+                # so the same test governs both.
+                if t and "contents" not in t.lower() \
+                        and PART_HEAD.match(t):
                     entries.append(TocEntry(t, None, "", 0 if el.tag in ("h1", "h2", "h3") else 1))
             elif el.tag == "tr":
-                cells = [" ".join(td.text_content().split()) for td in el.iter("td", "th")]
+                tds = list(el.iter("td", "th"))
+                raw = [td.text_content() or "" for td in tds]
+                cells = [" ".join(r.split()) for r in raw]
+                # the title is every cell but the folio; its own typography
+                # is the book's statement about rank
+                bold = any(len(td.findall(".//b")) or len(td.findall(".//strong"))
+                           for td in tds[:-1] or tds)
+                indent = next((len(r) - len(r.lstrip())
+                               for r, c in zip(raw, cells) if c), 0)
                 cells = [c for c in cells if c]
                 if not cells:
                     continue
@@ -3067,14 +3098,17 @@ def parse_printed_toc(bodies: list[str], limit: int = 25
                     entries.append(TocEntry(
                         title,
                         (100 + ord(lm.group(1)) - ord("A")) * 1000
-                        + int(lm.group(2)), folio_text, 2))
+                        + int(lm.group(2)), folio_text, 2, bold, indent))
                 elif cm and title:
                     entries.append(TocEntry(title, int(cm.group(1)) * 1000
-                                            + int(cm.group(2)), folio_text, 2))
+                                            + int(cm.group(2)), folio_text, 2,
+                                            bold, indent))
                 elif m and title:
-                    entries.append(TocEntry(title, int(m.group(1)), folio_text, 2))
+                    entries.append(TocEntry(title, int(m.group(1)), folio_text,
+                                            2, bold, indent))
                 elif roman and title:
-                    entries.append(TocEntry(title, None, folio_text, 2))
+                    entries.append(TocEntry(title, None, folio_text, 2,
+                                            bold, indent))
                 else:
                     # A row with no folio at all is usually noise — but a
                     # part heading is printed exactly this way: eagle's
@@ -3082,10 +3116,16 @@ def parse_printed_toc(bodies: list[str], limit: int = 25
                     # Revolt" lines that carry no page number, and dropping
                     # them flattened the book's own declared structure.
                     full = re.sub(r"[\s.·…]+$", "", " ".join(cells))
-                    if re.match(r"(BOOK|PART|VOLUME)\b", full, re.I) \
+                    if PART_HEAD.match(full) \
                             and 2 <= len(full.split()) <= 8:
                         entries.append(TocEntry(full, None, "", 0))
-    return _infer_row_depths(entries), toc_pages
+    # The prefix rule first: where a book numbers its subsections (1)…(6)
+    # that is an explicit declaration and outranks an inference from type.
+    # Where it does not, the page's own setting is the declaration.
+    ranked = _infer_row_depths(entries)
+    if ranked == entries:            # the prefix rule found nothing to read
+        ranked = _depths_from_typography(ranked)
+    return ranked, toc_pages
 
 
 def _infer_row_depths(entries: "list[TocEntry]") -> "list[TocEntry]":
@@ -3114,6 +3154,54 @@ def _infer_row_depths(entries: "list[TocEntry]") -> "list[TocEntry]":
         # an intervening lower-depth heading between the two rows means
         # the (1) belongs to someone else, and promoting across it makes
         # exactly the empty grouping this pass exists to avoid (B3)
+        if any(e.depth < 2 for e in entries[i + 1:nxt]):
+            continue
+        out[i] = entries[i]._replace(depth=1)
+    return out
+
+
+def _depths_from_typography(entries: "list[TocEntry]") -> "list[TocEntry]":
+    """The other way a contents page declares its hierarchy: by setting it.
+
+    Prefixes are one convention. The commoner one is typographic — the
+    chapter is bold, and what belongs under it is indented — and both cues
+    survive recognition into the markup, where the parser was discarding
+    them. One book listed forty entries this way and shipped every one of
+    them flat, chapters level with their own subsections.
+
+    Bold leads, because it is the sturdier of the two: a contents that runs
+    across two pages can lose its indentation on the second (measured: cells
+    at indent 0 throughout) while the bold still marks every chapter.
+    Indentation is read only where nothing is bold.
+
+    The guards are the prefix rule's, for the same reasons: three of each
+    kind at least, so a uniformly bold contents stays flat; and a row is
+    promoted only where a subsection actually follows it, so no chapter
+    gains an empty grouping.
+    """
+    rows = [i for i, e in enumerate(entries) if e.depth == 2]
+    if len(rows) < 6:
+        return entries
+    heads = [i for i in rows if entries[i].bold]
+    if len(heads) < 3 or len(heads) == len(rows):
+        # Nothing bold, or everything: fall back to the indentation, which
+        # says the same thing when the compositor used it instead.
+        base = min(entries[i].indent for i in rows)
+        heads = [i for i in rows if entries[i].indent <= base]
+        if len(heads) < 3 or len(heads) == len(rows):
+            return entries
+        subs = {i for i in rows if i not in heads}
+    else:
+        subs = {i for i in rows if not entries[i].bold}
+    if len(subs) < 3:
+        return entries
+    out = list(entries)
+    for k, i in enumerate(rows):
+        if i not in heads:
+            continue
+        nxt = rows[k + 1] if k + 1 < len(rows) else None
+        if nxt is None or nxt not in subs:
+            continue
         if any(e.depth < 2 for e in entries[i + 1:nxt]):
             continue
         out[i] = entries[i]._replace(depth=1)
