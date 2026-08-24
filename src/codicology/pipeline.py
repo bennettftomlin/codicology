@@ -2977,6 +2977,16 @@ def figure_has_content(img: Image.Image) -> bool:
 # always required this before grouping a folio-less line; the heading
 # branch now does too, so a book's own title reprinted atop a second
 # contents page cannot adopt the chapters beneath it.
+# The book's apparatus, as a contents page names it. These lines belong to
+# no chapter: they are the front and back matter, and a chapter that
+# appears to subordinate them is an artefact of their being the only plain
+# rows on a page of bold ones.
+APPARATUS_ROW = re.compile(
+    r"\s*(notes?|references?|index|bibliography|works cited|"
+    r"acknowledge?ments?|preface|series preface|foreword|afterword|"
+    r"glossary|appendix|appendices|abbreviations|contributors|"
+    r"further reading|about the author|credits|permissions)\b", re.I)
+
 PART_HEAD = re.compile(
     r"\s*(BOOK|PART|VOLUME|SECTION|APPENDI(X|CES))\b", re.I)
 
@@ -3193,6 +3203,13 @@ def _depths_from_typography(entries: "list[TocEntry]") -> "list[TocEntry]":
         subs = {i for i in rows if i not in heads}
     else:
         subs = {i for i in rows if not entries[i].bold}
+    # The apparatus is not a subsection. Where a book lists chapters and no
+    # subsections at all, its contents is bold chapters and a plain tail of
+    # Notes, References and Index — and the last chapter, being the only one
+    # a plain row follows, adopted all three. Three books flattened that way
+    # into "7 Conclusion" parenting the back matter. A row that names the
+    # apparatus is evidence of nothing.
+    subs = {i for i in subs if not APPARATUS_ROW.match(entries[i].title)}
     if len(subs) < 3:
         return entries
     out = list(entries)

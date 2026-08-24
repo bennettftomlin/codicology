@@ -83,3 +83,33 @@ def test_a_real_part_division_is_still_a_grouping(vtb):
         contents(book_rows(), head="PART ONE: THE EARLY YEARS"))
     parts = [e for e in entries if e.title.startswith("PART ONE")]
     assert parts and parts[0].depth == 0
+
+
+def test_the_apparatus_is_not_a_subsection(vtb):
+    """A book that lists chapters and no subsections prints bold chapters
+    and a plain tail of Notes, References and Index. The last chapter is
+    then the only one a plain row follows — and it adopted all three. Three
+    books flattened into '7 Conclusion' parenting the back matter."""
+    rows = [("Acknowledgments", 7, False, 0),
+            ("1 Introduction", 1, True, 0),
+            ("2 Working in the Call Centre", 20, True, 0),
+            ("3 Management", 40, True, 0),
+            ("4 Moments of Resistance", 60, True, 0),
+            ("5 Precarious Organisation", 80, True, 0),
+            ("6 Conclusion", 100, True, 0),
+            ("Notes", 110, False, 0),
+            ("References", 120, False, 0),
+            ("Index", 130, False, 0)]
+    entries, _ = vtb.parse_printed_toc(contents(rows))
+    assert all(e.depth == 2 for e in entries), \
+        [(e.depth, e.title) for e in entries if e.depth < 2]
+
+
+def test_real_subsections_still_promote_past_the_apparatus(vtb):
+    """The guard must not cost a book that has both."""
+    rows = book_rows() + [("Notes", 200, False, 0),
+                          ("Index", 210, False, 0)]
+    entries, _ = vtb.parse_printed_toc(contents(rows))
+    depths = {e.title: e.depth for e in entries}
+    assert depths["1 Currents of Queer"] == 1
+    assert depths["Notes"] == 2 and depths["Index"] == 2
