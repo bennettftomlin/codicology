@@ -170,3 +170,29 @@ def test_a_chapter_title_reaches_the_shipped_page_as_h1(vtb, tmp_path,
     for want in ("Introduction: Going Inside", "Being There",
                  "Drawing the Line"):
         assert f"<h1>{want}</h1>" in shipped, f"{want} did not ship as h1"
+
+
+def test_a_build_stops_rather_than_shipping_pages_a_dead_server_blanked(
+        vtb, tmp_path, book_pages, monkeypatch):
+    """The whole point of the probe: a page not in the cache is read live,
+    and an unserved backend answers with emptiness rather than an error, so
+    the pages ship blank and the emptiness is cached. The run must stop
+    before writing any of that."""
+    monkeypatch.setattr(vtb, "tesseract_words_on_page", lambda p: 12,
+                        raising=False)
+
+    class DeadServer:
+        batch_size = 4
+        name = "surya"
+        langs = ["en"]
+
+        def run_items(self, images):
+            return [[] for _ in images]
+
+    out = tmp_path / "book.epub"
+    with pytest.raises(SystemExit) as e:
+        vtb.build_epub(book_pages, str(out), DeadServer(), "E2E", False,
+                       dedupe=False, drop_blank=False)
+    msg = str(e.value)
+    assert "not reading" in msg and "doctor --full" in msg
+    assert not out.exists(), "nothing may be written on a dead backend"

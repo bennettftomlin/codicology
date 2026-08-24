@@ -500,3 +500,55 @@ def test_a_picture_page_is_content_and_gets_cached(vtb, tmp_path):
     assert str(p) in cache.stored, "a picture page must be cached"
     assert PlateBackend.calls == 1, "and must not be retried as a failed read"
     assert out[str(p)], "the picture survives the read"
+
+
+class _Surya:
+    """A stand-in wearing surya's name, since only surya is probed."""
+    batch_size = 4
+    name = "surya"
+    langs = ["en"]
+
+    def __init__(self, reply):
+        self.reply = reply
+        self.calls = 0
+
+    def run_items(self, images):
+        self.calls += 1
+        return [self.reply for _ in images]
+
+
+def test_a_backend_that_reads_nothing_is_caught_before_it_blanks_a_book(vtb):
+    """Surya returns an EMPTY result when its inference server is absent,
+    waking, or incompatible — never an error. One run measured 1,536 such
+    failures and blanked 191 of 197 pages."""
+    why = vtb.warm_backend(_Surya([]))
+    assert why and "nothing" in why
+
+
+def test_a_backend_that_reads_the_probe_passes(vtb):
+    ok = _Surya([vtb.PageItem(html="<p>codicology doctor reads this page, "
+                                   "the quick brown fox</p>")])
+    assert vtb.warm_backend(ok) is None
+
+
+def test_a_backend_answering_gibberish_is_caught(vtb):
+    """A server that answers, but not with the page it was given, is as
+    useless as one that does not answer — and louder about it."""
+    why = vtb.warm_backend(_Surya([vtb.PageItem(html="<p>zzz qqq</p>")]))
+    assert why and "zzz" in why
+
+
+def test_other_backends_are_not_probed(vtb):
+    """The probe would cost a scripted test double a page it was never
+    written to supply, and only surya swallows server errors."""
+    class Fake:
+        batch_size = 1
+        name = "fake"
+        langs = ["en"]
+        calls = 0
+
+        def run_items(self, images):
+            Fake.calls += 1
+            return [[]]
+    assert vtb.warm_backend(Fake()) is None
+    assert Fake.calls == 0, "a non-surya backend must not be probed at all"

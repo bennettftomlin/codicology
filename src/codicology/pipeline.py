@@ -5656,6 +5656,7 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
     they are met, exactly as before; the assembly half receives the rest
     as a bundle."""
     from ebooklib import epub
+    warmed = False           # the backend has proved it can read
     bodies: list[str] = []
     page_figures: list[list[str]] = []  # figure files each page put in the book
     figure_data: dict[str, bytes] = {}  # their bytes, for spotting repeats
@@ -5735,6 +5736,23 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
         unseen = [p for p, hit in zip(chunk_paths, remembered) if hit is None]
         fresh: dict[str, list[PageItem]] = {}
         if unseen:
+            if not warmed:
+                # The first page this run must read for itself. Before its
+                # answer is believed — or cached — make the backend prove it
+                # can read at all, because a silent empty is how a cold
+                # server blanks a book.
+                why = warm_backend(backend)
+                if why is not None:
+                    sys.exit(
+                        f"the {backend.name} backend is not reading: it "
+                        f"{why} on a synthetic page of known words.\n"
+                        f"{len(unseen)} page(s) of this book are not in the "
+                        f"cache and would be read live — an unserved backend "
+                        f"returns empty pages rather than an error, so they "
+                        f"would ship blank.\nCheck the inference server "
+                        f"(`codicology doctor --full`) and run again; "
+                        f"nothing has been written.")
+                warmed = True
             opened = [Image.open(p).convert("RGB") for p in unseen]
             fresh = _read_pages_resiliently(unseen, opened, backend, cache)
             for im in opened:
@@ -7137,6 +7155,38 @@ def _reading_agrees(a_items, b_items) -> float:
     if not wa and not wb:
         return 1.0
     return len(wa & wb) / max(1, len(wa | wb))
+
+
+def warm_backend(backend) -> "str | None":
+    """Prove the recogniser is serving before any of its answers are kept.
+
+    Surya does not raise when its inference server is absent, still waking,
+    or speaking a different protocol — it returns an EMPTY result, which is
+    indistinguishable from a blank page. One run measured 1,536 such errors
+    and blanked 191 of 197 pages; a single cold page is enough to lose a
+    plate. So the first time a page must be read live, one synthetic page
+    carrying known words goes through first: a backend that cannot read
+    that cannot read anything, and the run stops rather than writing
+    emptiness into a book.
+
+    Only surya is probed. It is the backend with this failure mode, the
+    others raise like ordinary code, and probing would cost a test double a
+    scripted page it was never written to supply.
+
+    Returns None when the backend answers, or what came back instead.
+    """
+    if getattr(backend, "name", "") != "surya":
+        return None
+    from .doctor import _EXPECTED, _MIN_MATCHED, _test_page
+    try:
+        items = backend.run_items([_test_page()])[0]
+    except Exception as exc:
+        return f"{type(exc).__name__}: {exc}"
+    text = " ".join(_strip_tags(it.html or "") for it in items)
+    if len(_EXPECTED & set(re.findall(r"[a-z]+", text.lower()))) >= _MIN_MATCHED:
+        return None
+    seen = " ".join(text.split())
+    return f"read {seen[:60]!r}" if seen else "read nothing at all"
 
 
 def _read_pages_resiliently(paths: list[str], images: list,
