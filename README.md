@@ -1,11 +1,16 @@
 # codicology
 
-An EPUB conversion tool that takes a variety of inputs and uses a combination
-of Surya and Tesseract to OCR these source files into well-rendered EPUBs.
+Turns scanned or photographed books into EPUBs, using Surya to read the
+page and Tesseract as a second reader to check it.
 
-Codicology is the study of books as physical objects. This pipeline earns the
-name: it reasons about ink density, page geometry, printed folios, running
-heads, footnote rules, and gathering structure — not just the text.
+Input is a PDF, a folder of photographs, or video of someone turning
+pages. Output is an EPUB, and optionally a searchable PDF beside it.
+
+Codicology is the study of books as physical objects, and the pipeline
+works the same way: it uses the page's geometry — ink density, printed
+folios, running heads, footnote rules — and not only the recognised text.
+That is what lets it strip running heads, keep figures, link notes to
+their markers, and publish the printed page numbers.
 
 ## Install
 
@@ -35,18 +40,19 @@ This pipeline was built around Surya and only Surya. Everything it does
 beyond reading characters — figures, captions, running heads, headings,
 reading order, block geometry — depends on the layout Surya returns.
 
-`--ocr` also accepts `easyocr`, `paddleocr`, `tesseract`, and `gcv`. Those
-are residue. **Not one has ever been run against a real book here, and none
-is tested.** Each returns flat text and nothing else, so a book built on one
-would arrive with no figures, no furniture stripped, no headings, no
-contents and no note links — silently, because nothing downstream checks.
-They remain only because the seam they sit behind is honest. Treat them as
-unimplemented.
+`--ocr` also accepts `easyocr`, `paddleocr`, `tesseract`, and `gcv`.
+**Treat these as unimplemented.** None has been run against a real book
+here and none is tested. Each returns flat text and nothing else, so a
+book built on one would come out with no figures, no running heads
+stripped, no headings, no contents and no note links — and nothing
+downstream would report it. They exist only because the interface they
+sit behind is generic.
 
 ### Tesseract is the witness, not a backend
 
-It has no generator, so it cannot invent. Its silence on a page the model
-read paragraphs from is evidence, and two checks rest entirely on it:
+Tesseract has no language model behind it, so it cannot invent text. That
+makes its silence meaningful: if it reads nothing where Surya reported
+paragraphs, something is wrong. Two checks depend on it entirely:
 
 - whether a page with **no text layer to consult** was invented — on
   photographs, video, and image-only scans it is the *only* witness;
@@ -140,42 +146,47 @@ with `--pdf-text-layer`, one that searches and copies like a born-digital
 file — and it feeds back into `--pages-from` for every later rebuild, so
 the camera work is done exactly once.
 
-## What it does without being asked
+## What every build does
 
-- Pages rendered from a PDF are stored losslessly; figures are passed
-  through from the source PDF at their own resolution rather than cut from
-  a re-render, and ship as PNG or JPEG, whichever is smaller.
-- Printed page numbers are read and audited against reading order; the
-  EPUB carries a real page-list, with numbers the printer never inked
-  restored only where the book's own arithmetic supplies them.
-- Footnotes and endnotes are linked both directions — but only where the
-  binding is certain. Back-of-book endnotes, chapter endnotes, symbol
-  footnotes, and numbered same-page footnotes are distinguished by the
-  book's own layout, and a marker that cannot be bound with certainty is
-  left as printed. An unlinked superscript is the page as it always was; a
-  wrong link is misinformation wearing the book's authority.
-- A page whose OCR loops, or claims more words than its ink can account
-  for, is re-read and then left empty rather than filled with invention —
-  on born-digital sources it is restored from the publisher's own text.
-- Surya's layout labels are put to work: a one-line digit block the layout
-  invented over prose is verified against the ink and suppressed; an
-  orphaned note marker that fits the page's marker sequence is re-attached
-  as the superscript it was; a footnote region printed without its rule
-  gets one; a book with no printed contents page falls back to the labeled
-  heading hierarchy.
-- Where the source is born-digital its text is authority; where it is a
-  scan, its text layer is somebody else's OCR and serves only as a witness.
+No flags required for any of this.
+
+- **Images.** Pages are stored losslessly. Figures are taken from the
+  source PDF at their own resolution rather than cut out of a re-render,
+  and ship as PNG or JPEG, whichever is smaller.
+- **Page numbers.** Printed folios are read, checked against reading
+  order, and published as a real EPUB page-list, so a citation to the
+  print edition still resolves.
+- **Notes, linked both ways — where the binding is certain.** Back-of-book
+  endnotes, per-chapter endnotes, symbol footnotes and numbered same-page
+  footnotes are told apart by the book's own layout. A marker that cannot
+  be bound confidently is left as printed, on the view that no link beats
+  a wrong one.
+- **Structure.** Chapters come from the printed contents where it parses,
+  and otherwise from the book's own running heads, which name the chapter
+  on every page of it. Chapter titles are lifted to the top of the heading
+  outline so the EPUB has a usable document structure.
+- **Bad pages are caught, not filled in.** A page whose OCR loops, or
+  claims more words than its ink can account for, is re-read and then left
+  empty rather than invented. On born-digital sources it is restored from
+  the publisher's own text.
+- **Layout labels are used, not just the text.** A one-line digit block
+  the layout invented over prose is checked against the ink and dropped;
+  an orphaned note marker that fits the page's sequence is re-attached as
+  a superscript; a footnote region printed without its rule gets one.
+- **Born-digital text is authority.** On a scan, the embedded text layer
+  is somebody else's OCR — it is used as a witness, never as the answer.
 
 ## Research conveniences, behind flags
 
-Each of these is opt-in on the command line and a checkbox in the Calibre
-plugin:
+Each is off by default: a flag on the command line, a checkbox in the
+Calibre plugin.
 
 - `--link-notes` — footnotes and endnotes linked both directions (see
   above; the flag gates the whole family).
-- `--link-citations` — in-text citations bound to the bibliography,
-  driven *from* the bibliography, so a junk match is structurally
-  impossible; author–date and Chicago note styles.
+- `--link-citations` — in-text citations linked to the bibliography.
+  The prose is searched only for the names and years the bibliography
+  actually lists, so a stray "(New York, 1933)" is never a candidate.
+  Author–date and Chicago note styles.
 - `--link-index` — the index's printed page numbers become links, ranges
   and abbreviated forms (167–8) included, guarded by the book's own folio
   arithmetic.
@@ -186,47 +197,55 @@ plugin:
 
 ## Where the readers disagree
 
-`codicology adjudicate` re-reads every page with the witness engines
-beside the shipped text. The ~0.6% of words that genuinely differ go
-through a ladder: hyphenation and diacritics fold away first — they are
-policy, not disagreement; the book's own recurring vocabulary settles
-coinages, transliterations and proper nouns; a non-word loses to a word,
-with the scholarly apparatus (ff., op. cit., ibid.) counted as words so a
-book's conventions cannot lose to fluency; Apple Vision rereads the page
-where present; and what nothing settles is an abstain — recorded, never
-guessed. Measured on 2,591 truth-known disputes: lexicon 97.8% right,
-Vision 95.0%, dictionary 88.4%. The record never changes the book.
+`codicology adjudicate` re-reads every page with the witness engines and
+compares them to the shipped text. About 0.6% of words genuinely differ.
+Those go through a ladder, in order:
+
+1. **Fold.** Line-break hyphenation and diacritics are transcription
+   policy, not disagreement, so they are normalised away first.
+2. **The book's own vocabulary.** A word the engines agree on elsewhere in
+   this book is a word of this book — which is how coinages,
+   transliterations and proper nouns get settled without a dictionary
+   voting for the standard spelling.
+3. **The dictionary.** A non-word loses to a word. Scholarly apparatus
+   (ff., op. cit., ibid.) counts as words, so a book's own conventions are
+   not corrected into ordinary prose.
+4. **Apple Vision**, where it is available, re-reads the page.
+5. **Abstain** — recorded as unresolved rather than guessed. Measured against 2,545 disputes whose answer is known, from six
+born-digital books read both clean and artificially degraded: the book's
+own vocabulary is right 97.8% of the time, Vision 94.8%, the dictionary
+92.3%. Adjudication only ever writes a report; it never edits the book.
 
 `codicology review` renders that record as a single self-contained HTML
 sheet: the ink cropped beside every disputed word (geometry recorded at
 adjudication time, following hyphenated words across the line break),
-rows ranked by how likely the shipped reading is wrong, convention rows —
-the same pair repeating across a book — collapsed. Every row carries a
-free-text field, because the reader's own eye outranks every rung and may
-supply a reading no engine produced.
+rows ranked by how likely the shipped reading is to be wrong, and
+repeated pairs — the same disagreement recurring across a book, which is
+usually a convention rather than damage — collapsed into one row. Every
+row has a free-text field: you can enter a reading no engine produced,
+and it wins.
 
 Decisions exported from the sheet apply two ways: `codicology apply`
 corrects the EPUB in place (the original stays beside it as `.preapply`),
 or the file sits beside the OCR cache and the next rebuild picks it up
 via `convert --apply-decisions` — applied before the note, citation and
 index linkers run, so a corrected word can still earn its link. Either
-way, corrections land in text nodes only, at their recorded occurrence,
-and a decision whose site no longer exists is reported stale and left
-alone: a correction applied to the wrong site is worse than the misread
-it meant to fix.
+way, corrections land in text nodes only, at their recorded
+occurrence, and a decision whose site no longer exists is reported as
+stale and left alone rather than applied somewhere approximate.
 
-## The discipline
+## Checking a build
 
-Run `codicology verify` after every build. It answers the one question no
-run log answers: is anything missing? Every content loss this pipeline has
-ever shipped — a page cached empty, a page eaten by the duplicate detector,
-a text block swallowed by a drawn border — was invisible in the run log and
-visible there.
+Run `codicology verify` afterwards. A run log tells you what happened; it
+does not tell you what went missing. Every content loss this project has
+had — a page cached empty, a page removed by the duplicate detector, a
+text block swallowed by a drawn border — looked fine in the log and showed
+up in `verify`.
 
-`codicology compare` shows where our reading and the source's layer
-disagree. On born-digital books every disagreement is our error. On scans
-the layer is just another OCR, usually worse; matching word counts prove
-completeness, never agreement.
+`codicology compare` shows where our reading and the source's own text
+layer disagree. On a born-digital book, a disagreement is our error. On a
+scan, that layer is just another OCR pass and usually a worse one, so
+matching word counts show completeness, not correctness.
 
 ## Tests
 
