@@ -150,3 +150,25 @@ def test_a_running_head_abbreviates_its_chapter(vtb):
     Going Inside", which scores 0.59 against it."""
     assert vtb._names_chapter("Introduction: Going Inside", "INTRODUCTION")
     assert not vtb._names_chapter("Border security", "Border")
+
+
+def test_a_head_that_names_nothing_is_not_a_chapter(vtb):
+    """A manual prints its issue date and the bare word "Chapter" where a
+    book prints a title. Those pass every structural guard — long runs,
+    evenly spread — while naming nothing, they match no heading on any
+    page, and by existing at all they kept the printed contents from being
+    consulted for the heading outline."""
+    rows = []
+    for name in ("May 2014", "Chapter", "May 2014", "Chapter"):
+        rows += [f"{name} · {i}" for i in range(6)]
+    ch, st = vtb.chapters_from_furniture(heads(*rows))
+    assert ch == [], st
+
+
+def test_real_titles_survive_the_same_guard(vtb):
+    ch, _ = vtb.chapters_from_furniture(heads(
+        *[f"The Brazil Caper · {i}" for i in range(6)],
+        *[f"Places in the Mind · {i}" for i in range(6)],
+        *[f"DMT is Everywhere · {i}" for i in range(6)]))
+    assert [c.title for c in ch] == ["The Brazil Caper", "Places in the Mind",
+                                     "DMT is Everywhere"]

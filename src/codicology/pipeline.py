@@ -2431,6 +2431,17 @@ def _same_head(a: str, b: str) -> bool:
 # the run, degenerate ones run 1.0-1.2, and nothing legitimate falls between.
 CHAPTER_RUN_MIN_MEAN = 4.0
 
+# What a running head can say that is not a chapter's name. A manual prints
+# its issue date and the bare word "Chapter" where a book prints a title,
+# and those passed every structural guard — the runs were long and evenly
+# spread — while naming nothing. They matched no heading on any page, and
+# by existing at all they kept the printed contents from being consulted.
+_NOT_A_CHAPTER_NAME = re.compile(
+    r"^(chapter|part|section|book|volume|appendix|figure|table|page|"
+    r"continued|cont)$"
+    r"|^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*\d{1,4}$"
+    r"|^[\d\s./–—-]+$", re.I)
+
 
 def chapters_from_furniture(page_furniture: list[list[str]]
                             ) -> "tuple[list[Chapter], dict]":
@@ -2507,6 +2518,8 @@ def chapters_from_furniture(page_furniture: list[list[str]]
             merged[-1][2] = r[2]
         else:
             merged.append(list(r))
+    # A run named by something that is not a name is not a chapter.
+    merged = [r for r in merged if not _NOT_A_CHAPTER_NAME.match(r[0].strip())]
     stats["runs"] = len(merged)
     if len(merged) < 3:
         stats["refused"] = "fewer than three chapters"
@@ -2544,6 +2557,21 @@ def chapters_from_furniture(page_furniture: list[list[str]]
     return out, stats
 
 
+# How a book designates a division before naming it: "Chapter 1", "PART
+# ONE", "III.", "7". A contents line usually carries the designation and
+# the page it points at usually does not, so both are stripped before the
+# titles are compared. Four digits are left alone — a chapter called "1984"
+# is a title, not a number.
+_CHAPTER_MARK = re.compile(
+    r"^\s*(?:chapter|part|section|book|appendix)?\s*"
+    r"(?:\d{1,3}|[ivxlc]{1,7})\s*[:.\-—]?\s+", re.I)
+
+
+def _bare_title(t: str) -> str:
+    """A division's title with its designation taken off."""
+    return " ".join(_CHAPTER_MARK.sub("", t).split())
+
+
 def _names_chapter(heading: str, head: str) -> bool:
     """Whether a heading on the page is the chapter this running head names.
 
@@ -2560,6 +2588,14 @@ def _names_chapter(heading: str, head: str) -> bool:
     b = " ".join(head.lower().split())
     if _same_head(a, b):
         return True
+    # A contents line and the page it points at rarely agree about the
+    # chapter's number: the contents says "Chapter 1 Understanding the
+    # Strategic Context" and the page is headed by the title alone, or the
+    # reverse. Strip the designation from both and compare what is left.
+    ba, bb = _bare_title(a), _bare_title(b)
+    if ba and bb and _same_head(ba, bb):
+        return True
+    a, b = ba or a, bb or b
     if len(b) < 6 or len(a) < 6:
         return False
     lo, hi = (b, a) if len(b) <= len(a) else (a, b)
@@ -6426,8 +6462,33 @@ def build_epub(
     # because a span repeated twenty times is stronger evidence than a
     # single block that happened to be tagged a heading.
     furn_chapters, furn_stats = chapters_from_furniture(page_furniture)
-    if furn_chapters:
-        n_promoted = promote_chapter_headings(bodies, furn_chapters)
+    # Two sources describe the same skeleton, and the heading outline should
+    # take whichever it can get. Running heads name the chapter a reader is
+    # inside; the printed contents names it too, and on the books where the
+    # heads are a document designation or a publisher's URL — every field
+    # manual here — the contents is the only one that speaks. Measured: ten
+    # books have contents hierarchy and no usable running heads, and their
+    # outlines went uncorrected.
+    outline_chapters = []
+    if folios is not None:
+        placed_ch, _ = placed_and_pages
+        anchors = sorted({tgt: e.title for e, tgt, _ok in placed_ch
+                          if e.depth < 2 and tgt is not None}.items())
+        outline_chapters = [
+            Chapter(title, pg,
+                    (anchors[k + 1][0] - 1) if k + 1 < len(anchors)
+                    else len(bodies) - 1)
+            for k, (pg, title) in enumerate(anchors)]
+    # The contents leads, as it does for the nav: it is the book's own
+    # declaration, where the running heads are an inference from the
+    # margins — and a weak one on some books. One manual's heads yielded
+    # "May 2" and the bare word "Chapter" as chapter names, which matched
+    # no heading on any page AND, merely by existing, kept the contents
+    # from being consulted at all.
+    if not outline_chapters:
+        outline_chapters = furn_chapters
+    if outline_chapters:
+        n_promoted = promote_chapter_headings(bodies, outline_chapters)
         if n_promoted:
             print(f"    lifted {n_promoted} chapter title(s) to the top of "
                   f"the heading outline")
