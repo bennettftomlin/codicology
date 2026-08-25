@@ -7838,6 +7838,18 @@ def reconcile_native_text(bodies: list[str], page_paths: list[str]) -> int:
                 # read correctly. Authority does not extend to garbage.
                 if any(ord(c) < 32 for c in cand):
                     continue
+                # The layer is authority on WHICH words are on the page, not
+                # on how they are set. A book that prints a heading in small
+                # capitals stores it lowercase and lets the font do the
+                # capitals; Surya reads the printed glyphs. Deferring here
+                # took the source characters over the rendered page and
+                # downcased twenty-six section headings in one book —
+                # "CONCLUSION" eight times over — and turned an economist
+                # named McKinnon into Mckinnon. Measured across both
+                # born-digital books available: every case-only substitution
+                # was damage and none was a correction.
+                if ours[a0 + off].lower() == cand.lower():
+                    continue
                 if ours[a0 + off] != cand:
                     subs.append((a0 + off, cand))
         if not subs:

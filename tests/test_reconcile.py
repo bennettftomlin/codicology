@@ -191,3 +191,40 @@ def test_an_image_hanging_over_the_edge_cannot_over_cover(vtb):
 
 def test_a_page_with_no_images_is_covered_by_nothing(vtb):
     assert vtb._union_fraction([], 10, 10) == 0.0
+
+
+def _native(tmp_path, body, layer):
+    page = tmp_path / "page_0001.png"
+    page.write_bytes(b"")
+    (tmp_path / "page_0001.png.native").write_bytes(b"")
+    (tmp_path / "page_0001.png.layer.txt").write_text(layer, encoding="utf-8")
+    bodies = [body]
+    return bodies, [str(page)]
+
+
+def test_the_layer_does_not_get_to_recase_a_heading(vtb, tmp_path):
+    """A book that prints a heading in capitals may store it lowercase and
+    let the font draw the capitals; the recogniser reads the printed glyphs.
+    Deferring here downcased twenty-six section headings in one book and
+    turned an economist named McKinnon into Mckinnon. The layer is authority
+    on WHICH words are on the page, not on how they are set."""
+    words = ("but the layer stores it in lower case and the font is asked "
+             "to draw the capitals so this line").split()
+    body = "<h2>MARKETISING SHELTER FINANCE</h2><p>" + " ".join(words) + "</p>"
+    layer = "marketising shelter finance " + " ".join(words)
+    bodies, paths = _native(tmp_path, body, layer)
+    vtb.reconcile_native_text(bodies, paths)
+    assert "MARKETISING SHELTER FINANCE" in bodies[0]
+    assert "marketising shelter finance" not in bodies[0]
+
+
+def test_a_real_spelling_difference_is_still_taken(vtb, tmp_path):
+    """The guard must not shut the door on the substitutions that matter:
+    where the letters themselves differ, the publisher's text still wins."""
+    tail = ("and the rest of this line agrees exactly so that the run is "
+            "bounded on both sides by agreement").split()
+    body = "<p>the county of cook " + " ".join(tail) + "</p>"
+    layer = "the country of cook " + " ".join(tail)
+    bodies, paths = _native(tmp_path, body, layer)
+    assert vtb.reconcile_native_text(bodies, paths) == 1
+    assert "the country of cook" in bodies[0]
