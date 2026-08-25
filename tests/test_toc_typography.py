@@ -195,3 +195,39 @@ def test_a_lone_long_line_is_not_promoted_on_its_word_alone(vtb):
     ])
     titles = [e.title for e in vtb.parse_printed_toc(page)[0]]
     assert not any(t.startswith("Section rates") for t in titles)
+
+
+def test_a_part_ends_where_the_contents_stops_setting_lines_inside_it(vtb):
+    """Reading the parts is only half of it. A book's Conclusion is set
+    flush with its Introduction while every chapter inside a part is
+    indented under it — so once the parts were read, the Conclusion, being
+    merely the next line after the last of them, was filed inside Part IV.
+    A line cannot belong to a group whose members are set further in."""
+    page = _banner_page([
+        ("Introduction", "1", 0),
+        ("Part I: BETWEEN THE BLOCS AND EVERYTHING THEY CONTAINED", "", 0),
+        ("2. Yugoslavia", "25", 4),
+        ("3. Greece", "38", 4),
+        ("Conclusion", "207", 0),
+    ])
+    ents = vtb.parse_printed_toc(page)[0]
+    by = {e.title: e.depth for e in ents}
+    assert by["Conclusion"] == min(by.values()), by
+
+
+def test_a_chapter_set_level_with_its_part_still_belongs_to_it(vtb):
+    """The mirror case, and the reason the test is indent and not position:
+    where a book indents the banner instead of the chapters, the chapters
+    are not outdented relative to anything and the group stays open."""
+    page = _banner_page([
+        ("Part I. Poverty finance and the antinomies of colonialism", "", 11),
+        ("1. A colonial problem", "23", 0),
+        ("2. Nascent neoliberalism", "45", 0),
+        ("Part II. Making markets for poverty finance", "", 11),
+        ("4. Commercialising community", "85", 0),
+    ])
+    ents = vtb.parse_printed_toc(page)[0]
+    top = min(e.depth for e in ents)
+    assert [e.title for e in ents if e.depth == top] == [
+        "Part I. Poverty finance and the antinomies of colonialism",
+        "Part II. Making markets for poverty finance"]

@@ -3303,7 +3303,38 @@ def parse_printed_toc(bodies: list[str], limit: int = 25,
     ranked = _lift_trailing_apparatus(_infer_row_depths(entries))
     if ranked == entries:            # the prefix rule found nothing to read
         ranked = _lift_trailing_apparatus(_depths_from_typography(ranked))
-    return ranked, toc_pages
+    return _close_group_on_outdent(ranked), toc_pages
+
+
+def _close_group_on_outdent(entries: "list[TocEntry]") -> "list[TocEntry]":
+    """End a part when the contents stops setting lines inside it.
+
+    A row below a part banner belongs to that part, which is right until the
+    book finishes with its parts and goes back to speaking for itself. One
+    book's Conclusion is set flush with its Introduction while every chapter
+    inside a part is indented under it — so once the parts were read, the
+    Conclusion, being merely the next line after the last of them, was filed
+    inside Part IV.
+
+    A line cannot belong to a group whose members are set further in than it
+    is. That is the whole test: if anything between the banner and this row
+    is indented deeper than this row, the group has closed.
+    """
+    out = list(entries)
+    open_group = False
+    inside = None                # how far in this group's members are set
+    for i, e in enumerate(entries):
+        if e.depth == 0:
+            open_group, inside = True, None
+            continue
+        if not open_group:
+            continue
+        if inside is None:
+            inside = e.indent
+        elif e.indent < inside:
+            out[i] = e._replace(depth=0)
+            inside = None
+    return out
 
 
 def _lift_trailing_apparatus(entries: "list[TocEntry]") -> "list[TocEntry]":
