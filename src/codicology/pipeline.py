@@ -3088,6 +3088,50 @@ class TocEntry(NamedTuple):
     src_page: int = -1
 
 
+def _leads_indented_rows(el, indent: int, need: int = 2) -> bool:
+    """Whether the contents rows after this one are set further in than it.
+
+    A part banner carries no folio, and so does a stray line of prose that
+    happened to begin with the word Section. What separates them is what
+    follows: a grouping has its members set under it. Two are required, so
+    that one indented straggler cannot promote a line on its own.
+    """
+    deeper = 0
+    for sib in el.itersiblings("tr"):
+        raw = [td.text_content() or "" for td in sib.iter("td", "th")]
+        cells = [" ".join(r.split()) for r in raw]
+        if not any(cells):
+            continue
+        if next((len(r) - len(r.lstrip())
+                 for r, c in zip(raw, cells) if c), 0) <= indent:
+            return False
+        deeper += 1
+        if deeper >= need:
+            return True
+    return False
+
+
+def _peer_banners(el, word: str) -> bool:
+    """Whether the page prints other folio-less lines of the same designation.
+
+    A book that sets its chapters flush and indents the part banners instead
+    — one here does exactly that — offers no positional evidence at all.
+    What it does offer is a series: Part I, Part II, Part III, each printed
+    the same way and each without a page number. A line of prose that merely
+    opens with the word Section keeps no such company.
+    """
+    for sib in (list(el.itersiblings("tr", preceding=True))
+                + list(el.itersiblings("tr"))):
+        cells = [c for c in (" ".join((td.text_content() or "").split())
+                             for td in sib.iter("td", "th")) if c]
+        if len(cells) != 1:
+            continue
+        m = PART_HEAD.match(cells[0])
+        if m and m.group(1).lower() == word:
+            return True
+    return False
+
+
 def parse_printed_toc(bodies: list[str], limit: int = 25,
                       book_title: "str | None" = None
                       ) -> tuple[list[TocEntry], set[int]]:
@@ -3211,9 +3255,21 @@ def parse_printed_toc(bodies: list[str], limit: int = 25,
                     # contents groups its chapters under "BOOK SEVEN: The
                     # Revolt" lines that carry no page number, and dropping
                     # them flattened the book's own declared structure.
+                    # Length was standing in for structure. It fits a banner
+                    # named "BOOK SEVEN: The Revolt" and not one named for
+                    # everything it contains — "Part I: YUGOSLAVIA, GREECE,
+                    # POLAND AND LATVIA – Between the blocs" runs eleven
+                    # words and was thrown away, taking the book's four
+                    # parts with it. A line that the rows beneath it are
+                    # indented under is a grouping however long its name,
+                    # and that is the same evidence the depth rule reads.
                     full = re.sub(r"[\s.·…]+$", "", " ".join(cells))
-                    if PART_HEAD.match(full) \
-                            and 2 <= len(full.split()) <= 8:
+                    words = len(full.split())
+                    mark = PART_HEAD.match(full)
+                    if mark and words >= 2 and (
+                            words <= 8
+                            or _leads_indented_rows(el, indent)
+                            or _peer_banners(el, mark.group(1).lower())):
                         entries.append(TocEntry(full, None, "", 0))
     # The prefix rule first: where a book numbers its subsections (1)…(6)
     # that is an explicit declaration and outranks an inference from type.

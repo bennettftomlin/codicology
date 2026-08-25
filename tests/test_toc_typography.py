@@ -139,3 +139,59 @@ def test_back_matter_is_lifted_out_of_the_last_chapter(vtb):
     assert depths["Phenomenally Queer"] == 2, "real subsections still nest"
     # …and the book's own back matter is not one of that chapter's sections
     assert depths["Notes"] == 1 and depths["Index"] == 1
+
+
+def _banner_page(rows):
+    """A contents page where some rows carry no folio at all."""
+    out = ["<table>"]
+    for title, folio, indent in rows:
+        cell = f"<td>{' ' * indent}{title}</td>"
+        out.append(f"<tr>{cell}<td>{folio}</td></tr>" if folio
+                   else f"<tr>{cell}<td/></tr>")
+    out.append("</table>")
+    return ["<h1>Contents</h1>" + "".join(out)]
+
+
+def test_a_part_named_for_all_it_contains_is_still_a_part(vtb):
+    """Length was standing in for structure. A banner named after every
+    country in it runs past any word count worth setting, and four of them
+    were thrown away — taking the book's whole declared shape with them.
+    What marks it is the rows indented underneath."""
+    page = _banner_page([
+        ("Introduction", "1", 0),
+        ("Part I: YUGOSLAVIA, GREECE, POLAND AND LATVIA – Between the blocs",
+         "", 0),
+        ("2. Yugoslavia – Balancing Powers", "25", 4),
+        ("3. Greece – Allies at War with the Resistance", "38", 4),
+    ])
+    titles = [e.title for e in vtb.parse_printed_toc(page)[0]]
+    assert any(t.startswith("Part I:") for t in titles)
+
+
+def test_a_book_that_indents_its_banners_instead_still_gets_them(vtb):
+    """One book sets its chapters flush and indents the part lines, so
+    nothing is ever set deeper than a banner. The series is the evidence
+    there: Part I, Part II, Part III, each printed without a page number."""
+    page = _banner_page([
+        ("Part I. Poverty finance and the antinomies of colonialism", "", 11),
+        ("1. A colonial problem", "23", 0),
+        ("Part II. Making markets for poverty finance", "", 11),
+        ("4. Commercialising community", "85", 0),
+    ])
+    titles = [e.title for e in vtb.parse_printed_toc(page)[0]]
+    assert any(t.startswith("Part I.") for t in titles)
+    assert any(t.startswith("Part II.") for t in titles)
+
+
+def test_a_lone_long_line_is_not_promoted_on_its_word_alone(vtb):
+    """PART_HEAD matches anything opening with Section. Without rows set
+    under it and without company of its own kind, a long folio-less line
+    stays out — which is what keeps the relaxation from admitting prose."""
+    page = _banner_page([
+        ("Introduction", "1", 0),
+        ("Section rates were renegotiated annually by the standing committee",
+         "", 0),
+        ("1. A colonial problem", "23", 0),
+    ])
+    titles = [e.title for e in vtb.parse_printed_toc(page)[0]]
+    assert not any(t.startswith("Section rates") for t in titles)
