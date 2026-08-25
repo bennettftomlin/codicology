@@ -2562,9 +2562,22 @@ def chapters_from_furniture(page_furniture: list[list[str]]
 # the page it points at usually does not, so both are stripped before the
 # titles are compared. Four digits are left alone — a chapter called "1984"
 # is a title, not a number.
+_DESIGNATION = r"(?:chapter|part|section|book|appendix)"
+
+# A number a book spells out. Only ever read where a designation introduces
+# it: bare, "one" opens too many real titles to strip — "One Hundred Years
+# of Solitude" is not chapter one of anything.
+_NUMBER_WORD = (
+    r"(?:(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)"
+    r"(?:[-\s](?:one|two|three|four|five|six|seven|eight|nine))?"
+    r"|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
+    r"thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen)")
+
 _CHAPTER_MARK = re.compile(
-    r"^\s*(?:chapter|part|section|book|appendix)?\s*"
-    r"(?:\d{1,3}|[ivxlc]{1,7})\s*[:.\-—]?\s+", re.I)
+    r"^\s*(?:"
+    rf"{_DESIGNATION}\s+{_NUMBER_WORD}"
+    rf"|{_DESIGNATION}?\s*(?:\d{{1,3}}|[ivxlc]{{1,7}})"
+    r")\s*[:.\-—]?\s+", re.I)
 
 
 def _bare_title(t: str) -> str:
@@ -4006,15 +4019,30 @@ BOLD_HEAD_BLOCK = re.compile(
 
 # A heading that opens a chapter: the word, then the number the book counts
 # in. Roman is admitted because half the books here number that way, and the
-# strict parser refuses anything that is merely made of those letters.
+# strict parser refuses anything that is merely made of those letters. Books
+# that spell the number out count too — two here do, and leaving them out
+# left sixty openings split between a heading holding the number and a
+# heading holding the title, neither able to say what chapter it was.
 CHAPTER_HEAD = re.compile(
     r"<(h[1-6])[^>]*>\s*(?:<[^/][^>]*>\s*)*"
-    r"(CHAPTER|Chapter)\s+(\d{1,3}|[IVXL]{1,7})"
+    rf"(CHAPTER|Chapter)\s+(\d{{1,3}}|[IVXL]{{1,7}}|(?i:{_NUMBER_WORD}))"
     r"\s*[.:—-]?\s*(.*?)</\1>", re.S)
+
+_WORD_VALUE = {w: v for v, w in enumerate(
+    "one two three four five six seven eight nine ten eleven twelve thirteen "
+    "fourteen fifteen sixteen seventeen eighteen nineteen".split(), start=1)}
+_WORD_VALUE.update({w: v for v, w in zip(
+    range(20, 100, 10),
+    "twenty thirty forty fifty sixty seventy eighty ninety".split())})
 
 
 def _chapter_head_number(token: str) -> "int | None":
-    return int(token) if token.isdigit() else _roman_to_int(token)
+    if token.isdigit():
+        return int(token)
+    parts = [p for p in re.split(r"[-\s]+", token.lower()) if p]
+    if parts and all(p in _WORD_VALUE for p in parts):
+        return sum(_WORD_VALUE[p] for p in parts)
+    return _roman_to_int(token)
 
 
 def normalize_chapter_heads(bodies: list[str]) -> int:
@@ -6623,13 +6651,22 @@ def build_epub(
     # "May 2" and the bare word "Chapter" as chapter names, which matched
     # no heading on any page AND, merely by existing, kept the contents
     # from being consulted at all.
-    if not outline_chapters:
-        outline_chapters = furn_chapters
+    n_promoted = 0
     if outline_chapters:
-        n_promoted = promote_chapter_headings(bodies, outline_chapters)
-        if n_promoted:
-            print(f"    lifted {n_promoted} chapter title(s) to the top of "
-                  f"the heading outline")
+        n_promoted += promote_chapter_headings(bodies, outline_chapters)
+    # Then the heads, even when the contents already spoke. The contents
+    # names the divisions it ranks highest, and in a book built of Books or
+    # Parts those are the Parts — its forty-four chapters sit a level below
+    # the cut, so consulting the contents alone lifted two of them and left
+    # the rest at h3 under their own chapter numbers. The heads name those
+    # chapters directly. Letting the contents' mere existence silence them
+    # cost more than it ever saved: a title that matches no heading on any
+    # page promotes nothing, so a second source can only add.
+    if furn_chapters:
+        n_promoted += promote_chapter_headings(bodies, furn_chapters)
+    if n_promoted:
+        print(f"    lifted {n_promoted} chapter title(s) to the top of "
+              f"the heading outline")
 
     chapters = []
     for i, page_body in enumerate(bodies):

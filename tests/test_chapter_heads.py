@@ -235,3 +235,31 @@ def test_no_words_are_lost_when_a_break_is_recovered(vtb):
     vtb.promote_missing_chapter_heads(bodies)
     after = sorted(w for b in bodies for w in vtb._strip_tags(b).split())
     assert before == after
+
+
+def test_a_spelled_out_number_opens_a_chapter_too(vtb):
+    """Two books here count in words. Their openings arrived split — the
+    number in one heading, the title in the next — and neither heading
+    could say on its own what chapter it was."""
+    bodies = [
+        "<h2>CHAPTER EIGHT</h2><h3>THE GATHERING STORM</h3><p>Ink.</p>",
+        "<h2>CHAPTER NINE</h2><h3>THE PRINCE AND THE PAUPER</h3><p>More.</p>",
+    ]
+    assert vtb.normalize_chapter_heads(bodies) == 2
+    assert "<h2>CHAPTER EIGHT. THE GATHERING STORM</h2>" in bodies[0]
+    assert "<h3>" not in bodies[0]
+
+
+def test_a_merged_opening_still_answers_to_its_running_head(vtb):
+    """The merge and the promotion have to read the same number. When only
+    the merge understood a spelled-out one, every chapter it joined stopped
+    matching the head that named it and stayed off the top of the outline."""
+    assert vtb._names_chapter("CHAPTER EIGHT. THE GATHERING STORM",
+                              "THE GATHERING STORM")
+
+
+def test_a_title_that_merely_starts_with_a_number_word_is_left_whole(vtb):
+    """A spelled-out number counts only where a designation introduces it."""
+    for title in ("One Hundred Years of Solitude", "Three Body Problem",
+                  "Nine Inch Nails"):
+        assert vtb._bare_title(title) == title
