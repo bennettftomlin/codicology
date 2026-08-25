@@ -126,11 +126,16 @@ def test_the_apparatus_is_not_a_subsection(vtb):
         [(e.depth, e.title) for e in entries if e.depth < 2]
 
 
-def test_real_subsections_still_promote_past_the_apparatus(vtb):
-    """The guard must not cost a book that has both."""
+def test_back_matter_is_lifted_out_of_the_last_chapter(vtb):
+    """A contents ends with its apparatus set at the same indent as a
+    chapter's subsections, so all of it disappeared inside whichever
+    chapter came last — fourteen entries across seven books, including an
+    index filed under a chapter it has nothing to do with."""
     rows = book_rows() + [("Notes", 200, False, 0),
                           ("Index", 210, False, 0)]
     entries, _ = vtb.parse_printed_toc(contents(rows))
     depths = {e.title: e.depth for e in entries}
     assert depths["1 Currents of Queer"] == 1
-    assert depths["Notes"] == 2 and depths["Index"] == 2
+    assert depths["Phenomenally Queer"] == 2, "real subsections still nest"
+    # …and the book's own back matter is not one of that chapter's sections
+    assert depths["Notes"] == 1 and depths["Index"] == 1

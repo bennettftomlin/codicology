@@ -3206,10 +3206,38 @@ def parse_printed_toc(bodies: list[str], limit: int = 25,
     entries = [e._replace(indent=e.indent - floor.get(e.src_page, 0))
                for e in entries]
 
-    ranked = _infer_row_depths(entries)
+    ranked = _lift_trailing_apparatus(_infer_row_depths(entries))
     if ranked == entries:            # the prefix rule found nothing to read
-        ranked = _depths_from_typography(ranked)
+        ranked = _lift_trailing_apparatus(_depths_from_typography(ranked))
     return ranked, toc_pages
+
+
+def _lift_trailing_apparatus(entries: "list[TocEntry]") -> "list[TocEntry]":
+    """The book's back matter belongs to the book, not to its last chapter.
+
+    A contents ends with its apparatus — notes, bibliography, index,
+    glossary, the author's note — set at the same indent as a chapter's
+    subsections. Nested by that indent alone, all of it disappeared inside
+    whichever chapter happened to come last: fourteen such entries across
+    seven books, including one where the index sat under a chapter it has
+    nothing to do with.
+
+    Position is what separates the two cases, not the words. A References
+    line BETWEEN two chapters is that chapter's, and stays where it is;
+    only the run at the very END is the book's own, and it is lifted to
+    the top level where the book prints it.
+    """
+    # Only where the contents has a hierarchy to be buried in. A flat
+    # list has no last chapter to fall into, and lifting its tail would
+    # invent the structure this exists to correct.
+    if not any(e.depth < 2 for e in entries):
+        return entries
+    out = list(entries)
+    for i in range(len(out) - 1, -1, -1):
+        if out[i].depth != 2 or not APPARATUS_ROW.match(out[i].title):
+            break
+        out[i] = out[i]._replace(depth=1)
+    return out
 
 
 def _infer_row_depths(entries: "list[TocEntry]") -> "list[TocEntry]":
