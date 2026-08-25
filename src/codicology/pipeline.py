@@ -4217,6 +4217,7 @@ def nav_from_placed(placed, pos_of, kept, bodies, toc_pages,
     links: list = []
     verified = missed = 0
     next_id = iter(range(10 ** 9))
+    empties: list = []
     # Titles are hunted in reading order, starting past the contents —
     # a book's half-title repeats the chapter's words before the book
     # has begun, and would otherwise win chapter one every time.
@@ -4276,10 +4277,17 @@ def nav_from_placed(placed, pos_of, kept, bodies, toc_pages,
             sect: list = []
             while stack and stack[-1][0] >= e.depth:
                 stack.pop()
-            head = (make_section(e.title, f"page_{target:04d}.xhtml")
-                    if target is not None and target in pos_of
-                    else make_section(e.title, None))
-            stack[-1][1].append((head, sect))
+            href = (f"page_{target:04d}.xhtml"
+                    if target is not None and target in pos_of else None)
+            head = make_section(e.title, href)
+            slot = [(head, sect)]
+            stack[-1][1].append(slot)
+            # A grouping that ends up with no children must not ship as
+            # one: ebooklib writes an empty <ol/> for it, and an <ol> with
+            # no <li> is invalid in a nav document. Recorded here so the
+            # pass below can turn a childless grouping back into the plain
+            # link it always was.
+            empties.append((slot, e.title, href))
             stack.append((e.depth, sect))
             continue
         if target is None or target not in pos_of:
@@ -4290,7 +4298,28 @@ def nav_from_placed(placed, pos_of, kept, bodies, toc_pages,
         # shipping duplicate ids in nav.xhtml (C1/C2)
         stack[-1][1].append(make_link(f"page_{target:04d}.xhtml", e.title,
                                       f"toc{next(next_id)}-{pos_of[target]}"))
-    return links, verified, missed
+    # Childless groupings become links again, or vanish if they never
+    # resolved to a page — either way no empty <ol> reaches the reader.
+    for slot, title, href in empties:
+        if slot[0][1]:
+            continue
+        slot[0] = (("link", make_link(href, title, f"toc{next(next_id)}-g"))
+                   if href else None)
+    def _flatten(seq):
+        out = []
+        for item in seq:
+            if isinstance(item, list):          # a grouping's slot
+                item = item[0]
+                if item is None:                # never resolved: drop it
+                    continue
+                if item[0] == "link":           # pruned to a plain link
+                    out.append(item[1])
+                else:
+                    out.append((item[0], _flatten(item[1])))
+            else:
+                out.append(item)
+        return out
+    return _flatten(links), verified, missed
 
 
 def promote_missing_chapter_heads(bodies: list[str]) -> int:

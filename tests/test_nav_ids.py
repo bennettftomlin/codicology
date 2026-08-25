@@ -84,3 +84,30 @@ def test_an_unresolvable_grouping_stays_a_bare_heading(vtb):
     head, kids = links[0]
     assert head == ("section", "BOOK NOWHERE", None)
     assert [k[3] for k in kids] and missed == 0
+
+
+def test_a_childless_grouping_ships_as_a_link_not_an_empty_list(vtb):
+    """ebooklib writes <ol/> for a section with no children, and an <ol>
+    with no <li> is invalid in a nav document — five installed books were
+    shipping one. A grouping that ends up childless is the plain link it
+    always was."""
+    placed = [(_entry("Chapter One", 10, 1), 10, True),
+              (_entry("Chapter Two", 20, 1), 20, True),
+              (_entry("A Section", 21, 2), 21, True)]
+    links, _, _ = pl.nav_from_placed(
+        placed, {10: 0, 20: 1, 21: 2}, [10, 20, 21], ["", "", ""], set(),
+        make_link=_link, make_section=_section)
+
+    def grouping(x):
+        return isinstance(x, tuple) and len(x) == 2 and isinstance(x[1], list)
+
+    def walk(seq):
+        for item in seq:
+            if grouping(item):
+                assert item[1], f"empty grouping shipped: {item[0]}"
+                walk(item[1])
+    walk(links)
+    assert any(not grouping(x) and x[2] == "Chapter One" for x in links), \
+        "the childless chapter should ship as a link"
+    assert any(grouping(x) and x[0][1] == "Chapter Two" for x in links), \
+        "the chapter that has a section keeps its grouping"
