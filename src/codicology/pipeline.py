@@ -7856,8 +7856,14 @@ def reconcile_native_text(bodies: list[str], page_paths: list[str]) -> int:
                 # the publisher's lower case is right there. Anything deeper
                 # than the first letter — CONCLUSION, McKinnon, AAs — is the
                 # page's own setting and stays ours.
+                # A one-letter word has nothing after its first letter, so it
+                # cannot show which of the two this is, and conceding it
+                # broke a heading down the middle: FINDING A JOB came back
+                # as "FINDING a JOB". With no evidence, the page keeps what
+                # it prints.
                 mine = ours[a0 + off]
-                if mine.lower() == cand.lower() and mine[1:] != cand[1:]:
+                if mine.lower() == cand.lower() and (
+                        len(mine) == 1 or mine[1:] != cand[1:]):
                     continue
                 if ours[a0 + off] != cand:
                     subs.append((a0 + off, cand))

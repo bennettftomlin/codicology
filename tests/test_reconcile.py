@@ -256,3 +256,17 @@ def test_a_capitalised_abbreviation_is_not_a_sentence_boundary(vtb, tmp_path):
     bodies, paths = _native(tmp_path, body, layer)
     vtb.reconcile_native_text(bodies, paths)
     assert "Designate AAs" in bodies[0]
+
+
+def test_a_one_letter_word_keeps_the_case_the_page_prints(vtb, tmp_path):
+    """A single letter has nothing after its first letter, so it cannot show
+    whether it is a sentence opening or a word inside a heading. Conceding
+    it broke a heading down the middle: FINDING A JOB came back as
+    "FINDING a JOB"."""
+    tail = ("I chose the site because it was the largest in the city and the "
+            "rest of this line agrees exactly").split()
+    body = "<p>FINDING A JOB " + " ".join(tail) + "</p>"
+    layer = "finding a job " + " ".join(tail)
+    bodies, paths = _native(tmp_path, body, layer)
+    vtb.reconcile_native_text(bodies, paths)
+    assert "FINDING A JOB" in bodies[0]
