@@ -2567,11 +2567,19 @@ _DESIGNATION = r"(?:chapter|part|section|book|appendix)"
 # A number a book spells out. Only ever read where a designation introduces
 # it: bare, "one" opens too many real titles to strip — "One Hundred Years
 # of Solitude" is not chapter one of anything.
+#
+# Longest spelling first, and a boundary at the end. Alternation takes the
+# first branch that fits, not the longest: with the small numbers leading,
+# "FOURTEEN" matched "four" and left "TEEN" standing as the chapter's title.
+# That renumbered fourteen as four in the body AND in the endnotes, so the
+# two could no longer be aligned and every note link in the book was
+# withheld. Either guard alone would do; both are cheap.
 _NUMBER_WORD = (
     r"(?:(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)"
     r"(?:[-\s](?:one|two|three|four|five|six|seven|eight|nine))?"
-    r"|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
-    r"thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen)")
+    r"|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen"
+    r"|ten|eleven|twelve"
+    r"|one|two|three|four|five|six|seven|eight|nine)\b")
 
 _CHAPTER_MARK = re.compile(
     r"^\s*(?:"

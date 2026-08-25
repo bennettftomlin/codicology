@@ -263,3 +263,33 @@ def test_a_title_that_merely_starts_with_a_number_word_is_left_whole(vtb):
     for title in ("One Hundred Years of Solitude", "Three Body Problem",
                   "Nine Inch Nails"):
         assert vtb._bare_title(title) == title
+
+
+def test_a_teen_is_not_read_as_its_first_syllable(vtb):
+    """Alternation takes the first branch that fits, not the longest. With
+    the small numbers leading, fourteen was read as four and "TEEN" was left
+    behind as the chapter's title — renumbering the chapter in the body and
+    in the endnotes alike, which cost the book every one of its note links."""
+    for word, value in (("FOURTEEN", 14), ("SIXTEEN", 16), ("SEVENTEEN", 17),
+                        ("EIGHTEEN", 18), ("NINETEEN", 19), ("THIRTEEN", 13),
+                        ("FIFTEEN", 15), ("TWELVE", 12), ("TEN", 10)):
+        assert vtb._chapter_head_number(word) == value
+        bodies = [f"<h2>CHAPTER {word}</h2><h3>THE TITLE</h3><p>Ink.</p>"]
+        vtb.normalize_chapter_heads(bodies * 2)
+        assert vtb._bare_title(f"CHAPTER {word}. THE TITLE") == "THE TITLE"
+
+
+def test_every_chapter_number_survives_the_merge(vtb):
+    """The failure was silent per heading and only visible in aggregate: a
+    renumbered chapter still looks like a chapter."""
+    words = ("ONE TWO THREE FOUR FIVE SIX SEVEN EIGHT NINE TEN ELEVEN TWELVE "
+             "THIRTEEN FOURTEEN FIFTEEN SIXTEEN SEVENTEEN EIGHTEEN NINETEEN "
+             "TWENTY TWENTY-ONE").split()
+    bodies = [f"<h2>CHAPTER {w}</h2><h3>Title {i}</h3>"
+              for i, w in enumerate(words, start=1)]
+    vtb.normalize_chapter_heads(bodies)
+    seen = [vtb._chapter_head_number(m.group(1))
+            for b in bodies
+            for m in [__import__("re").search(r"CHAPTER ([A-Z-]+)\.", b)]
+            if m]
+    assert seen == list(range(1, len(words) + 1))
