@@ -3017,11 +3017,28 @@ def figure_has_content(img: Image.Image) -> bool:
 # no chapter: they are the front and back matter, and a chapter that
 # appears to subordinate them is an artefact of their being the only plain
 # rows on a page of bold ones.
-APPARATUS_ROW = re.compile(
-    r"\s*(notes?|references?|index|bibliography|works cited|"
-    r"acknowledge?ments?|preface|series preface|foreword|afterword|"
-    r"glossary|appendix|appendices|abbreviations|contributors|"
+_APPARATUS_WORD = re.compile(
+    r"\b(notes?|references?|index|bibliography|works cited|"
+    r"acknowledge?ments?|preface|foreword|afterword|"
+    r"glossary|chronolog(?:y|ies)|appendix|appendices|abbreviations|contributors|"
     r"further reading|about the author|credits|permissions)\b", re.I)
+
+
+def APPARATUS_ROW(title: str):
+    """Whether a contents line names the book's apparatus rather than a
+    part of its argument.
+
+    Usually the word opens the line. But a book may qualify it — "PERSONAL
+    ACKNOWLEDGMENTS" — and matching only at the start stopped the
+    back-matter walk dead there, stranding the NOTES and BIBLIOGRAPHY
+    printed above it inside the last chapter. So a short line counts
+    wherever the word falls. Short is the whole guard: at four words the
+    test starts claiming real sections ("The PCE Price Index"), while
+    every apparatus line a book actually prints is one or two.
+    """
+    t = " ".join((title or "").split())
+    return _APPARATUS_WORD.match(t) or (
+        _APPARATUS_WORD.search(t) if len(t.split()) <= 3 else None)
 
 # What a contents row can name that is not a division of the book. A
 # figure caption set in the same weight as a chapter title reads as a
@@ -3240,7 +3257,7 @@ def _lift_trailing_apparatus(entries: "list[TocEntry]") -> "list[TocEntry]":
     top = min(e.depth for e in entries)
     out = list(entries)
     for i in range(len(out) - 1, -1, -1):
-        if out[i].depth != 2 or not APPARATUS_ROW.match(out[i].title):
+        if out[i].depth != 2 or not APPARATUS_ROW(out[i].title):
             break
         out[i] = out[i]._replace(depth=top)
     return out
@@ -3331,7 +3348,7 @@ def _depths_from_typography(entries: "list[TocEntry]") -> "list[TocEntry]":
     # a plain row follows, adopted all three. Three books flattened that way
     # into "7 Conclusion" parenting the back matter. A row that names the
     # apparatus is evidence of nothing.
-    subs = {i for i in subs if not APPARATUS_ROW.match(entries[i].title)}
+    subs = {i for i in subs if not APPARATUS_ROW(entries[i].title)}
     if len(subs) < 3:
         return entries
     # Every row at the head level is a head. Requiring a subsection to
