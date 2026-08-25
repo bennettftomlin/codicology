@@ -3232,11 +3232,17 @@ def _lift_trailing_apparatus(entries: "list[TocEntry]") -> "list[TocEntry]":
     # invent the structure this exists to correct.
     if not any(e.depth < 2 for e in entries):
         return entries
+    # Lift to whatever rank this book's top level IS. A book divided into
+    # parts puts them at 0 and its chapters at 1, so lifting the back
+    # matter to 1 made it a sibling of the CHAPTERS — which the nav then
+    # nests inside the last part, exactly the burial this is meant to
+    # undo. Four books came out unchanged for that reason.
+    top = min(e.depth for e in entries)
     out = list(entries)
     for i in range(len(out) - 1, -1, -1):
         if out[i].depth != 2 or not APPARATUS_ROW.match(out[i].title):
             break
-        out[i] = out[i]._replace(depth=1)
+        out[i] = out[i]._replace(depth=top)
     return out
 
 
