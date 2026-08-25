@@ -157,3 +157,37 @@ def test_a_pdf_needs_near_identity_before_a_page_is_deleted(vtb):
     d2 = [x for x in v2 if x.status == "duplicate"]
     assert d2 and d2[0].score >= 0.90, (
         f"a genuinely duplicated leaf must still be caught: {d2}")
+
+
+def test_a_page_covered_by_several_images_is_a_scan(vtb):
+    """Whether a picture of the whole page sits behind the text is a question
+    about coverage, and a scan need not answer it with a single image: stored
+    as two tiles or as MRC layers, its largest piece can sit well under the
+    threshold while the page is completely covered. One book's cover measured
+    0.71 as its largest image and 1.0 as the union, and was being handed to
+    the reconciler as a publisher's typesetting."""
+    halves = [(0, 0, 10, 5), (0, 5, 10, 10)]
+    assert max((b[2] - b[0]) * (b[3] - b[1]) for b in halves) / 100 < 0.9
+    assert vtb._union_fraction(halves, 10, 10) >= 0.9
+
+
+def test_overlapping_images_are_counted_once(vtb):
+    """Summing the areas would make two overlapping halves cover the page
+    twice, and would call any busy born-digital page a scan."""
+    assert vtb._union_fraction([(0, 0, 10, 6), (0, 4, 10, 10)], 10, 10) == 1.0
+    assert vtb._union_fraction([(0, 0, 4, 4), (0, 0, 4, 4)], 10, 10) == 0.16
+
+
+def test_a_plate_with_room_for_its_caption_is_still_born_digital(vtb):
+    """The threshold's original job: a photographic plate covers at most about
+    nine tenths of its page, and the page around it is the publisher's own
+    text."""
+    assert vtb._union_fraction([(0, 0, 9, 9)], 10, 10) < 0.9
+
+
+def test_an_image_hanging_over_the_edge_cannot_over_cover(vtb):
+    assert vtb._union_fraction([(-5, -5, 15, 15)], 10, 10) == 1.0
+
+
+def test_a_page_with_no_images_is_covered_by_nothing(vtb):
+    assert vtb._union_fraction([], 10, 10) == 0.0

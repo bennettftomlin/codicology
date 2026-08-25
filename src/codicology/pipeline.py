@@ -3088,6 +3088,30 @@ class TocEntry(NamedTuple):
     src_page: int = -1
 
 
+def _union_fraction(boxes: list, pw: float, ph: float) -> float:
+    """How much of the page the given rectangles cover between them.
+
+    Overlap counts once, so two halves of a tiled scan come to the whole
+    page rather than to twice it. Coordinate compression rather than a
+    sweep line: a page carries a handful of images, so the grid is tiny and
+    the code can be read for correctness at a glance.
+    """
+    area = max(1e-6, pw * ph)
+    if not boxes:
+        return 0.0
+    xs = sorted({v for b in boxes for v in (b[0], b[2])})
+    ys = sorted({v for b in boxes for v in (b[1], b[3])})
+    covered = 0.0
+    for i in range(len(xs) - 1):
+        for j in range(len(ys) - 1):
+            cx, cy = (xs[i] + xs[i + 1]) / 2, (ys[j] + ys[j + 1]) / 2
+            if any(b[0] <= cx <= b[2] and b[1] <= cy <= b[3] for b in boxes):
+                covered += (xs[i + 1] - xs[i]) * (ys[j + 1] - ys[j])
+    # An image may be placed hanging over the page edge; the page cannot be
+    # more than covered.
+    return min(1.0, covered / area)
+
+
 def _leads_indented_rows(el, indent: int, need: int = 2) -> bool:
     """Whether the contents rows after this one are set further in than it.
 
@@ -7329,14 +7353,26 @@ def load_pages_from_pdf(pdf_path: str, pages_dir: str) -> list[str]:
             # a born-digital page does not. A photographic plate covers at
             # most about nine tenths of its page, leaving room for the
             # caption; a facsimile covers all of it.
-            behind = 0.0
+            # The union of the images, not the largest of them. "Is there a
+            # picture of the whole page behind this text" is a question about
+            # coverage, and a scan does not have to answer it with one image:
+            # stored as two tiles, or as MRC layers, its largest piece can sit
+            # well under the threshold while the page is completely covered.
+            # One book's cover does exactly that — largest 0.71, union 1.0 —
+            # and was being handed to the reconciler as a publisher's
+            # typesetting. The error is not symmetric, which is why this
+            # errs upward: calling a born-digital page a scan costs a
+            # correction we could have made, while calling a scan
+            # born-digital lets somebody else's OCR rewrite the author.
+            boxes = []
             for o in images:
                 try:
                     b = o.get_bounds()
-                    behind = max(behind, ((b[2] - b[0]) * (b[3] - b[1]))
-                                 / max(1e-6, pw_pt * ph_pt))
+                    boxes.append((min(b[0], b[2]), min(b[1], b[3]),
+                                  max(b[0], b[2]), max(b[1], b[3])))
                 except Exception:
                     pass
+            behind = _union_fraction(boxes, pw_pt, ph_pt)
             if not extracted and behind < 0.9:
                 open(out + ".native", "w").close()
         # Where this page came from. A figure cut out of the page raster is a
