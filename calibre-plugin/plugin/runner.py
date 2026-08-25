@@ -146,13 +146,23 @@ def _spawn_kwargs():
     return {"start_new_session": True}
 
 
-def _terminate(proc, grace=5.0):
+def _terminate(proc, grace=15.0):
     """
     Kill the child and everything it spawned.
 
     Surya starts workers, and 0.2x spawns a llama-server of its own, so
     killing the process we hold leaves inference running. Signalling the
     group is the only way to take the whole tree down.
+
+    Except for the llama-server, which is spawned into a session of its own
+    and is therefore not in the group at all. That one stops only because
+    the child, on its way out, tells it to — and the child gives it up to
+    ten seconds to go before forcing it. Five seconds here was less than
+    that, so a server slow to exit was signalled, then abandoned when this
+    killed the only process still waiting to escalate.
+
+    The grace costs nothing when things are healthy: the wait below returns
+    the moment the child exits, so it is a ceiling, not a delay.
     """
     if proc.poll() is not None:
         return
