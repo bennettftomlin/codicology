@@ -95,17 +95,6 @@ def test_a_division_that_names_no_division_is_still_a_grouping(vtb):
     assert parts and parts[0].depth == 0, [(e.depth, e.title) for e in entries]
 
 
-def test_a_lone_unnamed_heading_wrapping_the_book_is_the_title(vtb):
-    """One manual's contents was headed by its own name and shipped a nav
-    of a single parent holding all 129 other entries. A heading that opens
-    the list, adopts nearly all of it, and names no division is the book
-    announcing itself — whatever string was passed as the title."""
-    entries, _ = vtb.parse_printed_toc(
-        contents(book_rows(), head="FM 21-76 US ARMY SURVIVAL MANUAL"),
-        book_title="FM-21-76 Survival Manual")
-    assert not any(e.title.startswith("FM 21-76") for e in entries)
-
-
 def test_a_named_part_division_is_still_a_grouping(vtb):
     entries, _ = vtb.parse_printed_toc(
         contents(book_rows(), head="PART ONE: THE EARLY YEARS"),

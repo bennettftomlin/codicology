@@ -3209,39 +3209,7 @@ def parse_printed_toc(bodies: list[str], limit: int = 25,
     ranked = _infer_row_depths(entries)
     if ranked == entries:            # the prefix rule found nothing to read
         ranked = _depths_from_typography(ranked)
-    return _drop_wrapper_grouping(ranked), toc_pages
-
-
-def _drop_wrapper_grouping(entries: "list[TocEntry]") -> "list[TocEntry]":
-    """A grouping that holds the whole book is not a division of it.
-
-    A contents page headed by the book's own name gives that name a
-    grouping, and everything printed below it becomes its child: one
-    manual shipped a nav of a single parent, "FM 21-76 US ARMY SURVIVAL
-    MANUAL", wrapping all 129 of its other entries. Comparing the heading
-    against the book's title catches the plain cases and misses the
-    dressed-up ones — the title passed in was "FM-21-76 Survival Manual",
-    which is the same book and not the same string.
-
-    The shape gives it away without knowing the title at all: a real
-    division shares the contents with its siblings. One that opens the
-    list and adopts nearly all of it is a wrapper, and wrapping is what a
-    nav does anyway.
-    """
-    if len(entries) < 6:
-        return entries
-    tops = [i for i, e in enumerate(entries) if e.depth == 0]
-    if len(tops) != 1 or tops[0] != 0:
-        return entries
-    # A book may genuinely open with one part that holds everything printed
-    # after it, and such a part says so — "PART ONE", "BOOK 1". A wrapper
-    # that names no division is the title.
-    if PART_HEAD.match(entries[0].title):
-        return entries
-    below = len(entries) - 1
-    if below and sum(1 for e in entries[1:] if e.depth > 0) >= 0.9 * below:
-        return entries[1:]
-    return entries
+    return ranked, toc_pages
 
 
 def _infer_row_depths(entries: "list[TocEntry]") -> "list[TocEntry]":
