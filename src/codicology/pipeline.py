@@ -7848,7 +7848,16 @@ def reconcile_native_text(bodies: list[str], page_paths: list[str]) -> int:
                 # named McKinnon into Mckinnon. Measured across both
                 # born-digital books available: every case-only substitution
                 # was damage and none was a correction.
-                if ours[a0 + off].lower() == cand.lower():
+                # A difference confined to the FIRST letter is not that: it
+                # is a sentence boundary, and the layer knows where those
+                # are better than a recogniser reading one block at a time.
+                # One book had a figure reference swallowed, leaving the
+                # recogniser to capitalise the "illustrates" that followed;
+                # the publisher's lower case is right there. Anything deeper
+                # than the first letter — CONCLUSION, McKinnon, AAs — is the
+                # page's own setting and stays ours.
+                mine = ours[a0 + off]
+                if mine.lower() == cand.lower() and mine[1:] != cand[1:]:
                     continue
                 if ours[a0 + off] != cand:
                     subs.append((a0 + off, cand))

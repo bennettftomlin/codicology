@@ -228,3 +228,31 @@ def test_a_real_spelling_difference_is_still_taken(vtb, tmp_path):
     bodies, paths = _native(tmp_path, body, layer)
     assert vtb.reconcile_native_text(bodies, paths) == 1
     assert "the country of cook" in bodies[0]
+
+
+def test_a_difference_in_the_first_letter_alone_is_the_layer_s_to_call(vtb,
+                                                                      tmp_path):
+    """The case guard must not swallow sentence boundaries. One book had a
+    figure reference dropped, leaving the recogniser to capitalise the word
+    after it; the publisher's lower case is right there, and the difference
+    is confined to the first letter — unlike a heading in capitals, which
+    differs all the way through."""
+    tail = ("the alternatives for closing a recessionary gap and the rest of "
+            "the line agrees so the run is bounded").split()
+    body = "<p>Policy? Illustrates " + " ".join(tail) + "</p>"
+    layer = "Policy? illustrates " + " ".join(tail)
+    bodies, paths = _native(tmp_path, body, layer)
+    vtb.reconcile_native_text(bodies, paths)
+    assert "Policy? illustrates" in bodies[0]
+
+
+def test_a_capitalised_abbreviation_is_not_a_sentence_boundary(vtb, tmp_path):
+    """AAs differs from Aas beyond the first letter, so it is the page's own
+    setting and stays ours."""
+    tail = ("on terrain with natural screens and a developed road network "
+            "so that the run is bounded by agreement").split()
+    body = "<p>Designate AAs " + " ".join(tail) + "</p>"
+    layer = "Designate Aas " + " ".join(tail)
+    bodies, paths = _native(tmp_path, body, layer)
+    vtb.reconcile_native_text(bodies, paths)
+    assert "Designate AAs" in bodies[0]
