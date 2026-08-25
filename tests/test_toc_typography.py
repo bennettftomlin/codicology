@@ -58,14 +58,17 @@ def test_a_uniformly_bold_contents_stays_flat(vtb):
     assert all(e.depth == 2 for e in entries)
 
 
-def test_a_chapter_with_no_subsection_stays_a_leaf(vtb):
-    """An empty grouping in the nav is noise — the guard the prefix rule
-    already applied."""
+def test_a_chapter_with_no_subsections_is_still_a_chapter(vtb):
+    """Rank belongs to the level, not to what happens to follow. Requiring
+    a subsection after each head left one book's Chapter Five sitting
+    inside Chapter Four — set identically to it, but followed only by its
+    own References, which the apparatus test had set aside. A chapter with
+    nothing under it is a top-level entry, which is what the book prints."""
     rows = book_rows() + [("3 A Chapter Alone", 60, True, 0)]
     entries, _ = vtb.parse_printed_toc(contents(rows))
     depths = {e.title: e.depth for e in entries}
-    assert depths["3 A Chapter Alone"] == 2
-
+    assert depths["3 A Chapter Alone"] == 1
+    assert depths["Phenomenally Queer"] == 2, "its subsections still nest"
 
 def test_the_book_reprinting_its_title_does_not_adopt_the_chapters(vtb):
     """A contents running onto a second page reprints the book's title at

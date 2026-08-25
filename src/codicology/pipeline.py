@@ -3300,16 +3300,18 @@ def _depths_from_typography(entries: "list[TocEntry]") -> "list[TocEntry]":
     subs = {i for i in subs if not APPARATUS_ROW.match(entries[i].title)}
     if len(subs) < 3:
         return entries
+    # Every row at the head level is a head. Requiring a subsection to
+    # follow each one seemed safe — it stops an empty grouping — but rank
+    # is a property of the level, not of what happens to come next: one
+    # book's Chapter Five is set exactly like its Chapter Four and was
+    # left inside it, because the only row following Five was its
+    # References, which the apparatus test had already set aside. A
+    # chapter with nothing under it is a top-level entry, which is what
+    # the book prints. The guard that matters is the one above: unless
+    # this contents really has subsections, none of this runs at all.
     out = list(entries)
-    for k, i in enumerate(rows):
-        if i not in heads:
-            continue
-        nxt = rows[k + 1] if k + 1 < len(rows) else None
-        if nxt is None or nxt not in subs:
-            continue
-        if any(e.depth < 2 for e in entries[i + 1:nxt]):
-            continue
-        if NOT_A_DIVISION.match(entries[i].title):
+    for i in rows:
+        if i not in heads or NOT_A_DIVISION.match(entries[i].title):
             continue
         out[i] = entries[i]._replace(depth=1)
     return out
