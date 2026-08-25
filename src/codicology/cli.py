@@ -29,12 +29,49 @@ case — the old standalone scripts disagreed with each other about the
 order, and one of the two had to move.
 """
 import argparse
+import signal
 import sys
 
 from . import __version__
 
 
+def _exit_cleanly_on_signal() -> None:
+    """Turn a termination signal into an ordinary exit.
+
+    The inference server is spawned into its own session — deliberately, so
+    that it outlives one page's work and can be attached to again — which
+    puts it beyond the reach of any process-group kill aimed at us. Nothing
+    stops it except the `atexit` handler that the spawner registers, and
+    Python does not run `atexit` for a signal it never handled: the default
+    disposition terminates immediately.
+
+    So a stopped job left the server running. Measured on this machine: a
+    2 GB llama-server holding its port with its parent gone, and beside it
+    a detection server orphaned the same way eight days earlier. Converting
+    the signal to SystemExit runs the handlers, and the server goes with us.
+
+    Interactive Ctrl-C already unwinds through KeyboardInterrupt; this is
+    for SIGTERM, and for SIGHUP when the terminal goes away.
+    """
+    def bow_out(signum, _frame):
+        # 128+n is the shell's own convention for "died of signal n", so a
+        # caller reading the status still learns which one it was.
+        sys.exit(128 + signum)
+
+    for name in ("SIGTERM", "SIGHUP"):
+        sig = getattr(signal, name, None)
+        if sig is None:
+            continue                     # SIGHUP does not exist on Windows
+        try:
+            signal.signal(sig, bow_out)
+        except (ValueError, OSError):
+            # not the main thread, or the platform refuses: the build still
+            # runs, it just cleans up less well on an abort
+            pass
+
+
 def main(argv: "list[str] | None" = None) -> "int | None":
+    _exit_cleanly_on_signal()
     argv = list(sys.argv[1:] if argv is None else argv)
 
     # `convert` owns a large parser of its own, built where the pipeline
