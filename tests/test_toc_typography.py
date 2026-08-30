@@ -231,3 +231,79 @@ def test_a_chapter_set_level_with_its_part_still_belongs_to_it(vtb):
     assert [e.title for e in ents if e.depth == top] == [
         "Part I. Poverty finance and the antinomies of colonialism",
         "Part II. Making markets for poverty finance"]
+
+
+def _plain_page(html):
+    """A contents page set without a table: headings and paragraphs only."""
+    return ["<h1>Contents</h1>" + html]
+
+
+def test_a_contents_page_without_a_table_is_read_from_its_headings_too(vtb):
+    """One book sets CHAPTER ONE through SEVEN as headings and the rest as
+    paragraphs. The table-less reader looked only at paragraphs, so half the
+    book's designations were never seen at all."""
+    page = _plain_page(
+        "<h2>CHAPTER ONE</h2><p>The Collapse of the Middle Ages</p>"
+        "<p>CHAPTER TWO</p><p>Martin Luther and the Common People</p>")
+    titles = [e.title for e in vtb.parse_printed_toc(page)[0]]
+    assert titles == ["CHAPTER ONE. The Collapse of the Middle Ages",
+                      "CHAPTER TWO. Martin Luther and the Common People"], titles
+
+
+def test_a_line_broken_inside_a_paragraph_keeps_its_space(vtb):
+    """text_content() closes a <br/> up, so a title set over two lines came
+    out as one run-together word and then matched no heading in the book."""
+    page = _plain_page(
+        "<p>CHAPTER ONE</p>"
+        "<p>“All’s Right with the World”:<br/>The Collapse of the Middle Ages</p>")
+    t = vtb.parse_printed_toc(page)[0][0].title
+    assert "World”: The Collapse" in t, t
+
+
+def test_a_title_finished_on_the_next_line_is_put_back_together(vtb):
+    """A colon or a comma ending a contents line is the book saying the title
+    continues, and on a page with no rows it is the only such evidence. It is
+    also the one thing that keeps a year range attached to its chapter."""
+    page = _plain_page(
+        "<p>CHAPTER SEVEN</p>"
+        "<p>The Rise of the Working Classes: Trade Unions and Socialism,</p>"
+        "<p>1871–1914</p>")
+    titles = [e.title for e in vtb.parse_printed_toc(page)[0]]
+    assert titles == ["CHAPTER SEVEN. The Rise of the Working Classes: "
+                      "Trade Unions and Socialism, 1871–1914"], titles
+
+
+def test_a_bare_folio_on_a_table_less_page_is_not_a_title(vtb):
+    """The page numbers sit on lines of their own. They finish a title broken
+    before its year range and are otherwise dropped."""
+    page = _plain_page("<p>Acknowledgements</p><p>vii</p>"
+                       "<p>Introduction</p><p>viii</p>")
+    titles = [e.title for e in vtb.parse_printed_toc(page)[0]]
+    assert titles == ["Acknowledgements", "Introduction"], titles
+
+
+def test_a_designation_is_not_swallowed_by_the_one_before_it(vtb):
+    """Two designations in a row must not merge into each other."""
+    page = _plain_page("<p>CHAPTER ONE</p><p>CHAPTER TWO</p><p>A Real Title</p>")
+    titles = [e.title for e in vtb.parse_printed_toc(page)[0]]
+    assert titles == ["CHAPTER ONE", "CHAPTER TWO. A Real Title"], titles
+
+
+def test_a_page_that_merely_mentions_contents_is_not_one(vtb):
+    """"The top should be opened and the contents allowed to melt slowly" is
+    a manual talking about a thermos. Read as a contents page, it harvested
+    prose about canteens into the book's structure. A label stands on its
+    own; a common noun is preceded by an article."""
+    prose = ("<p>Conventional thermos bottles will keep liquids hot for about "
+             "24 hours. If they freeze, thaw them carefully to prevent "
+             "bursting. The top should be opened and the contents allowed to "
+             "melt slowly before drinking any of it at all.</p>") * 2
+    assert vtb.parse_printed_toc([prose])[0] == []
+
+
+def test_a_page_headed_table_of_contents_still_counts(vtb):
+    """The article rule must not catch the "of" in "table of contents"."""
+    page = ["<p>FIRST AID TABLE OF CONTENTS</p>"
+            "<p>Chapter One: Fundamental Criteria for First Aid</p>"
+            "<p>Chapter Two: Basic Measures for First Aid</p>"]
+    assert vtb.parse_printed_toc(page)[1] == {0}

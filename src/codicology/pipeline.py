@@ -3112,6 +3112,72 @@ def _union_fraction(boxes: list, pw: float, ph: float) -> float:
     return min(1.0, covered / area)
 
 
+# A contents line that is nothing but the designation — the book puts
+# "CHAPTER ONE" on one line and names the chapter on the next.
+_DESIGNATION_ONLY = re.compile(
+    rf"^\s*{_DESIGNATION}\s+(?:\d{{1,3}}|[ivxlcdm]+|{_NUMBER_WORD})"
+    r"\s*[.:—–-]?\s*$", re.I)
+
+# A line carrying no title at all: a folio, roman or arabic, or the date
+# range that finishes the title above it.
+_FOLIO_ONLY = re.compile(r"^\s*(?:[ivxlcdm]+|[\d\s.,:–—-]+)\s*$", re.I)
+
+
+def _line_text(el) -> str:
+    """An element's text with its line breaks kept as spaces.
+
+    A contents entry set over two lines carries a <br/>, and text_content()
+    closes it up: one book's chapter one arrived as "All's Right with the
+    World":The Collapse of the Middle Ages, which then matched no heading
+    anywhere in the book.
+    """
+    for br in el.iter("br"):
+        br.tail = " " + (br.tail or "")
+    return " ".join((el.text_content() or "").split())
+
+
+def _fold_contents_lines(lines: "list[str]") -> "list[str]":
+    """Put a designation back together with the title it introduces.
+
+    A contents page with no table gives each of these its own line, and read
+    separately neither says what chapter it is: sixteen chapters arrived as
+    thirty-two entries, half of them bare numbers. The same page also breaks
+    a long title across lines, and where it does the first half ends in a
+    comma — which is the only evidence offered that the line is unfinished.
+    """
+    out: "list[str]" = []
+    for line in lines:
+        starts_one = bool(_DESIGNATION_ONLY.match(line))
+        folio = bool(_FOLIO_ONLY.match(line))
+        unfinished = bool(out) and out[-1].rstrip().endswith((",", ":"))
+        if out and _DESIGNATION_ONLY.match(out[-1]) and not starts_one \
+                and not folio:
+            sep = "" if out[-1].rstrip().endswith((":", ".", "-", "—", "–")) else "."
+            out[-1] = f"{out[-1].rstrip()}{sep} {line}"
+        elif out and unfinished and not starts_one:
+            # An unfinished line. A colon or a comma ending a contents line
+            # is the book saying the title continues, and on a page with no
+            # rows to align it is the only such evidence offered. This is
+            # also the one thing that keeps a year range: "…and Socialism,"
+            # is finished by "1871–1914" and by nothing else.
+            out[-1] = f"{out[-1].rstrip()} {line}"
+        elif folio:
+            continue                 # a page number, standing on its own
+        else:
+            out.append(line)
+    return out
+
+
+# A page calls itself a contents page, as against merely mentioning the word.
+# "The top should be opened and the contents allowed to melt slowly" is a
+# manual talking about a thermos, and reading it as a contents page harvested
+# a page of prose about canteens into the book's structure. What separates
+# them is the article: a label stands on its own, a common noun is preceded
+# by one. "TABLE OF CONTENTS" keeps its "of" and is unaffected.
+_NAMES_ITSELF_CONTENTS = re.compile(
+    r"(?<!\bthe )(?<!\bits )(?<!\btheir )(?<!\bthis )(?<!\bwhose )contents\b")
+
+
 def _leads_indented_rows(el, indent: int, need: int = 2) -> bool:
     """Whether the contents rows after this one are set further in than it.
 
@@ -3195,7 +3261,8 @@ def parse_printed_toc(bodies: list[str], limit: int = 25,
         # stopping at the page break loses a third of the book's structure.
         short_lines = len([m for m in re.finditer(r"<p>([^<]{3,120})</p>", body)
                            if re.search(r"[A-Za-z]{3}", m.group(1))])
-        is_toc = ("contents" in text_open or looks_like_contents
+        is_toc = (bool(_NAMES_ITSELF_CONTENTS.search(text_open))
+                  or looks_like_contents
                   or (prev_was_toc and (rows_here >= 5 or short_lines >= 5)))
         prev_was_toc = is_toc
         if not is_toc:
@@ -3212,12 +3279,30 @@ def parse_printed_toc(bodies: list[str], limit: int = 25,
         # taken when the page yields no rows, so a real contents table is
         # never competing with the prose around it.
         if not body.count("</tr>"):
-            for el in root.iter("p"):
-                t = " ".join((el.text_content() or "").split())
-                t = re.sub(r"[\s.·…]+$", "", t)
-                if 3 <= len(t) <= 120 and re.search(r"[A-Za-z]{3}", t) \
-                        and not re.fullmatch(r"[\d\s.,:-]+", t):
-                    entries.append(TocEntry(t, None, "", 2))
+            # Headings as well as paragraphs. A page with no table still
+            # sets its designations as headings — one book puts CHAPTER ONE
+            # through SEVEN in <h2> and the rest in <p>, and reading only
+            # the paragraphs lost the first half of the book. They are not
+            # part divisions here: nothing on a table-less page is ranked,
+            # so everything arrives at one level, as before.
+            lines = []
+            for el in root.iter("p", "h1", "h2", "h3", "h4"):
+                t = re.sub(r"[\s.·…]+$", "", _line_text(el))
+                # A folio is carried this far, and no further: it is the only
+                # thing that can finish a title broken before its year range,
+                # and the fold drops it when it finishes nothing.
+                if not (t and len(t) <= 120):
+                    continue
+                if not _FOLIO_ONLY.match(t) and not (
+                        3 <= len(t) and re.search(r"[A-Za-z]{3}", t)):
+                    continue
+                if "contents" in t.lower():
+                    continue
+                if book_title and _same_head(t, book_title):
+                    continue
+                lines.append(t)
+            for t in _fold_contents_lines(lines):
+                entries.append(TocEntry(t, None, "", 2))
             continue
         for el in root.iter():
             if el.tag in ("h1", "h2", "h3", "h4"):
