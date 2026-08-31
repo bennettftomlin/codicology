@@ -73,3 +73,21 @@ def test_missing_library_degrades_to_a_no_op(vtb, tmp_path, monkeypatch):
 def test_the_witness_reads_a_page(vtb, tmp_path):
     words, conf = C.witness(_text_page(w=900, h=700, pitch=60), str(tmp_path))
     assert words >= 0 and 0.0 <= conf <= 100.0
+
+
+@needs_pd
+def test_scan_opt_in_rewrites_only_what_the_ladder_changed(vtb, tmp_path):
+    """--dewarp-scans: a bowed scan page is corrected on disk; a blank page
+    is left byte-identical — nothing is re-encoded for no reason."""
+    import os
+    bowed = _thin_bowed()
+    flat = np.full((700, 900, 3), 245, np.uint8)
+    p1 = str(tmp_path / "page_0000.png")
+    p2 = str(tmp_path / "page_0001.png")
+    cv2.imwrite(p1, bowed)
+    cv2.imwrite(p2, flat)
+    sig2 = open(p2, "rb").read()
+    vtb.dewarp_scan_pages([p1, p2], str(tmp_path))
+    after = cv2.imread(p1)
+    assert _bow_of(after) < _bow_of(bowed) * 0.6
+    assert open(p2, "rb").read() == sig2, "untouched page must not be rewritten"

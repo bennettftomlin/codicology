@@ -147,7 +147,10 @@ in by name (`--patch r060p1=folio60.jpg`) without redoing the capture.
 The `book.pdf` these paths produce is a facsimile of the physical book —
 with `--pdf-text-layer`, one that searches and copies like a born-digital
 file — and it feeds back into `--pages-from` for every later rebuild, so
-the camera work is done exactly once.
+the camera work is done exactly once. Pages loaded that way are left
+geometrically untouched: they have been through the ladder already, and
+warping them again would drift. A third-party scan that visibly leans or
+curls can opt in with `--dewarp-scans`.
 
 ## What every build does
 

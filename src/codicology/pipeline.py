@@ -7400,8 +7400,16 @@ def group_burst(paths: list[str], threshold: float | None = None) -> list[list[i
 
 
 def _prepare_page_image(img: np.ndarray, min_area_ratio: float, rotate: int,
-                        no_warp: bool, enhance: bool, deskew: bool) -> np.ndarray:
-    """Put one image through the same treatment a captured page receives."""
+                        no_warp: bool, enhance: bool, deskew: bool,
+                        dewarp: bool = False,
+                        workdir: str | None = None) -> np.ndarray:
+    """Put one image through the same treatment a captured page receives.
+
+    With dewarp set (and a workdir for the witness), a patch photograph
+    climbs the same geometry ladder as the pages around it — a patched
+    page used to stop at the rigid deskew and sit less corrected than its
+    neighbours.
+    """
     if rotate:
         img = rotate_image(img, rotate)
     if not no_warp:
@@ -7412,6 +7420,15 @@ def _prepare_page_image(img: np.ndarray, min_area_ratio: float, rotate: int,
         img = enhance_page(img)
     if deskew:
         img = deskew_page(img)
+    if dewarp and workdir:
+        img, modelled = dewarp_page(img)
+        if not modelled and _cubic.available():
+            cand, ok = _cubic.cubic_dewarp(img, workdir)
+            if ok:
+                _, ca = _cubic.witness(img, workdir)
+                _, cb = _cubic.witness(cand, workdir)
+                if cb >= ca - 1.0:
+                    img = cand
     return img
 
 
@@ -7502,7 +7519,9 @@ def apply_patches(page_paths: list[str], page_ids: list[str] | None,
             frame = frames[best]
         else:
             frame = frames[0]
-        img = _prepare_page_image(frame, min_area_ratio, rotate, no_warp, enhance, deskew)
+        img = _prepare_page_image(frame, min_area_ratio, rotate, no_warp,
+                                  enhance, deskew, dewarp=deskew,
+                                  workdir=pages_dir)
         out = os.path.join(pages_dir, f"patch_{idx:04d}.jpg")
         Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB)).save(
             out, "JPEG", quality=92, dpi=(300, 300)
@@ -7628,6 +7647,55 @@ def pages_from_images(
               f"the plain deskew — cubic-sheet dewarp is not installed; "
               f"pip install 'codicology[geometry]' may improve them")
     return page_paths, page_ids
+
+
+def dewarp_scan_pages(page_paths: list[str], pages_dir: str) -> None:
+    """Opt-in geometry for a third-party scan loaded with --pages-from.
+
+    The round-trip case must stay untouched — pages this script wrote have
+    been through the ladder once, and warping them again would drift — and
+    a shelf of already-square library scans has caches keyed to its exact
+    pixels. So nothing here runs by default. For the scan that genuinely
+    leans or curls, this applies the capture ladder minus the crop: no
+    outline detection (a scan fills its frame), then deskew, the line-model
+    dewarp, and the cubic sheet under the witness. Every changed page
+    invalidates its OCR cache entry, which is the point of opting in.
+    """
+    n_deskewed = n_dewarped = n_cubic = n_cubic_rej = n_cubic_cand = 0
+    for path in page_paths:
+        img = cv2.imread(path)
+        if img is None:
+            continue
+        before = img
+        img = deskew_page(img)
+        n_deskewed += img is not before
+        img, modelled = dewarp_page(img)
+        n_dewarped += modelled
+        if not modelled:
+            if _cubic.available():
+                cand, ok = _cubic.cubic_dewarp(img, pages_dir)
+                if ok:
+                    _, ca = _cubic.witness(img, pages_dir)
+                    _, cb = _cubic.witness(cand, pages_dir)
+                    if cb >= ca - 1.0:
+                        img = cand
+                        n_cubic += 1
+                    else:
+                        n_cubic_rej += 1
+            else:
+                n_cubic_cand += 1
+        if img is not before:
+            if path.lower().endswith((".jpg", ".jpeg")):
+                cv2.imwrite(path, img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+            else:
+                cv2.imwrite(path, img)
+    print(f"  scan geometry: {n_deskewed} page(s) deskewed, "
+          f"{n_dewarped} curve-modelled, {n_cubic} cubic-modelled"
+          + (f"; the witness refused {n_cubic_rej}" if n_cubic_rej else ""))
+    if n_cubic_cand:
+        print(f"  [~] {n_cubic_cand} page(s) the line finder declined kept "
+              f"the plain deskew — cubic-sheet dewarp is not installed; "
+              f"pip install 'codicology[geometry]' may improve them")
 
 
 def load_pages_from_pdf(pdf_path: str, pages_dir: str) -> list[str]:
@@ -8763,6 +8831,7 @@ def process_video(
     split_spreads: bool = True,
     rotate: int = 0,
     pages_from: str | None = None,
+    dewarp_scans: bool = False,
     dedupe: bool = True,
     review_sheet: str | None = None,
     drop_pages: list[str] | None = None,
@@ -8802,6 +8871,8 @@ def process_video(
         if pages_from:
             print(f"\n[1/2] Loading pages from {pages_from}…")
             page_paths = load_pages_from_pdf(pages_from, pages_dir)
+            if dewarp_scans:
+                dewarp_scan_pages(page_paths, pages_dir)
             ids = page_map or load_page_map(pages_from)
             if ids and len(ids) != len(page_paths):
                 print(f"  [!] page map lists {len(ids)} pages but the PDF holds "
@@ -9196,6 +9267,15 @@ def main(argv: "list[str] | None" = None) -> None:
                         help="Skip contrast/sharpness enhancement")
     parser.add_argument("--no-deskew", action="store_true",
                         help="Skip straightening each page against its own text lines")
+    parser.add_argument("--dewarp-scans", action="store_true",
+                        help="Run the geometry ladder (deskew, line-model "
+                             "dewarp, cubic sheet under the witness) on pages "
+                             "loaded with --pages-from. Off by default: pages "
+                             "this script wrote have been laddered once and "
+                             "would drift if warped again, and changing a "
+                             "scan's pixels invalidates its OCR cache. Opt in "
+                             "for a third-party scan that visibly leans or "
+                             "curls")
     parser.add_argument("--no-dewarp", action="store_true",
                         help="Skip modelling the binding's curve out of the text "
                              "lines (leptonica). A page the model declines already "
@@ -9326,6 +9406,7 @@ def _convert(args, parser) -> None:
         enhance=not args.no_enhance,
         deskew=not args.no_deskew,
         dewarp=not args.no_dewarp,
+        dewarp_scans=args.dewarp_scans,
         no_warp=args.no_warp,
         split_spreads=not args.no_split_spreads,
         rotate=args.rotate,
