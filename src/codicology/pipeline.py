@@ -4632,40 +4632,44 @@ def merge_missing_furniture(placed, missing, furn_total):
     depth = min((e.depth for e, _, _ in placed), default=2)
     out = list(placed)
     merged = 0
-    # The label the reader deserves. A running head abbreviates — one
-    # book's margins read MEDIA CONTENT, 2 across a chapter the contents
-    # names in full — and where an UNPLACED entry names the chapter the
-    # margins located, the two halves complete each other: the margins
-    # prove the destination, the contents provides the words. Each entry
-    # lends its title once.
+    # Resolution before insertion. Where an UNRESOLVED entry — leaf or
+    # grouping — names the chapter the margins located, the entry is given
+    # the margins' page rather than a copy of the margins' words: the
+    # contents keeps its own title and its own position, the furniture
+    # supplies the destination, and nothing duplicates. Inserted alongside
+    # instead, one book's chapter three arrived twice — an abbreviated
+    # head-link above the real grouping, with the neighbouring chapter's
+    # section caught between them. The head may be cut mid-word (MEDIA
+    # CONTENT, 2 is the front of a title ending 2006), so the naming test
+    # here is looser than coverage's, and safely so: one direction only,
+    # the head abbreviating the entry, and its worst failure is a link on
+    # a heading that already stands where the book put it.
     lent: set = set()
-    unplaced = [(k, e) for k, (e, t, _) in enumerate(placed)
-                if t is None and e.depth >= 2]
+    unresolved = [(k, e) for k, (e, t, _) in enumerate(placed) if t is None]
     for c in sorted(missing, key=lambda c: c.start):
         if not re.search(r"[A-Za-z]{3}", c.title):
             continue
-        title = c.title
         head_core = re.sub(r"[^a-z]", "", _bare_title(c.title.lower()))
-        for k, e in unplaced:
+        home = None
+        for k, e in unresolved:
             if k in lent:
                 continue
             entry_core = re.sub(r"[^a-z]", "", _bare_title(e.title.lower()))
-            # The head may be cut mid-word — MEDIA CONTENT, 2 is the front
-            # of a title ending in 2006 — so the lending test is looser
-            # than coverage's, and safely so: it only ever chooses WORDS
-            # for a chapter already proven missing and already anchored.
-            # One direction only: the head abbreviates the entry, never
-            # the reverse, or a generic short entry would lend itself to
-            # any longer head.
             if (_names_chapter(e.title, c.title)
                     or _names_chapter(c.title, e.title)
                     or (len(head_core) >= 8
                         and entry_core.startswith(head_core))):
-                title, _drop = e.title, lent.add(k)
+                home = k
+                lent.add(k)
                 break
+        if home is not None:
+            e, _t, ok = out[home]
+            out[home] = (e, c.start, ok)
+            merged += 1
+            continue
         at = next((k for k, (_, t, _) in enumerate(out)
                    if t is not None and t > c.start), len(out))
-        out.insert(at, (TocEntry(title, None, "", depth), c.start, False))
+        out.insert(at, (TocEntry(c.title, None, "", depth), c.start, False))
         merged += 1
     return out, merged
 

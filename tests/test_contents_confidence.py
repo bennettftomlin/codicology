@@ -202,16 +202,22 @@ def test_the_contents_page_is_not_a_chapter_of_the_book(vtb):
     assert not vtb._NOT_A_CHAPTER_NAME.match("Contents Under Pressure")
 
 
-def test_a_merged_chapter_takes_the_contents_own_words(vtb):
-    """The margins abbreviate; where an unplaced entry names the chapter
-    they located, the merge uses its full printed title."""
+def test_a_located_chapter_resolves_its_own_entry_in_place(vtb):
+    """The margins abbreviate — MEDIA CONTENT, 2 is the front of a title
+    ending 2006 — and inserting their copy put one chapter in the nav
+    twice, an abbreviated link above the real grouping. Where an
+    unresolved entry names the chapter the margins located, the entry is
+    given the margins' page instead: its own words, its own position, a
+    real destination, and nothing duplicated."""
     placed = [(vtb.TocEntry("3 Media Content: Press and TV Samples, 2006",
-                            None, "", 2), None, False),
+                            None, "", 1), None, False),
               (vtb.TocEntry("Introduction", None, "", 2), 4, True)]
     furn = _chapters(vtb, [("MEDIA CONTENT, 2", 60, 84)])
     missing = vtb.furniture_absent_from_contents(placed, furn, _pos_of(100))
     merged, n = vtb.merge_missing_furniture(placed, missing, 1)
     assert n == 1
-    titles = [e.title for e, _, _ in merged]
-    assert "3 Media Content: Press and TV Samples, 2006" in titles
-    assert "MEDIA CONTENT, 2" not in titles
+    assert len(merged) == len(placed), "resolved in place, not inserted"
+    e, t, _ = merged[0]
+    assert e.title == "3 Media Content: Press and TV Samples, 2006"
+    assert t == 60
+    assert not any(e.title == "MEDIA CONTENT, 2" for e, _, _ in merged)
