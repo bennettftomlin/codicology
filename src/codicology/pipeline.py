@@ -568,13 +568,32 @@ def limit_quad(corners: np.ndarray, cap: float = MAX_QUAD_SKEW) -> np.ndarray:
     return ((1 - hi) * corners + hi * box).astype(np.float32)
 
 
+# A side counts as clipped only when this many distinct strokes press the
+# edge, each at least this thick. Measured at the probe's 800px scale on a
+# photographed book: a KEPT page-edge crease — the thin dark line where the
+# page meets its own stack, bright paper behind it — produces 0-4 such
+# components across every sampled page (it is one long thin line, dashed or
+# not, and thinness is what it cannot escape); pages deliberately cropped
+# into their own text produce 21-48 per cut side, because every ascender is
+# its own thick component. The first guard shipped without this test and
+# grew quads on ~117 of 130 healthy pages — "harmless extra border" that
+# changed every page's hash and re-paid an hour of OCR, because cache
+# identity rides on the pixels. A clip of less than a line's worth of
+# letters (a corner nicking two words) sits below the count and is accepted
+# as a miss; it is also the least damaging clip there is.
+CLIPPED_MIN_STROKES = 8
+CLIPPED_MIN_THICK = 5
+
+
 def _clipped_sides(image: np.ndarray, guard_px: int = 8) -> "list[str]":
-    """Which edges of a warped page have ink pressed against them.
+    """Which edges of a warped page have text pressed against them.
 
     A page whose text touches the canvas edge was cropped by its quad, not
     framed by it — the outline is a guess made against shadow and a curled
     fore-edge, and the text is the truth about where the page's content
-    ends. Probed at reduced width so the answer costs milliseconds.
+    ends. "Text" is judged by shape: many distinct thick strokes touching
+    the edge band, which a page-edge crease cannot counterfeit. Probed at
+    reduced width so the answer costs milliseconds.
     """
     g = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
     h, w = g.shape[:2]
@@ -582,48 +601,58 @@ def _clipped_sides(image: np.ndarray, guard_px: int = 8) -> "list[str]":
     small = cv2.resize(g, (800, max(8, int(h * scale)))) if w > 800 else g
     k = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
     st = cv2.morphologyEx(small, cv2.MORPH_BLACKHAT, k)
-    ink = st > max(12.0, float(np.percentile(st, 99)) * 0.35)
+    ink = (st > max(12.0, float(np.percentile(st, 99)) * 0.35)).astype(np.uint8)
     # A quad lying exactly on the page boundary samples a sliver of desk at
     # the border, and that one-pixel dark line reads as ink pressed against
     # every edge it runs along. Genuinely clipped text extends inward well
     # past it, so the outermost ring is ignored, not the guard band.
-    ink[:2, :] = ink[-2:, :] = False
-    ink[:, :2] = ink[:, -2:] = False
+    ink[:2, :] = ink[-2:, :] = 0
+    ink[:, :2] = ink[:, -2:] = 0
     if not ink.any():
         return []
     guard = max(3, int(guard_px * scale)) if w > 800 else guard_px
-    cols = np.where(ink.sum(0) > 2)[0]
-    rows = np.where(ink.sum(1) > 2)[0]
+    deep = guard * 3
 
-    # As a RETROSPECTIVE diagnostic on generous-quad builds this probe
-    # over-flags: a photographed page edge kept inside the canvas is a thin
-    # dark line on bright paper, indistinguishable here from clipped
-    # letters (121 of 130 pages of a book with visibly healthy margins).
-    # In the pipeline that costs nothing — after a tight quad, the only
-    # kind that clips, the boundary was cropped out and cannot false-fire;
-    # after a generous quad a false alarm buys at most two 3.5% growths of
-    # extra border. Judge old builds by eye, not by this.
     def on_paper(band, band_ink):
         # Text can only be cropped where the canvas edge lands ON the page:
         # a bright band with ink is clipped letters, a dark band is desk or
         # edge-curl the quad chose to keep, cropping nothing. Judged on the
         # band's non-ink pixels, so the letters themselves cannot darken
         # the verdict.
-        bg = band[~band_ink] if (~band_ink).any() else band
+        bg = band[band_ink == 0] if (band_ink == 0).any() else band
         return float(np.median(bg)) > 150
 
+    def strokes(strip, touch, perp):
+        # Components in the wider strip that both touch the edge band and
+        # are thick enough to be letter strokes rather than a crease.
+        n, _, stats, _ = cv2.connectedComponentsWithStats(strip)
+        if n <= 1:
+            return 0
+        s = stats[1:]
+        return int((touch(s) & (perp(s) >= CLIPPED_MIN_THICK)).sum())
+
+    W, L = cv2.CC_STAT_WIDTH, cv2.CC_STAT_LEFT
+    H, T = cv2.CC_STAT_HEIGHT, cv2.CC_STAT_TOP
     sh, sw = small.shape[:2]
     sides = []
-    if cols.size and cols.min() <= guard and on_paper(
+    if strokes(ink[:, :deep + 1],
+               lambda s: s[:, L] <= guard,
+               lambda s: s[:, W]) >= CLIPPED_MIN_STROKES and on_paper(
             small[:, :guard + 1], ink[:, :guard + 1]):
         sides.append("left")
-    if cols.size and cols.max() >= sw - 1 - guard and on_paper(
+    if strokes(ink[:, sw - 1 - deep:],
+               lambda s: s[:, L] + s[:, W] >= deep + 1 - guard,
+               lambda s: s[:, W]) >= CLIPPED_MIN_STROKES and on_paper(
             small[:, sw - 1 - guard:], ink[:, sw - 1 - guard:]):
         sides.append("right")
-    if rows.size and rows.min() <= guard and on_paper(
+    if strokes(ink[:deep + 1, :],
+               lambda s: s[:, T] <= guard,
+               lambda s: s[:, H]) >= CLIPPED_MIN_STROKES and on_paper(
             small[:guard + 1, :], ink[:guard + 1, :]):
         sides.append("top")
-    if rows.size and rows.max() >= sh - 1 - guard and on_paper(
+    if strokes(ink[sh - 1 - deep:, :],
+               lambda s: s[:, T] + s[:, H] >= deep + 1 - guard,
+               lambda s: s[:, H]) >= CLIPPED_MIN_STROKES and on_paper(
             small[sh - 1 - guard:, :], ink[sh - 1 - guard:, :]):
         sides.append("bottom")
     return sides
