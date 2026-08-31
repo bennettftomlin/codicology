@@ -4559,6 +4559,93 @@ def reattach_orphan_markers(items: list, furn_numbers: set,
     return reattached, suppressed
 
 
+def furniture_absent_from_contents(placed, furn_chapters, pos_of):
+    """The chapters the running heads describe that the contents never gave
+    the reader: no placed entry lands on the chapter's opening pages, and no
+    entry's title names it.
+
+    Title cover counts even for an entry that failed to place — the contents
+    still declares that chapter, and adding a second copy from the margins
+    would duplicate it rather than rescue it.
+    """
+    targets = {t for _, t, _ in placed if t is not None}
+
+    def covered(c):
+        if any(abs(t - c.start) <= 1 for t in targets):
+            return True
+        return any(_names_chapter(e.title, c.title)
+                   or _names_chapter(c.title, e.title)
+                   for e, _, _ in placed)
+
+    return [c for c in furn_chapters
+            if c.start in pos_of and not covered(c)]
+
+
+def merge_missing_furniture(placed, missing, furn_total):
+    """Give the nav the chapters the margins describe, where the printed
+    contents plainly failed to.
+
+    The printed contents is the book's own declaration and outranks an
+    inference from its running heads, so a small disagreement is only
+    reported. But a parse that misses at least three chapters AND at least
+    half of what the heads independently describe has failed — one book
+    shipped seven nav entries for 288 pages while its margins named the
+    chapters plainly. Merged, never replaced: everything the contents did
+    place is kept, and the absent chapters are added in page order, each
+    anchored where its own running heads begin.
+    """
+    if len(missing) < 3 or 2 * len(missing) < furn_total:
+        return placed, 0
+    depth = min((e.depth for e, _, _ in placed), default=2)
+    out = list(placed)
+    for c in sorted(missing, key=lambda c: c.start):
+        at = next((k for k, (_, t, _) in enumerate(out)
+                   if t is not None and t > c.start), len(out))
+        out.insert(at, (TocEntry(c.title, None, "", depth), c.start, False))
+    return out, len(missing)
+
+
+def contents_confidence(placed, n_pages, missed, furn_unmerged):
+    """Warnings for a contents parse that deserves a human eye.
+
+    Every bad parse found on this shelf had its signature sitting in the
+    build log, printed and never compared: seven entries for a 288-page
+    book, chapters four and five printed with one to three nowhere, the
+    margins describing chapters the nav never mentioned. Each check here is
+    a comparison the log was already in a position to make. Warnings only —
+    nothing downstream reads them.
+    """
+    warns = []
+    n = len(placed)
+    if n and n_pages >= 60 and n * 40 < n_pages:
+        warns.append(f"contents parse looks sparse: {n} entr"
+                     f"{'y' if n == 1 else 'ies'} for {n_pages} pages")
+    if n and missed >= max(3, n // 4):
+        warns.append(f"{missed} of {n} contents entries never placed "
+                     f"in the book")
+    if furn_unmerged >= 3:
+        warns.append(f"running heads describe {furn_unmerged} chapter(s) "
+                     f"the contents never placed")
+    nums = set()
+    for e, _, _ in placed:
+        t = e.title.strip()
+        m = re.match(r"chapter\s+([A-Za-z0-9-]+)", t, re.I)
+        v = _chapter_head_number(m.group(1)) if m else None
+        if v is None:
+            m = re.match(r"(\d{1,3})\b(?!\s*[-\u2013])", t)
+            v = int(m.group(1)) if m else None
+        if v is not None and v < 200:
+            nums.add(v)
+    if len(nums) >= 2:
+        gaps = sorted(set(range(1, max(nums))) - nums)
+        if len(gaps) >= 2:
+            shown = ", ".join(map(str, gaps[:6]))
+            warns.append(f"chapters {min(nums)}\u2013{max(nums)} are printed "
+                         f"but {len(gaps)} number(s) never parsed: {shown}"
+                         + (", \u2026" if len(gaps) > 6 else ""))
+    return warns
+
+
 def nav_from_placed(placed, pos_of, kept, bodies, toc_pages,
                     make_link, make_section) -> tuple:
     """The printed contents as a nav tree: links, nested sections, and the
@@ -6998,6 +7085,14 @@ def build_epub(
         # earlier and this nav — instead of two calls that could silently
         # diverge as bodies mutate between them (C6)
         placed, toc_pages = placed_and_pages
+        # The margins as a check on the parse, not only a fallback for its
+        # absence. Local copy: the shared placement drives the note linker
+        # too, and the merge is a nav decision.
+        missing_ch = (furniture_absent_from_contents(placed, furn_chapters,
+                                                     pos_of)
+                      if furn_chapters else [])
+        placed, n_merged = merge_missing_furniture(placed, missing_ch,
+                                                   len(furn_chapters))
         links, verified, missed = nav_from_placed(
             placed, pos_of, kept, bodies, toc_pages,
             make_link=lambda href, title, uid: epub.Link(href, title, uid),
@@ -7014,11 +7109,19 @@ def build_epub(
                   f"{verified} title-verified, {missed} unplaced"
                   + (f", {len(entries)} numbered entries" if entries else ""))
     if toc_built and furn_chapters:
-        # Reported, never merged: the printed contents is the book's own
-        # declaration and outranks an inference from its margins. A wide
-        # disagreement means one of them is wrong and a human should look.
+        # The printed contents is the book's own declaration and outranks an
+        # inference from its margins — so a small disagreement is reported
+        # and left alone. A parse that missed half of what the heads
+        # describe has failed, and those chapters were merged in above.
         print(f"    running heads independently describe "
               f"{len(furn_chapters)} chapter(s)")
+        if n_merged:
+            print(f"    [!] the printed contents missed {n_merged} of them; "
+                  f"added to the nav at the pages their running heads span")
+    if toc_built:
+        for w in contents_confidence(placed, len(bodies), missed,
+                                     0 if n_merged else len(missing_ch)):
+            print(f"    [!] {w}")
     if not toc_built and furn_chapters:
         links = [epub.Link(f"page_{c.start:04d}.xhtml", c.title,
                            f"rh{k}-{c.start}")

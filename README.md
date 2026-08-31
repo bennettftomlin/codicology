@@ -163,8 +163,12 @@ No flags required for any of this.
   a wrong one.
 - **Structure.** Chapters come from the printed contents where it parses,
   and otherwise from the book's own running heads, which name the chapter
-  on every page of it. Chapter titles are lifted to the top of the heading
-  outline so the EPUB has a usable document structure.
+  on every page of it. The two are also checked against each other: a
+  contents parse that missed half of what the heads describe has its
+  missing chapters merged back in, and a parse that looks wrong — sparse
+  for the page count, gaps in its chapter numbers, entries that never
+  placed — says so in the build log. Chapter titles are lifted to the top
+  of the heading outline so the EPUB has a usable document structure.
 - **Bad pages are caught, not filled in.** A page whose OCR loops, or
   claims more words than its ink can account for, is re-read and then left
   empty rather than invented. On born-digital sources it is restored from
