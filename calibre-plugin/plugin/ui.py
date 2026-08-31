@@ -278,6 +278,17 @@ class CodicologyOCRAction(InterfaceAction):
                 pass
         self.gui.library_view.model().refresh_ids((book_id,))
 
+        # What the build flagged, shown wherever the completion lands. A
+        # warning that lives only in the job log is a warning nobody sees.
+        warns = result.get('warnings') or []
+        warn_note = ''
+        if warns:
+            shown = '\n'.join('  \u2022 ' + w for w in warns[:8])
+            more = f'\n  \u2026and {len(warns) - 8} more' if len(warns) > 8 else ''
+            warn_note = ('\n\nThe build flagged '
+                         f'{len(warns)} thing(s) worth an eye:\n'
+                         + shown + more)
+
         adj = result.get('adjudicate')
         if adj is not None:
             import re as _re
@@ -313,7 +324,7 @@ class CodicologyOCRAction(InterfaceAction):
                     f'"{title}": {n_disp} word(s) the OCR engines read '
                     f'differently. The record — who read what, and which '
                     f'rule settled it — is saved beside the cache.'
-                    + sheet_note,
+                    + sheet_note + warn_note,
                     det_msg=adj['output'], show=True)
             else:
                 self.gui.status_bar.show_message(
@@ -324,8 +335,16 @@ class CodicologyOCRAction(InterfaceAction):
                 self.gui, 'EPUB added',
                 f'"{title}" now has a codicology EPUB.\n\n'
                 'The after-build check was disabled, so nothing has '
-                'looked for missing pages.', show=True)
+                'looked for missing pages.' + warn_note, show=True)
         if verify['rc'] == 0:
+            if warns:
+                return warning_dialog(
+                    self.gui,
+                    f'EPUB added — the build flagged '
+                    f'{len(warns)} thing(s)',
+                    f'"{title}" now has a codicology EPUB, and the check '
+                    'against the source found nothing missing.' + warn_note,
+                    det_msg=verify['output'], show=True)
             return info_dialog(
                 self.gui, 'EPUB added — no holes found',
                 f'"{title}" now has a codicology EPUB, and the check '
@@ -336,10 +355,10 @@ class CodicologyOCRAction(InterfaceAction):
                 self.gui, 'EPUB added — LOOK AT THIS',
                 f'The EPUB for "{title}" was added, but verify found '
                 'pages where the source has text and the EPUB has '
-                'none. The detail below names them.',
+                'none. The detail below names them.' + warn_note,
                 det_msg=verify['output'], show=True)
         return warning_dialog(
             self.gui, 'EPUB added — verify could not run',
             f'The EPUB for "{title}" was added, but the after-build '
-            f'check itself failed (exit {verify["rc"]}).',
+            f'check itself failed (exit {verify["rc"]}).' + warn_note,
             det_msg=verify['output'], show=True)

@@ -85,7 +85,19 @@ def convert_worker(argv, verify_argv, adjudicate_argv, review_argv,
         elif kind == "error" and log is not None:
             log("ERROR: " + event.get("message", ""))
 
+    # The build's own flags. The pipeline marks anything worth a human
+    # eye with a leading [!] — a sparse contents parse, chapters the
+    # running heads describe that the nav lacked, folios out of order —
+    # and those lines used to live only in the job log, which nobody
+    # opens unless something already failed. Collected here so the
+    # completion dialog can show them.
+    warnings = []
+
     def on_log(stream, text):
+        for line in text.splitlines():
+            flagged = line.strip()
+            if flagged.startswith("[!]"):
+                warnings.append(flagged[3:].strip())
         if log is not None:
             log(text)
 
@@ -95,7 +107,7 @@ def convert_worker(argv, verify_argv, adjudicate_argv, review_argv,
 
     out = {"book_id": book_id, "epub": epub_path, "title": title,
            "result": result, "verify": None, "adjudicate": None,
-           "review": None}
+           "review": None, "warnings": warnings}
 
     if verify_argv:
         # verify's exit status is a verdict, not a failure: 0 is clean,
