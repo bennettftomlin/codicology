@@ -144,6 +144,16 @@ on an HTML review sheet (`--review-sheet`), and its verdicts feed
 A page that came out blurred or occluded can be re-shot later and patched
 in by name (`--patch r060p1=folio60.jpg`) without redoing the capture.
 
+Either path also works with no OCR at all — point it at the capture and
+name only the PDF, and the geometry ladder runs, the spreads split, and a
+corrected facsimile is saved in minutes, no text engine ever loaded. For
+a book worth preserving before it is worth reading by machine, that is
+the whole job:
+
+```bash
+codicology convert --from-images ./shots book.pdf --rotate 270
+```
+
 The `book.pdf` these paths produce is a facsimile of the physical book —
 with `--pdf-text-layer`, one that searches and copies like a born-digital
 file — and it feeds back into `--pages-from` for every later rebuild, so
