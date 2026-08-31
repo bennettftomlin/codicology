@@ -111,6 +111,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import functools
 import glob
 import gzip
 import hashlib
@@ -6973,8 +6974,8 @@ def build_epub(
         # `bodies`, so a page that is empty at this point genuinely carries
         # nothing, and dropping it cannot lose anything.
         blank = {i for i, body in enumerate(bodies)
-                 if i not in dropped and not _strip_tags(body).strip()
-                 and "<img" not in body}
+                 if i not in dropped and "<img" not in body
+                 and _reads_as_empty(_strip_tags(body))}
         # An empty body means one of two very different things: an empty
         # leaf, or a page this pipeline failed to read. Both fabrication
         # witnesses are deaf here — they judge text we produced, and we
@@ -6999,6 +7000,20 @@ def build_epub(
                 for i in sorted(second_opinion):
                     print(f"    [!] page {i} read as empty, but a classical "
                           f"reader finds text on it — kept, not dropped")
+        # And the inverse suspicion: a page with only a few words on
+        # visually blank paper. The empty test above cannot see these —
+        # they carry text, just not the book's.
+        phantom = _phantom_blank_pages(
+            page_paths,
+            [_strip_tags(b) for b in bodies],
+            ["<img" in b for b in bodies],
+            skip=frozenset(dropped | blank))
+        for i in sorted(phantom):
+            w = len(re.findall(r"[A-Za-z]{2,}", _strip_tags(bodies[i])))
+            print(f"    [~] page {i} carries {w} word(s) on visually blank "
+                  f"paper and the classical reader finds none — "
+                  f"show-through, dropped as blank")
+        blank |= phantom
         if blank:
             orphans = {name for i in blank for name in page_figures[i]}
             book.items = [it for it in book.items
@@ -8164,6 +8179,7 @@ WITNESS_WAIVED = False
 UNWITNESSED = {"fabrication": 0, "blank": 0}
 
 
+@functools.lru_cache(maxsize=None)
 def _classical_word_count(page_path: str, min_len: int = 2) -> "int | None":
     """
     How many words a classical OCR finds on the page, or None if unavailable.
@@ -8186,6 +8202,101 @@ def _classical_word_count(page_path: str, min_len: int = 2) -> "int | None":
         return len(re.findall(r"[A-Za-z]{%d,}" % min_len, r.stdout))
     except Exception:
         return None
+
+
+# A handful of words on visually blank paper is show-through, not text.
+# The envelope, measured on a photographed book: the two phantom pages that
+# prompted this (one transcribed the ghost of the reverse leaf, one invented
+# a fluent sentence outright) carry a core ink fraction of 0.00000 exactly;
+# the faintest REAL sparse page measured 0.00597, and the blank-figure
+# survey higher up tops out at 0.00071. The floor below sits between the
+# populations, six-fold under the faintest real page.
+#
+# The band's LOWER bound honours a withdrawn ancestor: "text on a near-blank
+# page" was tried in the fabrication guard and thrown out after condemning
+# two books' title pages, and the measured record holds a real six-word page
+# whose ink is indistinguishable from a blank leaf's. Pages that short are
+# never questioned here — the dedication class stays out of reach on
+# principle, an accepted blind spot. Both measured phantoms sit at 26-27
+# words, comfortably inside the band. The upper bound only limits how many
+# pages pay for a witness read; real sparse pages are protected by the ink
+# test, not the cap.
+PHANTOM_MIN_WORDS = 10
+PHANTOM_MAX_WORDS = 40
+PHANTOM_CORE_INK = 0.001
+
+
+def _reads_as_empty(text: str) -> bool:
+    """No text at all — or nothing but the recogniser's own bracketed asides.
+
+    On unreadable regions surya editorialises instead of transcribing:
+    "[Faded text block, likely bleed-through from the reverse side of the
+    page]". A page whose entire reading is such asides has, by the
+    recogniser's own account, no text — so it belongs to the empty-page
+    gate, whose classical-reader rescue still protects a page the asides
+    were wrong about.
+    """
+    if not text.strip():
+        return True
+    unbracketed = re.sub(r"\[[^][]*\]", " ", text)
+    return not re.search(r"[A-Za-z0-9]", unbracketed)
+
+
+@functools.lru_cache(maxsize=None)
+def _page_core_ink(page_path: str) -> "float | None":
+    """Black-hat ink fraction over the inner 70% of the page.
+
+    The crop dodges what lives in a photographed page's outer margins —
+    thumbs, page-edge shadow, the desk. The black-hat threshold is a
+    contrast gate: show-through ghosts sit far below 40 grey levels of
+    local contrast at any scale, while pressed ink clears it easily, so
+    the fraction separates the two populations regardless of resolution.
+    """
+    img = cv2.imread(page_path, cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        return None
+    h, w = img.shape[:2]
+    core = img[int(h * .15):int(h * .85), int(w * .15):int(w * .85)]
+    if core.size == 0:
+        return None
+    k = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
+    hat = cv2.morphologyEx(core, cv2.MORPH_BLACKHAT, k)
+    return float((hat > 40).mean())
+
+
+def _phantom_blank_pages(page_paths, texts, has_figure, skip=frozenset()):
+    """Pages whose sparse reading is show-through, by two agreeing witnesses.
+
+    Surya generates, so on a blank verso it can transcribe the previous
+    leaf's ghost — or invent a sentence outright; both arrived on one book
+    the day the geometry ladder changed its pixels. The empty-page gate in
+    the EPUB assembly cannot see them: it questions pages with NO text,
+    and these carry a little. Conviction here needs both independent
+    witnesses to agree: the paper must hold essentially no ink, AND the
+    classical reader must find nothing. Neither alone may convict —
+    tesseract also goes silent on faint real pages (one measured page held
+    50 true words it could not see), and ink alone would rule with no
+    second opinion. A page with a figure is never questioned: a picture is
+    content. With no witness installed nothing is convicted; the pass is
+    counted unexamined, mirroring the empty-page gate's honesty.
+    """
+    out = set()
+    for i, path in enumerate(page_paths):
+        if i in skip or has_figure[i]:
+            continue
+        words = len(re.findall(r"[A-Za-z]{2,}", texts[i]))
+        if not PHANTOM_MIN_WORDS <= words < PHANTOM_MAX_WORDS:
+            continue
+        ink = _page_core_ink(path)
+        if ink is None or ink >= PHANTOM_CORE_INK:
+            continue
+        n = _classical_word_count(path, min_len=3)
+        if n is None:
+            UNWITNESSED["fabrication"] += 1
+            continue
+        if n == 0:
+            out.add(i)
+    return out
 
 
 def _reading_agrees(a_items, b_items) -> float:
@@ -8926,6 +9037,26 @@ def _finish(
         print(f"\n[+] Saving searchable PDF → {output_pdf}")
         items_pp = _collect_page_items(page_paths, backend, ocr_cache,
                                        cache_obj=shared_cache)
+        # The layer's rule is that no block is ever dropped — but that rule
+        # protects imperfectly PLACED text, and these pages' text is not
+        # imperfectly placed, it is fabricated: show-through read as words.
+        # Searchable phantoms lead a searcher to blank paper. Same two
+        # witnesses as the EPUB gate; the caches make the re-ask free.
+        pdf_texts = [" ".join(_strip_tags(it.html or "") for it in pg)
+                     for pg in items_pp]
+        ghost = _phantom_blank_pages(
+            page_paths, pdf_texts,
+            [any(it.figure is not None for it in pg) for pg in items_pp])
+        # A reading that is nothing but the recogniser's bracketed asides
+        # is not book text either — searchable "[Faded text block...]" only
+        # ever leads a searcher to blank paper.
+        ghost |= {i for i, t in enumerate(pdf_texts)
+                  if t.strip() and _reads_as_empty(t)}
+        if ghost:
+            for i in ghost:
+                items_pp[i] = []
+            print(f"  [~] {len(ghost)} page(s) read only show-through; "
+                  f"their text is left out of the layer")
         placed, forced, wordp = build_searchable_pdf(page_paths, items_pp,
                                                      output_pdf)
         boxed = sum(1 for pg in items_pp for it in pg if it.box is not None)
