@@ -307,3 +307,84 @@ def test_a_page_headed_table_of_contents_still_counts(vtb):
             "<p>Chapter One: Fundamental Criteria for First Aid</p>"
             "<p>Chapter Two: Basic Measures for First Aid</p>"]
     assert vtb.parse_printed_toc(page)[1] == {0}
+
+
+def _cells_page(rows):
+    """A contents page whose rows are given as explicit cell lists, so a
+    blank leading cell can be expressed."""
+    out = ["<h1>Contents</h1><table>"]
+    for cells in rows:
+        out.append("<tr>" + "".join("<td/>" if c is None else f"<td>{c}</td>"
+                                    for c in cells) + "</tr>")
+    return ["".join(out) + "</table>"]
+
+
+def test_a_chapter_numbered_in_its_own_cell_is_not_dropped(vtb):
+    """One book sets three chapters as a number cell plus a title cell with
+    no page against them, and the other two as number-and-title in one cell
+    with a page. Only the latter survived: the number is not a folio and the
+    title is not a page, so the row parsed as neither."""
+    page = _cells_page([
+        ["<b>1</b>", "<b>A Brief History of Migration</b>"],
+        [None, "The Global Economy"],
+        ["<b>2</b>", "<b>Methods and Perspectives</b>"],
+        [None, "Methods"],
+        [None, "Alternative Perspectives"],
+        ["Introduction", "1"],
+    ])
+    titles = [e.title for e in vtb.parse_printed_toc(page)[0]]
+    assert "1 A Brief History of Migration" in titles, titles
+    assert "2 Methods and Perspectives" in titles, titles
+
+
+def test_a_blank_leading_cell_marks_what_belongs_under_a_chapter(vtb):
+    """The book says a row is subordinate by leaving the number cell empty.
+    Read as neither title nor folio, those rows were dropped, taking every
+    subsection of three chapters with them."""
+    page = _cells_page([
+        ["<b>1</b>", "<b>A Brief History of Migration</b>"],
+        [None, "The Political and Economic Contexts"],
+        [None, "The Global Economy"],
+        [None, "Asylum and Immigration"],
+    ])
+    titles = [e.title for e in vtb.parse_printed_toc(page)[0]]
+    assert "The Global Economy" in titles, titles
+
+
+def test_a_lone_cell_with_nothing_in_front_of_it_is_not_an_entry(vtb):
+    """The blank leading cell is the whole guard. Keeping any folio-less
+    lone cell instead pulled in one book's copyright page — LIBRARY OF
+    CONGRESS, Two Copies Received, JAN 27 1908."""
+    page = _cells_page([
+        ["<b>1</b>", "<b>A Brief History of Migration</b>"],
+        [None, "The Global Economy"],
+        ["LIBRARY OF CONGRESS"],
+        ["Two Copies Received"],
+        ["JAN 27 1908"],
+    ])
+    titles = [e.title for e in vtb.parse_printed_toc(page)[0]]
+    assert "LIBRARY OF CONGRESS" not in titles, titles
+    assert "Two Copies Received" not in titles, titles
+
+
+def test_the_tables_own_column_heading_is_not_an_entry(vtb):
+    """"Page" sits in a row like any other and, with a blank cell in front
+    of it, looks exactly like a subordinate entry."""
+    page = _cells_page([
+        [None, "Page"],
+        ["<b>1</b>", "<b>A Brief History of Migration</b>"],
+        [None, "The Global Economy"],
+    ])
+    titles = [e.title for e in vtb.parse_printed_toc(page)[0]]
+    assert "Page" not in titles, titles
+
+
+def test_a_title_broken_inside_a_table_cell_keeps_its_space(vtb):
+    """text_content() closes a <br/> up inside a cell too: "Migrant
+    Communities" and "in the United Kingdom" arrived as "Communitiesin"."""
+    page = _cells_page([
+        ["<b>5</b>", "<b>Impacts on Migrant Communities<br/>in the United Kingdom</b>"],
+        [None, "Media Images and Public Understanding"],
+    ])
+    titles = [e.title for e in vtb.parse_printed_toc(page)[0]]
+    assert any("Communities in the United Kingdom" in t for t in titles), titles

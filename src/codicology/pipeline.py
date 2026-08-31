@@ -3178,6 +3178,12 @@ _NAMES_ITSELF_CONTENTS = re.compile(
     r"(?<!\bthe )(?<!\bits )(?<!\btheir )(?<!\bthis )(?<!\bwhose )contents\b")
 
 
+# The table's own column headings. They sit in a row like any other and,
+# where the leading cell is blank, look exactly like a subordinate entry.
+_COLUMN_HEADING = re.compile(
+    r"^(?:page|pages|contents|chapter|section|paragraphs?|title|no\.?)$", re.I)
+
+
 def _leads_indented_rows(el, indent: int, need: int = 2) -> bool:
     """Whether the contents rows after this one are set further in than it.
 
@@ -3321,6 +3327,14 @@ def parse_printed_toc(bodies: list[str], limit: int = 25,
                     entries.append(TocEntry(t, None, "", 0 if el.tag in ("h1", "h2", "h3") else 1))
             elif el.tag == "tr":
                 tds = list(el.iter("td", "th"))
+                # A cell holding a title set over two lines carries a <br/>,
+                # and text_content() closes it up: "Migrant Communities" and
+                # "in the United Kingdom" arrived as "Communitiesin", which
+                # then matched no heading in the book. The tail carries the
+                # space so the leading whitespace an indent is read from is
+                # left alone.
+                for br in el.iter("br"):
+                    br.tail = " " + (br.tail or "")
                 raw = [td.text_content() or "" for td in tds]
                 cells = [" ".join(r.split()) for r in raw]
                 # the title is every cell but the folio; its own typography
@@ -3372,6 +3386,20 @@ def parse_printed_toc(bodies: list[str], limit: int = 25,
                     # parts with it. A line that the rows beneath it are
                     # indented under is a grouping however long its name,
                     # and that is the same evidence the depth rule reads.
+                    # A chapter that puts its number in a cell of its own
+                    # and prints no page against it. The number is not a
+                    # folio and the title is not a page, so the row parsed
+                    # as neither and was dropped whole — three chapters of
+                    # one book, whose other two put the number and the title
+                    # in a single cell and came through. Rejoining them
+                    # gives every chapter the shape the survivors had.
+                    if (len(cells) == 2
+                            and re.fullmatch(r"\d{1,3}|[ivxlcdm]{1,7}",
+                                             cells[0], re.I)
+                            and re.search(r"[A-Za-z]{3}", cells[1])):
+                        entries.append(TocEntry(f"{cells[0]} {cells[1]}", None,
+                                                "", 2, bold, indent, page_i))
+                        continue
                     full = re.sub(r"[\s.·…]+$", "", " ".join(cells))
                     words = len(full.split())
                     mark = PART_HEAD.match(full)
@@ -3380,6 +3408,27 @@ def parse_printed_toc(bodies: list[str], limit: int = 25,
                             or _leads_indented_rows(el, indent)
                             or _peer_banners(el, mark.group(1).lower())):
                         entries.append(TocEntry(full, None, "", 0))
+                    elif (len(cells) == 1 and len(raw) >= 2
+                            and not raw[0].strip()
+                            and 3 <= len(full) <= 120
+                            and re.search(r"[A-Za-z]{3}", full)
+                            and not _FOLIO_ONLY.match(full)
+                            and not _COLUMN_HEADING.match(full)):
+                        # A subsection printed with no page against it. What
+                        # says so is the EMPTY cell in front of it: this book
+                        # sets a chapter as number-cell plus title-cell, and
+                        # everything under that chapter with the number cell
+                        # left blank. The row parsed as neither a title nor a
+                        # folio and was dropped, taking every subsection of
+                        # three chapters with it.
+                        #
+                        # The empty leading cell is the whole guard. Keeping
+                        # any lone folio-less cell instead pulled in column
+                        # headings ("Page", "CONTENTS") and, from one book,
+                        # its copyright page — LIBRARY OF CONGRESS, Two
+                        # Copies Received, JAN 27 1908.
+                        entries.append(TocEntry(full, None, "", 2, bold,
+                                                indent, page_i))
     # The prefix rule first: where a book numbers its subsections (1)…(6)
     # that is an explicit declaration and outranks an inference from type.
     # Where it does not, the page's own setting is the declaration.
