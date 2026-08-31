@@ -243,6 +243,14 @@ def _human(rep):
     l = rep["llama_server"]
     print(f"  llama-server: {l['path'] if l['present'] else 'not found'}")
     v = rep.get("vision", {})
+    try:
+        from .dewarp import available as _dewarp_ok
+        print("  leptonica: " + ("found (text-line dewarp active)"
+                                 if _dewarp_ok() else
+                                 "not found — pages keep the rigid deskew "
+                                 "alone"))
+    except Exception:
+        pass
     print("  apple vision: " + ("present (adjudication's optional rung)"
                                 if v.get("present") else
                                 "absent — review sheets will carry more "

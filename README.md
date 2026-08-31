@@ -132,8 +132,11 @@ from the footage itself. Hold each page flat for a second or two at a
 steady pace, use even lighting, and a dark background helps detection.
 
 Both paths share the same cleanup: the page is found in the frame,
-perspective-corrected, deskewed against its own text lines, and a
-landscape spread is split at the gutter into two pages (each step has a
+perspective-corrected, deskewed against its own text lines, and — where
+those lines can prove a curve — the binding's bow is modelled out of them
+too (a page the model declines keeps the plain deskew, so nothing is ever
+warped on a guess). A landscape spread is split at the gutter into two
+pages (each step has a
 `--no-*` off switch, and `--rotate` handles sideways captures). Both also
 share the same safety net — pages the duplicate pass was unsure about go
 on an HTML review sheet (`--review-sheet`), and its verdicts feed

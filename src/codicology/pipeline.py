@@ -132,6 +132,8 @@ import cv2
 import numpy as np
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
+from .dewarp import dewarp_page
+
 from . import progress
 
 
@@ -7514,7 +7516,7 @@ def apply_patches(page_paths: list[str], page_ids: list[str] | None,
 def pages_from_images(
     image_paths: list[str], pages_dir: str, min_area_ratio: float, rotate: int,
     no_warp: bool, enhance: bool, deskew: bool, split_spreads: bool,
-    burst_threshold: float | None = None,
+    burst_threshold: float | None = None, dewarp: bool = True,
 ) -> tuple[list[str], list[str]]:
     """
     Build the book from photographs rather than from a video.
@@ -7532,7 +7534,8 @@ def pages_from_images(
 
     page_paths: list[str] = []
     page_ids: list[str] = []
-    n_nopage = n_split = 0
+    n_nopage = n_dewarped = 0
+    n_split = 0
     for group in groups:
         best_path, best_score = image_paths[group[0]], None
         if len(group) > 1:
@@ -7575,6 +7578,13 @@ def pages_from_images(
                 part = enhance_page(part)
             if deskew:
                 part = deskew_page(part)
+            if dewarp:
+                # After the rigid deskew, never instead of it: leptonica
+                # models the residual curve from the page's own lines and
+                # declines pages that cannot prove one, which fall through
+                # with the deskew alone — the fallback is the old behaviour.
+                part, modelled = dewarp_page(part)
+                n_dewarped += modelled
             out = os.path.join(pages_dir, f"page_{len(page_paths):04d}.jpg")
             Image.fromarray(cv2.cvtColor(part, cv2.COLOR_BGR2RGB)).save(
                 out, "JPEG", quality=92, dpi=(300, 300)
@@ -7586,6 +7596,9 @@ def pages_from_images(
           f"no page outline found)")
     if n_split:
         print(f"  {n_split} two-page spreads split at the gutter")
+    if n_dewarped:
+        print(f"  {n_dewarped} page(s) had the binding's curve modelled out "
+              f"of their own text lines")
     return page_paths, page_ids
 
 
@@ -8717,6 +8730,7 @@ def process_video(
     min_still_frames: int = 3,
     enhance: bool = True,
     deskew: bool = True,
+    dewarp: bool = True,
     no_warp: bool = False,
     split_spreads: bool = True,
     rotate: int = 0,
@@ -8784,6 +8798,7 @@ def process_video(
             page_paths, page_ids = pages_from_images(
                 image_paths, pages_dir, min_area_ratio, rotate, no_warp,
                 enhance, deskew, split_spreads, motion_threshold,
+                dewarp=dewarp,
             )
             if not page_paths:
                 sys.exit("No pages could be built from those images.")
@@ -8909,6 +8924,11 @@ def process_video(
                     part = enhance_page(part)
                 if deskew:
                     part = deskew_page(part)
+                if dewarp:
+                    # Same ladder as the photograph path: model the curve
+                    # where the type proves one, keep the deskewed page
+                    # where it cannot.
+                    part, _modelled = dewarp_page(part)
                 out = os.path.join(pages_dir, f"page_{len(page_paths):04d}.jpg")
                 Image.fromarray(cv2.cvtColor(part, cv2.COLOR_BGR2RGB)).save(
                     out, "JPEG", quality=92, dpi=(300, 300)
@@ -9141,6 +9161,10 @@ def main(argv: "list[str] | None" = None) -> None:
                         help="Skip contrast/sharpness enhancement")
     parser.add_argument("--no-deskew", action="store_true",
                         help="Skip straightening each page against its own text lines")
+    parser.add_argument("--no-dewarp", action="store_true",
+                        help="Skip modelling the binding's curve out of the text "
+                             "lines (leptonica). A page the model declines already "
+                             "keeps the plain deskew alone")
     parser.add_argument("--no-split-spreads", action="store_true",
                         help="Keep two-page spreads as a single page. By default a landscape "
                              "crop is split at the gutter into two pages")
@@ -9266,6 +9290,7 @@ def _convert(args, parser) -> None:
         min_still_frames=args.min_still_frames,
         enhance=not args.no_enhance,
         deskew=not args.no_deskew,
+        dewarp=not args.no_dewarp,
         no_warp=args.no_warp,
         split_spreads=not args.no_split_spreads,
         rotate=args.rotate,
