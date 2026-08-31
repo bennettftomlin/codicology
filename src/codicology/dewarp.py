@@ -128,9 +128,13 @@ def _binarised_png(image: np.ndarray, redfactor: int,
 
     The ink stays dark: a PNG's black bit becomes leptonica's 1, which is
     ink. This is the polarity that works; the other reads as a blank page.
-    Otsu first — a global threshold suits an evenly lit page — and adaptive
-    as the second look, for the page whose photograph or plate drags a
-    global threshold away from the type.
+    Otsu only, by measurement: adaptive thresholding was tried as an
+    automatic second look and models five extra pages on the book that
+    prompted it — at a mean confidence of -0.08, two of the five falling
+    past the witness's veto line. The pages it uniquely reaches are the
+    inset-heavy ones the cubic-sheet rung now corrects under a per-page
+    witness instead. The parameter stays for experiments; the ladder does
+    not try it.
     """
     img = image
     if redfactor == 2:
