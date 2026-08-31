@@ -567,6 +567,100 @@ def limit_quad(corners: np.ndarray, cap: float = MAX_QUAD_SKEW) -> np.ndarray:
     return ((1 - hi) * corners + hi * box).astype(np.float32)
 
 
+def _clipped_sides(image: np.ndarray, guard_px: int = 8) -> "list[str]":
+    """Which edges of a warped page have ink pressed against them.
+
+    A page whose text touches the canvas edge was cropped by its quad, not
+    framed by it — the outline is a guess made against shadow and a curled
+    fore-edge, and the text is the truth about where the page's content
+    ends. Probed at reduced width so the answer costs milliseconds.
+    """
+    g = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+    h, w = g.shape[:2]
+    scale = 800.0 / max(w, 1)
+    small = cv2.resize(g, (800, max(8, int(h * scale)))) if w > 800 else g
+    k = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
+    st = cv2.morphologyEx(small, cv2.MORPH_BLACKHAT, k)
+    ink = st > max(12.0, float(np.percentile(st, 99)) * 0.35)
+    # A quad lying exactly on the page boundary samples a sliver of desk at
+    # the border, and that one-pixel dark line reads as ink pressed against
+    # every edge it runs along. Genuinely clipped text extends inward well
+    # past it, so the outermost ring is ignored, not the guard band.
+    ink[:2, :] = ink[-2:, :] = False
+    ink[:, :2] = ink[:, -2:] = False
+    if not ink.any():
+        return []
+    guard = max(3, int(guard_px * scale)) if w > 800 else guard_px
+    cols = np.where(ink.sum(0) > 2)[0]
+    rows = np.where(ink.sum(1) > 2)[0]
+    sides = []
+    if cols.size:
+        if cols.min() <= guard:
+            sides.append("left")
+        if cols.max() >= ink.shape[1] - 1 - guard:
+            sides.append("right")
+    if rows.size:
+        if rows.min() <= guard:
+            sides.append("top")
+        if rows.max() >= ink.shape[0] - 1 - guard:
+            sides.append("bottom")
+    return sides
+
+
+def _grow_quad(corners: np.ndarray, sides: "list[str]", frame_shape,
+               frac: float = 0.035) -> np.ndarray:
+    """Push the named sides of the quad outward by a fraction of its size."""
+    tl, tr, br, bl = corners.copy()
+    w = float(np.linalg.norm(tr - tl) + np.linalg.norm(br - bl)) / 2
+    h = float(np.linalg.norm(bl - tl) + np.linalg.norm(br - tr)) / 2
+    out = corners.copy()
+
+    def push(a, b, other_a, other_b, dist):
+        d = (a - other_a) + (b - other_b)
+        n = np.linalg.norm(d)
+        if n < 1e-6:
+            return np.zeros(2, np.float32)
+        return (d / n) * dist
+
+    if "left" in sides:
+        v = push(tl, bl, tr, br, frac * w)
+        out[0] += v; out[3] += v
+    if "right" in sides:
+        v = push(tr, br, tl, bl, frac * w)
+        out[1] += v; out[2] += v
+    if "top" in sides:
+        v = push(tl, tr, bl, br, frac * h)
+        out[0] += v; out[1] += v
+    if "bottom" in sides:
+        v = push(bl, br, tl, tr, frac * h)
+        out[2] += v; out[3] += v
+    H, W = frame_shape[:2]
+    out[:, 0] = np.clip(out[:, 0], 0, W - 1)
+    out[:, 1] = np.clip(out[:, 1], 0, H - 1)
+    return out
+
+
+def warp_page_guarded(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
+    """Warp, then let the text push back on a quad that cropped it.
+
+    One chapter-opening spread put letters against both canvas edges: the
+    detector's quad ran inside the curled fore-edge on one side and the
+    gutter shadow on the other, and every later stage inherited the loss —
+    the dewarp rungs cannot restore ink the warp never sampled. Up to two
+    rounds of grow-and-rewarp; a page whose text genuinely reaches its
+    margins simply gets a slightly generous crop.
+    """
+    quad = corners
+    out = warp_page(image, quad)
+    for _ in range(2):
+        sides = _clipped_sides(out)
+        if not sides:
+            break
+        quad = _grow_quad(quad, sides, image.shape)
+        out = warp_page(image, quad)
+    return out
+
+
 def warp_page(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
     """Perspective-correct the detected page to a flat rectangle."""
     tl, tr, br, bl = corners
@@ -7415,7 +7509,7 @@ def _prepare_page_image(img: np.ndarray, min_area_ratio: float, rotate: int,
     if not no_warp:
         corners = detect_page(img, min_area_ratio)
         if corners is not None:
-            img = warp_page(img, limit_quad(corners))
+            img = warp_page_guarded(img, limit_quad(corners))
     if enhance:
         img = enhance_page(img)
     if deskew:
@@ -7579,7 +7673,7 @@ def pages_from_images(
                 n_nopage += 1
                 cropped = False
             else:
-                img = warp_page(img, limit_quad(corners))
+                img = warp_page_guarded(img, limit_quad(corners))
 
         stem = os.path.splitext(os.path.basename(best_path))[0]
         # Splitting a frame whose page was never found is guesswork: what is in
@@ -9019,7 +9113,7 @@ def process_video(
                     n_nopage += 1
                     cropped = False
                 else:
-                    img = warp_page(img, limit_quad(corners))
+                    img = warp_page_guarded(img, limit_quad(corners))
 
         # Splitting a frame whose page was never found is guesswork: what is in
         # hand is the whole photograph, desk and all, and the "gutter" the

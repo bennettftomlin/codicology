@@ -104,3 +104,33 @@ def test_missing_leptonica_degrades_to_a_no_op(vtb, monkeypatch):
     page = _text_page(w=600, h=800)
     out, modelled = D.dewarp_page(page)
     assert not modelled and out is page
+
+
+def test_a_quad_that_crops_the_text_is_pushed_back_out(vtb):
+    """One chapter-opening spread put letters against both canvas edges:
+    the detected quad ran inside the curled fore-edge and the gutter
+    shadow, and no later stage can restore ink the warp never sampled.
+    The text pushes the quad back out."""
+    frame = np.full((1000, 1400, 3), 30, np.uint8)         # dark desk
+    frame[100:900, 300:1100] = 245                         # the page
+    for y in range(180, 820, 24):                          # text to the edges,
+        frame[y:y + 5, 310:1090] = 20                      # at stroke width
+    tight = np.array([[340, 120], [1060, 120],
+                      [1060, 880], [340, 880]], np.float32)  # crops both sides
+    naive = vtb.warp_page(frame, tight)
+    guarded = vtb.warp_page_guarded(frame, tight)
+    assert "left" in vtb._clipped_sides(naive) or "right" in vtb._clipped_sides(naive)
+    assert vtb._clipped_sides(guarded) == [], vtb._clipped_sides(guarded)
+
+
+def test_a_well_framed_page_is_warped_exactly_as_before(vtb):
+    """The guard must cost nothing where the quad was right."""
+    frame = np.full((1000, 1400, 3), 30, np.uint8)
+    frame[100:900, 300:1100] = 245
+    for y in range(200, 800, 24):
+        frame[y:y + 5, 360:1040] = 20
+    quad = np.array([[300, 100], [1100, 100],
+                     [1100, 900], [300, 900]], np.float32)
+    a = vtb.warp_page(frame, quad)
+    b = vtb.warp_page_guarded(frame, quad)
+    assert a.shape == b.shape and np.array_equal(a, b)
