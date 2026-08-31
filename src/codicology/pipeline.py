@@ -8241,17 +8241,19 @@ def _classical_word_count(page_path: str, min_len: int = 2) -> "int | None":
 # survey higher up tops out at 0.00071. The floor below sits between the
 # populations, six-fold under the faintest real page.
 #
-# The band's LOWER bound honours a withdrawn ancestor: "text on a near-blank
-# page" was tried in the fabrication guard and thrown out after condemning
-# two books' title pages, and the measured record holds a real six-word page
-# whose ink is indistinguishable from a blank leaf's. Pages that short are
-# never questioned here — the dedication class stays out of reach on
-# principle, an accepted blind spot. Both measured phantoms sit at 26-27
-# words, comfortably inside the band. The upper bound only limits how many
-# pages pay for a witness read; real sparse pages are protected by the ink
-# test, not the cap.
+# The floor honours a withdrawn ancestor: "text on a near-blank page" was
+# tried in the fabrication guard and thrown out after condemning two books'
+# title pages, and the measured record holds a real six-word page whose ink
+# is indistinguishable from a blank leaf's. Pages that short are never
+# questioned here — the dedication class stays out of reach on principle,
+# an accepted blind spot. There is deliberately NO upper bound: the first
+# draft capped suspicion at 40 words as a cost bound, and the very next
+# rebuild produced a 140-word invention on a blank verso that sailed over
+# it. No real page carries a hundred words on paper with no measurable
+# ink, so length is evidence of nothing; the ink floor and the agreeing
+# witness are the safety, and they cost a witness read only on pages whose
+# paper is already blank.
 PHANTOM_MIN_WORDS = 10
-PHANTOM_MAX_WORDS = 40
 PHANTOM_CORE_INK = 0.001
 
 
@@ -8266,6 +8268,14 @@ def _reads_as_empty(text: str) -> bool:
     were wrong about.
     """
     if not text.strip():
+        return True
+    # A body that is nothing but a bare arabic number is the page's folio
+    # leaked into its content, not text; blank versos ship exactly this
+    # when the recogniser reads only the corner digit. Roman numerals are
+    # deliberately NOT included — "vi" may be a part divider's whole
+    # printed content, and "civil" is a word. The empty gate's rescue
+    # still protects a page this is wrong about.
+    if re.fullmatch(r"[0-9]{1,4}", text.strip()):
         return True
     unbracketed = re.sub(r"\[[^][]*\]", " ", text)
     return not re.search(r"[A-Za-z0-9]", unbracketed)
@@ -8314,7 +8324,7 @@ def _phantom_blank_pages(page_paths, texts, has_figure, skip=frozenset()):
         if i in skip or has_figure[i]:
             continue
         words = len(re.findall(r"[A-Za-z]{2,}", texts[i]))
-        if not PHANTOM_MIN_WORDS <= words < PHANTOM_MAX_WORDS:
+        if words < PHANTOM_MIN_WORDS:
             continue
         ink = _page_core_ink(path)
         if ink is None or ink >= PHANTOM_CORE_INK:

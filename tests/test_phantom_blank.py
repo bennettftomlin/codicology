@@ -80,13 +80,23 @@ def test_six_word_pages_are_never_questioned(tmp_path, monkeypatch, fresh_caches
     assert out == set() and not asked
 
 
-def test_wordy_pages_are_never_questioned(tmp_path, monkeypatch, fresh_caches):
+def test_verbose_inventions_are_still_convicted(tmp_path, monkeypatch,
+                                                fresh_caches):
+    """The first draft capped suspicion at 40 words; the very next rebuild
+    produced a 140-word invention on a blank verso. Length is evidence of
+    nothing — no real page carries a hundred words with no measurable ink."""
     p = _paper(tmp_path / "p.png")
-    asked = []
-    monkeypatch.setattr(vtb, "_classical_word_count",
-                        lambda *a, **k: asked.append(1) or 0)
-    text = " ".join(["word"] * 60)
-    assert vtb._phantom_blank_pages([p], [text], [False]) == set() and not asked
+    monkeypatch.setattr(vtb, "_classical_word_count", lambda *a, **k: 0)
+    text = " ".join(["invented"] * 140)
+    assert vtb._phantom_blank_pages([p], [text], [False]) == {0}
+
+
+def test_a_wordy_inked_page_is_acquitted_by_its_ink(tmp_path, monkeypatch,
+                                                    fresh_caches):
+    p = _paper(tmp_path / "p.png", ink=True)
+    monkeypatch.setattr(vtb, "_classical_word_count", lambda *a, **k: 0)
+    text = " ".join(["word"] * 140)
+    assert vtb._phantom_blank_pages([p], [text], [False]) == set()
 
 
 def test_a_figure_page_is_content(tmp_path, monkeypatch, fresh_caches):
@@ -112,4 +122,9 @@ def test_asides_alone_read_as_empty():
     assert vtb._reads_as_empty(aside)
     assert vtb._reads_as_empty("   ")
     assert not vtb._reads_as_empty("Chapter One [sic] began")
-    assert not vtb._reads_as_empty("14")
+    # A bare arabic number is a leaked folio, not text; roman stays out —
+    # "vi" may be a part divider's whole printed content.
+    assert vtb._reads_as_empty("14")
+    assert vtb._reads_as_empty(" 2 ")
+    assert not vtb._reads_as_empty("vi")
+    assert not vtb._reads_as_empty("14 men died")
