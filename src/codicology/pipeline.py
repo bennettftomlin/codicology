@@ -593,17 +593,38 @@ def _clipped_sides(image: np.ndarray, guard_px: int = 8) -> "list[str]":
     guard = max(3, int(guard_px * scale)) if w > 800 else guard_px
     cols = np.where(ink.sum(0) > 2)[0]
     rows = np.where(ink.sum(1) > 2)[0]
+
+    # As a RETROSPECTIVE diagnostic on generous-quad builds this probe
+    # over-flags: a photographed page edge kept inside the canvas is a thin
+    # dark line on bright paper, indistinguishable here from clipped
+    # letters (121 of 130 pages of a book with visibly healthy margins).
+    # In the pipeline that costs nothing — after a tight quad, the only
+    # kind that clips, the boundary was cropped out and cannot false-fire;
+    # after a generous quad a false alarm buys at most two 3.5% growths of
+    # extra border. Judge old builds by eye, not by this.
+    def on_paper(band, band_ink):
+        # Text can only be cropped where the canvas edge lands ON the page:
+        # a bright band with ink is clipped letters, a dark band is desk or
+        # edge-curl the quad chose to keep, cropping nothing. Judged on the
+        # band's non-ink pixels, so the letters themselves cannot darken
+        # the verdict.
+        bg = band[~band_ink] if (~band_ink).any() else band
+        return float(np.median(bg)) > 150
+
+    sh, sw = small.shape[:2]
     sides = []
-    if cols.size:
-        if cols.min() <= guard:
-            sides.append("left")
-        if cols.max() >= ink.shape[1] - 1 - guard:
-            sides.append("right")
-    if rows.size:
-        if rows.min() <= guard:
-            sides.append("top")
-        if rows.max() >= ink.shape[0] - 1 - guard:
-            sides.append("bottom")
+    if cols.size and cols.min() <= guard and on_paper(
+            small[:, :guard + 1], ink[:, :guard + 1]):
+        sides.append("left")
+    if cols.size and cols.max() >= sw - 1 - guard and on_paper(
+            small[:, sw - 1 - guard:], ink[:, sw - 1 - guard:]):
+        sides.append("right")
+    if rows.size and rows.min() <= guard and on_paper(
+            small[:guard + 1, :], ink[:guard + 1, :]):
+        sides.append("top")
+    if rows.size and rows.max() >= sh - 1 - guard and on_paper(
+            small[sh - 1 - guard:, :], ink[sh - 1 - guard:, :]):
+        sides.append("bottom")
     return sides
 
 
