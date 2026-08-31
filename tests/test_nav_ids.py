@@ -51,7 +51,7 @@ def test_two_entries_in_one_section_sharing_a_page_get_distinct_ids(vtb):
         (_entry("III GAMMA", 9), 9, True),
         (_entry("IV DELTA", 9), 9, True),
     ]
-    links, verified, missed = _run(placed)
+    links, verified, missed, _ = _run(placed)
     ids = _ids(links)
     assert len(ids) == 4 and len(set(ids)) == 4, f"ids collided: {ids}"
     assert missed == 0
@@ -69,7 +69,7 @@ def test_the_hunt_never_reaches_backward_past_a_folio_placement(vtb):
         (_entry("II MIDDLE", 15), 15, True),
         (_entry("The Reckoning", None), None, False),
     ]
-    links, verified, missed = _run(placed, bodies=bodies)
+    links, verified, missed, _ = _run(placed, bodies=bodies)
     hunted = [n for n in links if n[0] == "link" and "Reckoning" in n[2]]
     assert hunted and hunted[0][1] == "page_0020.xhtml", \
         f"hunted backward: {hunted}"
@@ -80,7 +80,7 @@ def test_an_unresolvable_grouping_stays_a_bare_heading(vtb):
         (_entry("BOOK NOWHERE", None, depth=0), None, False),
         (_entry("I ALPHA", 5), 5, True),
     ]
-    links, verified, missed = _run(placed)
+    links, verified, missed, _ = _run(placed)
     head, kids = links[0]
     assert head == ("section", "BOOK NOWHERE", None)
     assert [k[3] for k in kids] and missed == 0
@@ -94,7 +94,7 @@ def test_a_childless_grouping_ships_as_a_link_not_an_empty_list(vtb):
     placed = [(_entry("Chapter One", 10, 1), 10, True),
               (_entry("Chapter Two", 20, 1), 20, True),
               (_entry("A Section", 21, 2), 21, True)]
-    links, _, _ = pl.nav_from_placed(
+    links, _, _, _ = pl.nav_from_placed(
         placed, {10: 0, 20: 1, 21: 2}, [10, 20, 21], ["", "", ""], set(),
         make_link=_link, make_section=_section)
 

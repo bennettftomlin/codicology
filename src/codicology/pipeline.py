@@ -4579,11 +4579,14 @@ def furniture_absent_from_contents(placed, furn_chapters, pos_of):
     would duplicate it rather than rescue it.
     """
     targets = {t for _, t, _ in placed if t is not None}
-    # Only entries the reader actually gets can cover a chapter: placed
-    # leaves, and groupings, which emit as headings even unplaced. An
-    # unplaced leaf is skipped from the nav entirely, and counting it as
-    # cover blocked the rescue in exactly the case rescue helps — a chapter
-    # that parsed, failed to place, and vanished.
+    # This expects the RESOLVED placements — the list nav_from_placed hands
+    # back after every title hunt has settled. Judged before the hunt, a
+    # wholly folio-less contents has no targets at all, and one book merged
+    # all nineteen of its chapters as "missing" while its nav named every
+    # one. Only entries the reader actually gets can cover: resolved
+    # leaves, and groupings, which emit as headings even unresolved. An
+    # unresolved leaf is skipped from the nav entirely, and counting it as
+    # cover blocked the rescue in exactly the case rescue helps.
     emitted = [e for e, t, _ in placed if t is not None or e.depth < 2]
 
     def covered(c):
@@ -4688,8 +4691,13 @@ def nav_from_placed(placed, pos_of, kept, bodies, toc_pages,
 
     make_link(href, title, uid) / make_section(title, href|None) keep
     ebooklib out of the function's signature — tests pass plain tuples.
-    Returns (links, verified, missed)."""
+    Returns (links, verified, missed, resolved), where resolved is the
+    placed list with every title hunt settled — the after-the-fact truth
+    of what emitted and where, which is what the furniture check needs:
+    measured against the pre-hunt list, a wholly folio-less contents
+    looks entirely unplaced and every chapter looks missing."""
     links: list = []
+    resolved: list = []
     verified = missed = 0
     next_id = iter(range(10 ** 9))
     empties: list = []
@@ -4743,6 +4751,7 @@ def nav_from_placed(placed, pos_of, kept, bodies, toc_pages,
             # resolved entries let a later hunt match backward into an
             # already-passed chapter (C3)
             hunt_from = max(hunt_from, target)
+        resolved.append((e, target if target in pos_of else None, ok))
         if e.depth < 2:
             # a grouping: BOOK SEVEN as printed, or a chapter promoted
             # because subsections follow it. A chapter that nests
@@ -4794,7 +4803,7 @@ def nav_from_placed(placed, pos_of, kept, bodies, toc_pages,
             else:
                 out.append(item)
         return out
-    return _flatten(links), verified, missed
+    return _flatten(links), verified, missed, resolved
 
 
 def promote_missing_chapter_heads(bodies: list[str]) -> int:
@@ -7115,20 +7124,28 @@ def build_epub(
         # earlier and this nav — instead of two calls that could silently
         # diverge as bodies mutate between them (C6)
         placed, toc_pages = placed_and_pages
+        mk_link = lambda href, title, uid: epub.Link(href, title, uid)
+        mk_sect = lambda title, href: (epub.Section(title, href=href)
+                                       if href else epub.Section(title))
+        links, verified, missed, resolved = nav_from_placed(
+            placed, pos_of, kept, bodies, toc_pages,
+            make_link=mk_link, make_section=mk_sect)
         # The margins as a check on the parse, not only a fallback for its
-        # absence. Local copy: the shared placement drives the note linker
-        # too, and the merge is a nav decision.
-        missing_ch = (furniture_absent_from_contents(placed, furn_chapters,
+        # absence — judged against the RESOLVED placements, after every
+        # title hunt has settled, because before it a folio-less contents
+        # looks entirely unplaced. Local copy: the shared placement drives
+        # the note linker too, and the merge is a nav decision. Merging
+        # rebuilds the nav once more from the settled targets; the second
+        # pass has nothing left to hunt.
+        missing_ch = (furniture_absent_from_contents(resolved, furn_chapters,
                                                      pos_of)
                       if furn_chapters else [])
-        placed, n_merged = merge_missing_furniture(placed, missing_ch,
-                                                   len(furn_chapters))
-        links, verified, missed = nav_from_placed(
-            placed, pos_of, kept, bodies, toc_pages,
-            make_link=lambda href, title, uid: epub.Link(href, title, uid),
-            make_section=lambda title, href: (
-                epub.Section(title, href=href) if href
-                else epub.Section(title)))
+        merged_placed, n_merged = merge_missing_furniture(
+            resolved, missing_ch, len(furn_chapters))
+        if n_merged:
+            links, verified, missed, _ = nav_from_placed(
+                merged_placed, pos_of, kept, bodies, toc_pages,
+                make_link=mk_link, make_section=mk_sect)
         entries = [(i, t) for i, t, _ in find_numbered_entries(bodies) if i in pos_of]
         if entries:
             sect = [epub.Link(f"page_{i:04d}.xhtml", t, f"entry{i}") for i, t in entries]

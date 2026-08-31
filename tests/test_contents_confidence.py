@@ -171,3 +171,22 @@ def test_a_head_that_is_the_subtitle_covers_its_chapter(vtb):
                "The Collapse of the Middle Ages", 40)])
     furn = _chapters(vtb, [("THE COLLAPSE OF THE MIDDLE AGES", 90, 110)])
     assert vtb.furniture_absent_from_contents(placed, furn, _pos_of(120)) == []
+
+
+def test_a_folio_less_contents_covers_through_its_hunted_targets(vtb):
+    """The regression the resolved-placement refactor exists to prevent.
+    One book's contents prints no page numbers at all; judged before the
+    title hunt it had no targets, nothing covered, and all nineteen of its
+    chapters merged as missing while the nav named every one. Coverage must
+    be judged on what the hunt settled."""
+    bodies = ["x"] * 60
+    bodies[9] = "<h2>The Collapse of the Middle Ages</h2><p>ink</p>"
+    placed = [(vtb.TocEntry("The Collapse of the Middle Ages", None, "", 2),
+               None, False)]
+    links, v, m, resolved = vtb.nav_from_placed(
+        placed, {i: i for i in range(60)}, list(range(60)), bodies, set(),
+        make_link=lambda h, t, u: (h, t), make_section=lambda t, h: (t, h))
+    assert resolved[0][1] == 9, resolved
+    furn = [vtb.Chapter("THE COLLAPSE OF THE MIDDLE AGES", 10, 30)]
+    assert vtb.furniture_absent_from_contents(
+        resolved, furn, {i: i for i in range(60)}) == []
