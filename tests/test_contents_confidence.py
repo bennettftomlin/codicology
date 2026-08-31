@@ -190,3 +190,28 @@ def test_a_folio_less_contents_covers_through_its_hunted_targets(vtb):
     furn = [vtb.Chapter("THE COLLAPSE OF THE MIDDLE AGES", 10, 30)]
     assert vtb.furniture_absent_from_contents(
         resolved, furn, {i: i for i in range(60)}) == []
+
+
+def test_the_contents_page_is_not_a_chapter_of_the_book(vtb):
+    """Two books' margins name the contents page itself, and one scan's
+    every page bottom carries the archive's own URL — sustained runs both,
+    and neither is a division of the book."""
+    for name in ("Contents", "CONTENTS",
+                 "http://www.archive.org/details/tihkalcontinuati00shul"):
+        assert vtb._NOT_A_CHAPTER_NAME.match(name), name
+    assert not vtb._NOT_A_CHAPTER_NAME.match("Contents Under Pressure")
+
+
+def test_a_merged_chapter_takes_the_contents_own_words(vtb):
+    """The margins abbreviate; where an unplaced entry names the chapter
+    they located, the merge uses its full printed title."""
+    placed = [(vtb.TocEntry("3 Media Content: Press and TV Samples, 2006",
+                            None, "", 2), None, False),
+              (vtb.TocEntry("Introduction", None, "", 2), 4, True)]
+    furn = _chapters(vtb, [("MEDIA CONTENT, 2", 60, 84)])
+    missing = vtb.furniture_absent_from_contents(placed, furn, _pos_of(100))
+    merged, n = vtb.merge_missing_furniture(placed, missing, 1)
+    assert n == 1
+    titles = [e.title for e, _, _ in merged]
+    assert "3 Media Content: Press and TV Samples, 2006" in titles
+    assert "MEDIA CONTENT, 2" not in titles

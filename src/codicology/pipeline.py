@@ -2438,9 +2438,13 @@ CHAPTER_RUN_MIN_MEAN = 4.0
 # by existing at all they kept the printed contents from being consulted.
 _NOT_A_CHAPTER_NAME = re.compile(
     r"^(chapter|part|section|book|volume|appendix|figure|table|page|"
-    r"continued|cont)$"
+    r"continued|cont|contents|table of contents|index of contents)$"
     r"|^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*\d{1,4}$"
-    r"|^[\d\s./–—-]+$", re.I)
+    r"|^[\d\s./–—-]+$"
+    # a scan's margins can carry the archive's own furniture: one book's
+    # every page bottom reads http://www.archive.org/details/… and the run
+    # is as sustained as any chapter's
+    r"|.*(https?://|www\.)", re.I)
 
 
 def chapters_from_furniture(page_furniture: list[list[str]]
@@ -4628,12 +4632,40 @@ def merge_missing_furniture(placed, missing, furn_total):
     depth = min((e.depth for e, _, _ in placed), default=2)
     out = list(placed)
     merged = 0
+    # The label the reader deserves. A running head abbreviates — one
+    # book's margins read MEDIA CONTENT, 2 across a chapter the contents
+    # names in full — and where an UNPLACED entry names the chapter the
+    # margins located, the two halves complete each other: the margins
+    # prove the destination, the contents provides the words. Each entry
+    # lends its title once.
+    lent: set = set()
+    unplaced = [(k, e) for k, (e, t, _) in enumerate(placed)
+                if t is None and e.depth >= 2]
     for c in sorted(missing, key=lambda c: c.start):
         if not re.search(r"[A-Za-z]{3}", c.title):
             continue
+        title = c.title
+        head_core = re.sub(r"[^a-z]", "", _bare_title(c.title.lower()))
+        for k, e in unplaced:
+            if k in lent:
+                continue
+            entry_core = re.sub(r"[^a-z]", "", _bare_title(e.title.lower()))
+            # The head may be cut mid-word — MEDIA CONTENT, 2 is the front
+            # of a title ending in 2006 — so the lending test is looser
+            # than coverage's, and safely so: it only ever chooses WORDS
+            # for a chapter already proven missing and already anchored.
+            # One direction only: the head abbreviates the entry, never
+            # the reverse, or a generic short entry would lend itself to
+            # any longer head.
+            if (_names_chapter(e.title, c.title)
+                    or _names_chapter(c.title, e.title)
+                    or (len(head_core) >= 8
+                        and entry_core.startswith(head_core))):
+                title, _drop = e.title, lent.add(k)
+                break
         at = next((k for k, (_, t, _) in enumerate(out)
                    if t is not None and t > c.start), len(out))
-        out.insert(at, (TocEntry(c.title, None, "", depth), c.start, False))
+        out.insert(at, (TocEntry(title, None, "", depth), c.start, False))
         merged += 1
     return out, merged
 
