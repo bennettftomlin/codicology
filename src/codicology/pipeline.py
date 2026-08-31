@@ -691,6 +691,21 @@ def _grow_quad(corners: np.ndarray, sides: "list[str]", frame_shape,
     return out
 
 
+def _adds_clip(before: np.ndarray, after: np.ndarray) -> bool:
+    """Whether a transform pressed text against an edge it was not touching.
+
+    The dewarp rungs remap content within (or into) a fresh canvas, and a
+    page that reached them with no margin to spare can come out with its
+    first column's letters cut — the cubic sheet did exactly this to a
+    chapter opening, eating 270px of width, and the confidence witness
+    accepted the result because a column of half-letters barely moves the
+    page's mean confidence. Clipping is judged the same way the warp guard
+    judges it; a side already pressed in the input cannot indict the
+    transform.
+    """
+    return bool(set(_clipped_sides(after)) - set(_clipped_sides(before)))
+
+
 def warp_page_guarded(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
     """Warp, then let the text push back on a quad that cropped it.
 
@@ -7580,13 +7595,15 @@ def _prepare_page_image(img: np.ndarray, min_area_ratio: float, rotate: int,
     if deskew:
         img = deskew_page(img)
     if dewarp and workdir:
-        img, modelled = dewarp_page(img)
-        if not modelled and _cubic.available():
+        cand, modelled = dewarp_page(img)
+        if modelled and not _adds_clip(img, cand):
+            img = cand
+        elif not modelled and _cubic.available():
             cand, ok = _cubic.cubic_dewarp(img, workdir)
             if ok:
                 _, ca = _cubic.witness(img, workdir)
                 _, cb = _cubic.witness(cand, workdir)
-                if cb >= ca - 1.0:
+                if cb >= ca - 1.0 and not _adds_clip(img, cand):
                     img = cand
     return img
 
@@ -7714,6 +7731,7 @@ def pages_from_images(
     page_paths: list[str] = []
     page_ids: list[str] = []
     n_nopage = n_dewarped = n_cubic = n_cubic_rej = n_cubic_cand = 0
+    n_clip_veto = 0
     n_split = 0
     for group in groups:
         best_path, best_score = image_paths[group[0]], None
@@ -7767,15 +7785,21 @@ def pages_from_images(
                 # mode in measurement was an inset-newsprint page where
                 # more tiny words read at lower confidence. A page both
                 # rungs decline keeps the deskew alone: the old behaviour.
-                part, modelled = dewarp_page(part)
-                n_dewarped += modelled
+                cand, modelled = dewarp_page(part)
+                if modelled and _adds_clip(part, cand):
+                    n_clip_veto += 1
+                elif modelled:
+                    part = cand
+                    n_dewarped += 1
                 if not modelled:
                     if _cubic.available():
                         cand, ok = _cubic.cubic_dewarp(part, pages_dir)
                         if ok:
                             _wA, cA = _cubic.witness(part, pages_dir)
                             _wB, cB = _cubic.witness(cand, pages_dir)
-                            if cB >= cA - 1.0:
+                            if cB >= cA - 1.0 and _adds_clip(part, cand):
+                                n_clip_veto += 1
+                            elif cB >= cA - 1.0:
                                 part = cand
                                 n_cubic += 1
                             else:
@@ -7801,6 +7825,9 @@ def pages_from_images(
               f"the line finder could not"
               + (f"; the witness refused {n_cubic_rej}"
                  if n_cubic_rej else ""))
+    if n_clip_veto:
+        print(f"  {n_clip_veto} correction(s) declined for pressing text "
+              f"against the canvas edge")
     if n_cubic_cand:
         print(f"  [~] {n_cubic_cand} page(s) the line finder declined kept "
               f"the plain deskew — cubic-sheet dewarp is not installed; "
@@ -7821,6 +7848,7 @@ def dewarp_scan_pages(page_paths: list[str], pages_dir: str) -> None:
     invalidates its OCR cache entry, which is the point of opting in.
     """
     n_deskewed = n_dewarped = n_cubic = n_cubic_rej = n_cubic_cand = 0
+    n_clip_veto = 0
     for path in page_paths:
         img = cv2.imread(path)
         if img is None:
@@ -7828,15 +7856,21 @@ def dewarp_scan_pages(page_paths: list[str], pages_dir: str) -> None:
         before = img
         img = deskew_page(img)
         n_deskewed += img is not before
-        img, modelled = dewarp_page(img)
-        n_dewarped += modelled
+        cand, modelled = dewarp_page(img)
+        if modelled and _adds_clip(img, cand):
+            n_clip_veto += 1
+        elif modelled:
+            img = cand
+            n_dewarped += 1
         if not modelled:
             if _cubic.available():
                 cand, ok = _cubic.cubic_dewarp(img, pages_dir)
                 if ok:
                     _, ca = _cubic.witness(img, pages_dir)
                     _, cb = _cubic.witness(cand, pages_dir)
-                    if cb >= ca - 1.0:
+                    if cb >= ca - 1.0 and _adds_clip(img, cand):
+                        n_clip_veto += 1
+                    elif cb >= ca - 1.0:
                         img = cand
                         n_cubic += 1
                     else:
@@ -7850,7 +7884,9 @@ def dewarp_scan_pages(page_paths: list[str], pages_dir: str) -> None:
                 cv2.imwrite(path, img)
     print(f"  scan geometry: {n_deskewed} page(s) deskewed, "
           f"{n_dewarped} curve-modelled, {n_cubic} cubic-modelled"
-          + (f"; the witness refused {n_cubic_rej}" if n_cubic_rej else ""))
+          + (f"; the witness refused {n_cubic_rej}" if n_cubic_rej else "")
+          + (f"; {n_clip_veto} declined for pressing text against the "
+             f"canvas edge" if n_clip_veto else ""))
     if n_cubic_cand:
         print(f"  [~] {n_cubic_cand} page(s) the line finder declined kept "
               f"the plain deskew — cubic-sheet dewarp is not installed; "

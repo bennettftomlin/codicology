@@ -134,3 +134,23 @@ def test_a_well_framed_page_is_warped_exactly_as_before(vtb):
     a = vtb.warp_page(frame, quad)
     b = vtb.warp_page_guarded(frame, quad)
     assert a.shape == b.shape and np.array_equal(a, b)
+
+
+def test_a_transform_that_presses_text_to_the_edge_is_indicted():
+    """The cubic sheet once ate 270px of a chapter opening's width and the
+    confidence witness accepted it — half-letters barely move the mean. A
+    transform may not create a clipped side the input did not have; one the
+    input already had cannot indict it."""
+    import numpy as np
+    from codicology.pipeline import _adds_clip
+
+    def page(x0):
+        a = np.full((900, 600), 235, dtype=np.uint8)
+        for row in range(150, 750, 40):        # 15 strokes, 5px thick
+            a[row:row + 5, x0:x0 + 200] = 30
+        return a
+
+    margined, pressed = page(40), page(0)
+    assert _adds_clip(margined, pressed)
+    assert not _adds_clip(margined, page(60))
+    assert not _adds_clip(pressed, pressed)
