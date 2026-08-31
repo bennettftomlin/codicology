@@ -2620,8 +2620,18 @@ def _names_chapter(heading: str, head: str) -> bool:
     if len(b) < 6 or len(a) < 6:
         return False
     lo, hi = (b, a) if len(b) <= len(a) else (a, b)
-    return hi.startswith(lo) and hi[len(lo):len(lo) + 1] in (":", ".", ",",
-                                                             "—", "–", "-")
+    if hi.startswith(lo) and hi[len(lo):len(lo) + 1] in (":", ".", ",",
+                                                         "—", "–", "-"):
+        return True
+    # The mirror image: a head that abbreviates to the SUBTITLE. One book's
+    # margins run THE COLLAPSE OF THE MIDDLE AGES where the contents line is
+    # "CHAPTER ONE. “The King's in His Castle …”: The Collapse of the
+    # Middle Ages" — the head is the post-colon half, and matching only the
+    # front half called five of its chapters unaccounted for. The same
+    # guards apply: cut at punctuation, never mid-phrase.
+    rest = hi[:len(hi) - len(lo)].rstrip()
+    return hi.endswith(lo) and bool(rest) and rest[-1] in (":", ".", ",",
+                                                           "—", "–", "-")
 
 
 def promote_chapter_headings(bodies: list[str],
@@ -4569,13 +4579,22 @@ def furniture_absent_from_contents(placed, furn_chapters, pos_of):
     would duplicate it rather than rescue it.
     """
     targets = {t for _, t, _ in placed if t is not None}
+    # Only entries the reader actually gets can cover a chapter: placed
+    # leaves, and groupings, which emit as headings even unplaced. An
+    # unplaced leaf is skipped from the nav entirely, and counting it as
+    # cover blocked the rescue in exactly the case rescue helps — a chapter
+    # that parsed, failed to place, and vanished.
+    emitted = [e for e, t, _ in placed if t is not None or e.depth < 2]
 
     def covered(c):
-        if any(abs(t - c.start) <= 1 for t in targets):
+        # A head names its chapter from the page after the opening — two
+        # leaves back on a verso-title book — so the window is the one the
+        # heading promoter already uses, not a tighter one.
+        if any(abs(t - c.start) <= 2 for t in targets):
             return True
         return any(_names_chapter(e.title, c.title)
                    or _names_chapter(c.title, e.title)
-                   for e, _, _ in placed)
+                   for e in emitted)
 
     return [c for c in furn_chapters
             if c.start in pos_of and not covered(c)]
@@ -4586,23 +4605,34 @@ def merge_missing_furniture(placed, missing, furn_total):
     contents plainly failed to.
 
     The printed contents is the book's own declaration and outranks an
-    inference from its running heads, so a small disagreement is only
-    reported. But a parse that misses at least three chapters AND at least
-    half of what the heads independently describe has failed — one book
-    shipped seven nav entries for 288 pages while its margins named the
-    chapters plainly. Merged, never replaced: everything the contents did
-    place is kept, and the absent chapters are added in page order, each
-    anchored where its own running heads begin.
+    inference from its running heads — which is enforced per chapter, not
+    per book: a chapter counts as missing only when no placed entry lands
+    within the verso window of its opening and no entry the reader will
+    actually see names it, under the same fuzzy matching the heads
+    themselves are grouped by. A chapter that survives all of that is
+    evidenced by a sustained run of its own margins and absent from the
+    nav, and there is no number of its peers that makes leaving it out
+    better for the reader. An aggregate gate stood here once — at least
+    three missing and half the book's — and its only effect was to keep
+    proven chapters out of thin navs.
+
+    Merged, never replaced: everything the contents did place is kept, and
+    the absent chapters are added in page order, each anchored where its
+    own running heads begin. The one refusal is a title with no run of
+    three letters — one manual's appendix heads are the bare letters A and
+    B, real destinations but meaningless as labels.
     """
-    if len(missing) < 3 or 2 * len(missing) < furn_total:
-        return placed, 0
     depth = min((e.depth for e, _, _ in placed), default=2)
     out = list(placed)
+    merged = 0
     for c in sorted(missing, key=lambda c: c.start):
+        if not re.search(r"[A-Za-z]{3}", c.title):
+            continue
         at = next((k for k, (_, t, _) in enumerate(out)
                    if t is not None and t > c.start), len(out))
         out.insert(at, (TocEntry(c.title, None, "", depth), c.start, False))
-    return out, len(missing)
+        merged += 1
+    return out, merged
 
 
 def contents_confidence(placed, n_pages, missed, furn_unmerged):
@@ -7120,7 +7150,7 @@ def build_epub(
                   f"added to the nav at the pages their running heads span")
     if toc_built:
         for w in contents_confidence(placed, len(bodies), missed,
-                                     0 if n_merged else len(missing_ch)):
+                                     len(missing_ch) - n_merged):
             print(f"    [!] {w}")
     if not toc_built and furn_chapters:
         links = [epub.Link(f"page_{c.start:04d}.xhtml", c.title,

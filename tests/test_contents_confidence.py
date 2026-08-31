@@ -103,18 +103,71 @@ def test_a_healthy_parse_is_left_entirely_alone(vtb):
 
 
 def test_a_title_covered_chapter_is_not_duplicated(vtb):
-    """An entry that failed to place still declares its chapter; adding the
-    margins' copy would duplicate it, not rescue it."""
-    placed = _placed(vtb, [("The Collapse of the Middle Ages", None)])
+    """A placed entry that names the chapter covers it even when it landed
+    outside the verso window — adding the margins' copy would duplicate an
+    entry the reader already has."""
+    placed = _placed(vtb, [("The Collapse of the Middle Ages", 4)])
     furn = _chapters(vtb, [("THE COLLAPSE OF THE MIDDLE AGES", 10, 30)])
     assert vtb.furniture_absent_from_contents(placed, furn, _pos_of(50)) == []
 
 
-def test_a_small_disagreement_does_not_merge(vtb):
-    """Two chapters short of a rich contents is placement's problem, not
-    the parse having failed; the contents outranks the margins there."""
+def test_even_a_small_shortfall_is_made_good(vtb):
+    """The gate that once stood here — at least three missing and half the
+    book's — only ever kept proven chapters out of thin navs. Per-chapter
+    evidence decides now: a sustained head run nothing in the contents
+    accounts for goes in, however rich the rest of the parse."""
     placed = _placed(vtb, [(f"{i}. Chapter", i * 10) for i in range(1, 11)])
-    furn = _chapters(vtb, [("EXTRA ONE", 45, 52), ("EXTRA TWO", 85, 92)])
+    furn = _chapters(vtb, [("A REAL DIVISION", 45, 52)])
     missing = vtb.furniture_absent_from_contents(placed, furn, _pos_of(120))
     merged, n = vtb.merge_missing_furniture(placed, missing, len(furn))
-    assert n == 0 and merged == placed
+    assert n == 1
+    assert any(e.title == "A REAL DIVISION" for e, _, _ in merged)
+
+
+def test_a_bare_letter_head_is_not_a_nav_label(vtb):
+    """One manual's appendix heads are the letters A and B — real
+    destinations, meaningless as labels. They stay out; the glossary
+    beside them goes in."""
+    placed = _placed(vtb, [("Chapter One", 5)])
+    furn = _chapters(vtb, [("A", 40, 47), ("B", 48, 55),
+                           ("GLOSSARY", 56, 62)])
+    missing = vtb.furniture_absent_from_contents(placed, furn, _pos_of(70))
+    merged, n = vtb.merge_missing_furniture(placed, missing, len(furn))
+    assert n == 1
+    titles = [e.title for e, _, _ in merged]
+    assert "GLOSSARY" in titles and "A" not in titles
+
+
+def test_a_head_starting_after_a_verso_opening_is_covered(vtb):
+    """The head names its chapter from the page after the opening, two
+    leaves back on a verso-title book. A placed entry at the true opening
+    covers a head run starting two pages later."""
+    placed = _placed(vtb, [("1. The Chapter", 10)])
+    furn = _chapters(vtb, [("THE CHAPTER HEAD TEXT DIFFERS", 12, 30)])
+    assert vtb.furniture_absent_from_contents(placed, furn, _pos_of(40)) == []
+
+
+def test_an_unplaced_leaf_does_not_cover_its_chapter(vtb):
+    """An unplaced leaf is skipped from the nav entirely; counting it as
+    cover blocked the rescue in exactly the case rescue helps."""
+    placed = [(vtb.TocEntry("The Gathering Storm", None, "", 2), None, False)]
+    furn = _chapters(vtb, [("THE GATHERING STORM", 20, 34)])
+    missing = vtb.furniture_absent_from_contents(placed, furn, _pos_of(40))
+    assert len(missing) == 1
+
+
+def test_an_unplaced_grouping_still_covers(vtb):
+    """A grouping emits as a heading even unplaced, so it covers."""
+    placed = [(vtb.TocEntry("The Gathering Storm", None, "", 0), None, False)]
+    furn = _chapters(vtb, [("THE GATHERING STORM", 20, 34)])
+    assert vtb.furniture_absent_from_contents(placed, furn, _pos_of(40)) == []
+
+
+def test_a_head_that_is_the_subtitle_covers_its_chapter(vtb):
+    """One book's margins run the post-colon half of the title; matching
+    only the front half called five of its chapters unaccounted for."""
+    placed = _placed(
+        vtb, [("CHAPTER ONE. “The King’s in His Castle”: "
+               "The Collapse of the Middle Ages", 40)])
+    furn = _chapters(vtb, [("THE COLLAPSE OF THE MIDDLE AGES", 90, 110)])
+    assert vtb.furniture_absent_from_contents(placed, furn, _pos_of(120)) == []
