@@ -3184,6 +3184,30 @@ _COLUMN_HEADING = re.compile(
     r"^(?:page|pages|contents|chapter|section|paragraphs?|title|no\.?)$", re.I)
 
 
+def _blank_lead_runs(body: str) -> bool:
+    """Whether this page's blank-leading-cell rows ever come two in a row.
+
+    Both a subsection and a chapter's byline are set the same way — the
+    number cell left empty, the title cell holding text — so the row alone
+    cannot say which it is. What tells them apart is company. Sections come
+    in runs; a byline is one line naming who wrote the chapter above it, and
+    a book that gives every chapter an author gives every one of them
+    exactly one. One edited collection listed nine contributors that way and
+    each arrived as a subsection of the chapter they had written.
+    """
+    run = 0
+    for row in re.findall(r"<tr[^>]*>(.*?)</tr>", body, re.S):
+        cells = re.findall(r"<td[^>]*/>|<td[^>]*>(.*?)</td>", row, re.S)
+        vals = [" ".join(re.sub(r"<[^>]+>", "", c or "").split()) for c in cells]
+        if len(vals) >= 2 and not vals[0] and vals[1]:
+            run += 1
+            if run >= 2:
+                return True
+        else:
+            run = 0
+    return False
+
+
 def _leads_indented_rows(el, indent: int, need: int = 2) -> bool:
     """Whether the contents rows after this one are set further in than it.
 
@@ -3278,6 +3302,7 @@ def parse_printed_toc(bodies: list[str], limit: int = 25,
             root = lhtml.fragment_fromstring(body, create_parent="div")
         except Exception:
             continue
+        subordinate_runs = _blank_lead_runs(body)
         # A contents page that lists titles and no page numbers at all — the
         # Saylor economics volumes name 34 chapters as bare paragraphs. There
         # is nothing to resolve against the folio map, so these carry no folio
@@ -3409,6 +3434,7 @@ def parse_printed_toc(bodies: list[str], limit: int = 25,
                             or _peer_banners(el, mark.group(1).lower())):
                         entries.append(TocEntry(full, None, "", 0))
                     elif (len(cells) == 1 and len(raw) >= 2
+                            and subordinate_runs
                             and not raw[0].strip()
                             and 3 <= len(full) <= 120
                             and re.search(r"[A-Za-z]{3}", full)

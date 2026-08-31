@@ -388,3 +388,35 @@ def test_a_title_broken_inside_a_table_cell_keeps_its_space(vtb):
     ])
     titles = [e.title for e in vtb.parse_printed_toc(page)[0]]
     assert any("Communities in the United Kingdom" in t for t in titles), titles
+
+
+def test_a_chapters_byline_is_not_one_of_its_subsections(vtb):
+    """An edited collection names who wrote each chapter, set the same way a
+    subsection is — number cell empty, title cell filled — so the row alone
+    cannot say which it is. What tells them apart is company: sections come
+    in runs, and a book that gives every chapter an author gives each of
+    them exactly one line."""
+    page = _cells_page([
+        ["<b>1</b>", "<b>Introduction: Access from Above</b>", "1"],
+        [None, "Joe Karaganis", None],
+        ["<b>2</b>", "<b>The Genesis of Library Genesis</b>", "25"],
+        [None, "Balázs Bodó", None],
+        ["<b>3</b>", "<b>Shadow Libraries in India</b>", "49"],
+        [None, "Lawrence Liang", None],
+    ])
+    titles = [e.title for e in vtb.parse_printed_toc(page)[0]]
+    assert "Joe Karaganis" not in titles, titles
+    assert "Balázs Bodó" not in titles, titles
+
+
+def test_subsections_two_deep_are_still_read(vtb):
+    """The mirror case: the same shape, but running two or more deep, is a
+    list of sections and must survive."""
+    page = _cells_page([
+        ["<b>1</b>", "<b>A Brief History of Migration</b>", None],
+        [None, "The Political and Economic Contexts", None],
+        [None, "The Global Economy", None],
+        [None, "Asylum and Immigration", None],
+    ])
+    titles = [e.title for e in vtb.parse_printed_toc(page)[0]]
+    assert "The Global Economy" in titles, titles
