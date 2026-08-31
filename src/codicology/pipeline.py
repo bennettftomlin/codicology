@@ -8770,6 +8770,22 @@ def _finish(
             fh.write(img2pdf.convert(page_paths))
         print(f"  PDF saved: {output_pdf}  ({len(page_paths)} pages)")
 
+    if output_pdf and pdf_text_layer:
+        # A checkpoint, not the deliverable: the geometry above is the most
+        # expensive unrepeatable work in the run — with the dewarp ladder
+        # and its witnesses, twenty-odd minutes on a real book — and the
+        # prepared pages live in a temp directory that dies with the
+        # process. One killed build re-paid the whole ladder to resume.
+        # Written pages-only here, the facsimile plus the page map already
+        # on disk make a crashed run resumable with --pages-from, geometry
+        # never repaid; the text-layered version replaces this file at the
+        # end of the run as before.
+        print(f"\n[+] Checkpointing pages-only PDF → {output_pdf}")
+        with open(output_pdf, "wb") as fh:
+            fh.write(img2pdf.convert(page_paths))
+        print(f"  {len(page_paths)} prepared page(s) safe; the text layer "
+              f"replaces this file when the run completes")
+
     shared_cache = (OCRCache(ocr_cache, backend.name, backend.langs,
                              serve_stale=serve_stale_cache)
                     if (ocr_cache and backend is not None) else None)
