@@ -122,31 +122,40 @@ def _png_from_pix(pix) -> bytes | None:
         lib.lept_free(buf)
 
 
-def _binarised_png(image: np.ndarray, redfactor: int) -> bytes:
+def _binarised_png(image: np.ndarray, redfactor: int,
+                   binarise: str = "otsu") -> bytes:
     """A 1bpp PNG of the page's ink, at the model-building scale.
 
-    Otsu, and the ink stays dark: a PNG's black bit becomes leptonica's 1,
-    which is ink. This is the polarity that works; the other reads as a
-    blank page.
+    The ink stays dark: a PNG's black bit becomes leptonica's 1, which is
+    ink. This is the polarity that works; the other reads as a blank page.
+    Otsu first — a global threshold suits an evenly lit page — and adaptive
+    as the second look, for the page whose photograph or plate drags a
+    global threshold away from the type.
     """
     img = image
     if redfactor == 2:
         img = cv2.resize(image, (image.shape[1] // 2, image.shape[0] // 2),
                          interpolation=cv2.INTER_AREA)
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
-    _, binary = cv2.threshold(gray, 0, 255,
-                              cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    if binarise == "adaptive":
+        binary = cv2.adaptiveThreshold(gray, 255,
+                                       cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                       cv2.THRESH_BINARY, 51, 18)
+    else:
+        _, binary = cv2.threshold(gray, 0, 255,
+                                  cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     out = io.BytesIO()
     Image.fromarray(binary).convert("1").save(out, format="PNG")
     return out.getvalue()
 
 
-def _attempt(lib, page_png: bytes, image: np.ndarray, redfactor: int):
+def _attempt(lib, page_png: bytes, image: np.ndarray, redfactor: int,
+             minlines: int = 15, binarise: str = "otsu"):
     pixs = _pix_from_png(page_png)
-    pixb = _pix_from_png(_binarised_png(image, redfactor))
+    pixb = _pix_from_png(_binarised_png(image, redfactor, binarise))
     if not pixs or not pixb:
         return None
-    dewa = lib.dewarpaCreate(1, 0, redfactor, 15, 0)
+    dewa = lib.dewarpaCreate(1, 0, redfactor, minlines, 0)
     pixd = ctypes.c_void_p()
     try:
         lib.dewarpaUseBothArrays(dewa, 1)
@@ -168,7 +177,9 @@ def _attempt(lib, page_png: bytes, image: np.ndarray, redfactor: int):
                 lib.pixDestroy(ctypes.byref(p))
 
 
-def dewarp_page(image: np.ndarray) -> tuple[np.ndarray, bool]:
+def dewarp_page(image: np.ndarray,
+                minlines: int = 10,
+                binarise: str = "otsu") -> tuple[np.ndarray, bool]:
     """The page with its text lines straightened, or the page untouched.
 
     The build scale is chosen from the page itself — full resolution where
@@ -176,6 +187,13 @@ def dewarp_page(image: np.ndarray) -> tuple[np.ndarray, bool]:
     and the other factor is tried when the first declines, so a mixed book
     needs no per-book setting. Both declining falls through to the caller's
     rigid deskew, which has already run.
+
+    minlines is leptonica's acceptance bar. Its own default is 15; the
+    default here is 10, measured on one book: the 10-14-line cohort was
+    three pages, every one improving under the witness (+2.3 mean, +0.6
+    worst), and below 10 the bar admits nothing at all — 63 of 67 declined
+    pages never model at ANY threshold, so the finder's eyesight, not its
+    standards, is what limits coverage.
     """
     lib = _load()
     if lib is None or image.ndim != 3:
@@ -186,7 +204,8 @@ def dewarp_page(image: np.ndarray) -> tuple[np.ndarray, bool]:
     page_png = enc.tobytes()
     order = (2, 1) if image.shape[1] > FULL_RES_LIMIT else (1, 2)
     for redfactor in order:
-        out_png = _attempt(lib, page_png, image, redfactor)
+        out_png = _attempt(lib, page_png, image, redfactor, minlines,
+                           binarise)
         if out_png is None:
             continue
         out = cv2.imdecode(np.frombuffer(out_png, np.uint8), cv2.IMREAD_COLOR)

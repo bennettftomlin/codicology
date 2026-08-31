@@ -132,6 +132,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
+from . import cubic as _cubic
 from .dewarp import dewarp_page
 
 from . import progress
@@ -7534,7 +7535,7 @@ def pages_from_images(
 
     page_paths: list[str] = []
     page_ids: list[str] = []
-    n_nopage = n_dewarped = 0
+    n_nopage = n_dewarped = n_cubic = n_cubic_rej = n_cubic_cand = 0
     n_split = 0
     for group in groups:
         best_path, best_score = image_paths[group[0]], None
@@ -7581,10 +7582,28 @@ def pages_from_images(
             if dewarp:
                 # After the rigid deskew, never instead of it: leptonica
                 # models the residual curve from the page's own lines and
-                # declines pages that cannot prove one, which fall through
-                # with the deskew alone — the fallback is the old behaviour.
+                # declines pages that cannot prove one. Those fall to the
+                # cubic-sheet rung, whose different eye reads the inset-
+                # heavy pages the line finder cannot — and whose every
+                # correction must pass the witness, because its one failure
+                # mode in measurement was an inset-newsprint page where
+                # more tiny words read at lower confidence. A page both
+                # rungs decline keeps the deskew alone: the old behaviour.
                 part, modelled = dewarp_page(part)
                 n_dewarped += modelled
+                if not modelled:
+                    if _cubic.available():
+                        cand, ok = _cubic.cubic_dewarp(part, pages_dir)
+                        if ok:
+                            _wA, cA = _cubic.witness(part, pages_dir)
+                            _wB, cB = _cubic.witness(cand, pages_dir)
+                            if cB >= cA - 1.0:
+                                part = cand
+                                n_cubic += 1
+                            else:
+                                n_cubic_rej += 1
+                    else:
+                        n_cubic_cand += 1
             out = os.path.join(pages_dir, f"page_{len(page_paths):04d}.jpg")
             Image.fromarray(cv2.cvtColor(part, cv2.COLOR_BGR2RGB)).save(
                 out, "JPEG", quality=92, dpi=(300, 300)
@@ -7599,6 +7618,15 @@ def pages_from_images(
     if n_dewarped:
         print(f"  {n_dewarped} page(s) had the binding's curve modelled out "
               f"of their own text lines")
+    if n_cubic or n_cubic_rej:
+        print(f"  {n_cubic} more page(s) modelled by the cubic sheet where "
+              f"the line finder could not"
+              + (f"; the witness refused {n_cubic_rej}"
+                 if n_cubic_rej else ""))
+    if n_cubic_cand:
+        print(f"  [~] {n_cubic_cand} page(s) the line finder declined kept "
+              f"the plain deskew — cubic-sheet dewarp is not installed; "
+              f"pip install 'codicology[geometry]' may improve them")
     return page_paths, page_ids
 
 
@@ -8925,10 +8953,17 @@ def process_video(
                 if deskew:
                     part = deskew_page(part)
                 if dewarp:
-                    # Same ladder as the photograph path: model the curve
-                    # where the type proves one, keep the deskewed page
-                    # where it cannot.
+                    # Same ladder as the photograph path: leptonica, then
+                    # the cubic sheet under the witness, then the deskewed
+                    # page as it was.
                     part, _modelled = dewarp_page(part)
+                    if not _modelled and _cubic.available():
+                        _cand, _ok = _cubic.cubic_dewarp(part, pages_dir)
+                        if _ok:
+                            _, _cA = _cubic.witness(part, pages_dir)
+                            _, _cB = _cubic.witness(_cand, pages_dir)
+                            if _cB >= _cA - 1.0:
+                                part = _cand
                 out = os.path.join(pages_dir, f"page_{len(page_paths):04d}.jpg")
                 Image.fromarray(cv2.cvtColor(part, cv2.COLOR_BGR2RGB)).save(
                     out, "JPEG", quality=92, dpi=(300, 300)

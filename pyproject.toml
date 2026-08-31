@@ -22,6 +22,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# The cubic-sheet dewarp rung (rung 2 of the page-geometry ladder). Without
+# it, pages the leptonica line finder declines keep the plain deskew and
+# the build says so; with it, they are modelled and gated by the witness.
+geometry = ["page-dewarp"]
 # OCR backends are chosen with --ocr; install the one you want.
 # Surya is pinned to the exact version this pipeline is developed and
 # tested against: its API has broken across minor versions before, and
