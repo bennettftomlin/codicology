@@ -700,13 +700,27 @@ def epub_page_texts(epub_path: str) -> dict:
 
 ALIGN_DRIFT = 12        # how far ahead in the PDF a book page may sit
 ALIGN_FLOOR = 0.25      # token overlap below this is not the same page
+ALIGN_SHOP = 30         # pages shorter than this never shop the window
 
 
 def _page_similarity(epub_folds: set, tess_folds: set) -> float:
+    """How much of the BOOK page the witness page explains.
+
+    Directional on purpose: a min-denominator version scored any short
+    page at 1.0 against any superset — a title page "matched" the
+    contents page that quotes it, every such match catapulted the walker
+    past real pages, and a whole book went unwitnessed behind a window
+    that only looks forward.
+    """
     if not epub_folds or not tess_folds:
         return 0.0
-    return len(epub_folds & tess_folds) / max(1, min(len(epub_folds),
-                                                     len(tess_folds)))
+    return len(epub_folds & tess_folds) / len(epub_folds)
+
+
+def _explains_witness(epub_folds: set, tess_folds: set) -> float:
+    if not tess_folds:
+        return 0.0
+    return len(epub_folds & tess_folds) / len(tess_folds)
 
 
 def main(epub: str, pdf: str, report: "str | None" = None,
@@ -788,14 +802,23 @@ def main(epub: str, pdf: str, report: "str | None" = None,
                              if len(fold_word(w)) >= 3})
         here = sim_at(j)
         best, best_sim = j, here
-        if here < 0.5:
-            # Shop the window only when the expected page is doubtful, and
-            # a later page must CLEARLY beat it — chapters share vocabulary
-            # and a narrow win ahead is how a walker jumps a real page.
+        if here < 0.5 and len(epub_folds) >= ALIGN_SHOP:
+            # Shop the window only when the expected page is doubtful AND
+            # the page has vocabulary enough to identify itself — short
+            # pages ride the monotone prior, because their few words
+            # recur everywhere. A jump needs strong evidence BOTH ways:
+            # the candidate must explain the book page and the book page
+            # must explain the candidate, or a contents page swallows
+            # every title near it.
             for cand in range(j + 1, min(len(doc), j + 1 + ALIGN_DRIFT)):
                 sim = sim_at(cand)
-                if sim > best_sim + 0.2:
-                    best, best_sim = cand, sim
+                if sim >= max(0.5, best_sim + 0.2):
+                    data = tess_page(cand)
+                    back = _explains_witness(
+                        epub_folds, {fold_word(w) for w in data[0]
+                                     if len(fold_word(w)) >= 3})                         if data else 0.0
+                    if back >= 0.2:
+                        best, best_sim = cand, sim
                 if sim > 0.8:
                     break
         if best_sim < ALIGN_FLOOR:

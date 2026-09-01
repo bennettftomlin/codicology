@@ -370,13 +370,17 @@ def test_short_scatter_is_not_a_run(vtb):
     assert runs == []          # single unmatched word, below the run floor
 
 
-def test_page_similarity_is_overlap_over_smaller(vtb):
+def test_page_similarity_is_directional(vtb):
+    """A short page must NOT score perfect against a superset page — that
+    is how a title page once "matched" the contents page quoting it and a
+    walker catapulted past a whole book."""
     from codicology.adjudicate import _page_similarity
-    a = {"river", "channel", "dredge", "engineer"}
-    b = {"river", "channel", "dredge"}
-    assert _page_similarity(a, b) == 1.0          # b fully inside a
-    assert _page_similarity(a, {"unrelated"}) == 0.0
-    assert _page_similarity(set(), b) == 0.0
+    short = {"conquest", "northwest"}
+    contents = {"conquest", "northwest", "chapter", "settlement",
+                "americans", "index", "preface"}
+    assert _page_similarity(short, contents) == 1.0   # book page explained
+    assert _page_similarity(contents, short) < 0.3    # witness is not
+    assert _page_similarity(set(), short) == 0.0
 
 
 def test_run_verdict_bands(vtb):
