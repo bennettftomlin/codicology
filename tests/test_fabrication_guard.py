@@ -552,3 +552,41 @@ def test_other_backends_are_not_probed(vtb):
             return [[]]
     assert vtb.warm_backend(Fake()) is None
     assert Fake.calls == 0, "a non-surya backend must not be probed at all"
+
+
+def test_a_mislabelled_notes_heading_is_demoted_to_the_body(vtb, capsys):
+    """The layout pass once labelled a FOOTNOTES heading page furniture —
+    top of a column is where running heads live — and the body silently
+    lost it, unlinking half a chapter's notes and cross-linking the rest
+    by position. With the section's own first entry on the page, the
+    heading is a heading."""
+    items = [
+        vtb.PageItem(html="<h2>FOOTNOTES</h2>", is_furniture=True),
+        vtb.PageItem(html="<p>Chapter III</p>"),
+        vtb.PageItem(html="<li>1. Lippincott, p. 632.</li>"),
+    ]
+    out = vtb.demote_mislabelled_heads(items, "p53")
+    assert not out[0].is_furniture
+    assert "kept in the body" in capsys.readouterr().out
+
+
+def test_without_entries_the_heading_stays_furniture(vtb):
+    """A running head that literally reads NOTES, repeated across a notes
+    section's pages, must stay out of the body — the demotion demands the
+    section's own first entry beside it."""
+    items = [
+        vtb.PageItem(html="<h2>NOTES</h2>", is_furniture=True),
+        vtb.PageItem(html="<p>...continuation of entry twelve...</p>"),
+    ]
+    out = vtb.demote_mislabelled_heads(items, "p54")
+    assert out[0].is_furniture
+
+
+def test_wordy_furniture_is_reported_not_silently_lost(vtb, capsys):
+    items = [
+        vtb.PageItem(html="<p>The quick brown fox jumps over the lazy "
+                          "sleeping dog tonight</p>", is_furniture=True),
+    ]
+    out = vtb.demote_mislabelled_heads(items, "p9")
+    assert out[0].is_furniture
+    assert "full line of text" in capsys.readouterr().out

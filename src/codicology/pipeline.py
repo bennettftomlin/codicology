@@ -2400,6 +2400,41 @@ def _shingles(text: str, k: int = SHINGLE_WORDS) -> set[str]:
     return {" ".join(words[i : i + k]) for i in range(len(words) - k + 1)}
 
 
+def demote_mislabelled_heads(items: "list[PageItem]",
+                             page_name: str = "") -> "list[PageItem]":
+    """Return items with a mislabelled section heading restored to the body.
+
+    The layout pass sometimes labels a section's display heading as page
+    furniture — measured once on a notes section whose FOOTNOTES sat at the
+    top of a column, exactly where a running head lives; the label read
+    clean text at 99.6% confidence and the body silently lost the heading,
+    which unlinked half a chapter's notes and cross-linked the rest by
+    position. The demotion demands page-local evidence: the text must BE a
+    notes heading and the same page must carry the section's own first
+    numbered entry. Any other furniture that carries a full line of words
+    is only reported — visibility, not guesswork — because a true running
+    head repeated across a section must stay out of the body.
+    """
+    has_entry = any(not j.is_furniture and j.html
+                    and re.search(r"(?:^|>)\s*1\.\s", j.html)
+                    for j in items)
+    out = []
+    for it in items:
+        if it.is_furniture and it.html:
+            t = re.sub(r"\s+", " ", _strip_tags(it.html)).strip()
+            if has_entry and re.fullmatch(r"(?:FOOT|END)?NOTES?", t, re.I):
+                print(f"    [~] {page_name}: {t!r} was labelled page "
+                      f"furniture but names the section beside it — kept "
+                      f"in the body")
+                out.append(it._replace(is_furniture=False))
+                continue
+            if len(t) > 60 or len(re.findall(r"[A-Za-z]{2,}", t)) > 8:
+                print(f"    [~] {page_name}: furniture label on a full "
+                      f"line of text — left out of the body: {t[:70]!r}")
+        out.append(it)
+    return out
+
+
 def strip_running_heads(items: list[PageItem]) -> list[PageItem]:
     """
     Drop the running head and folio from the ends of a page.
@@ -4467,6 +4502,28 @@ def link_chapter_notes(bodies: list[str], dropped: set) -> dict:
     stats = {"linked": 0, "unlinked": 0, "sections": 0}
     heads = [(i, m.start()) for i, b in enumerate(bodies)
              for m in [NOTES_HEAD.search(b)] if m]
+    # A section whose display heading the OCR dropped still announces
+    # itself: a bare chapter designation followed at once by entries
+    # numbered from one. One book lost a single FOOTNOTES head that way,
+    # and the cost was double — that chapter's high markers went unlinked,
+    # and its low markers bound BY POSITION to the next chapter's entries,
+    # confidently and wrongly. Three ascending entries are required, the
+    # same floor the single-section walk uses, so a chapter OPENING page
+    # ("Chapter III" over prose) can never qualify.
+    head_pages = {i for i, _ in heads}
+    for i, b in enumerate(bodies):
+        if i in head_pages:
+            continue
+        for gm in GROUP_HEAD.finditer(b):
+            tail = b[gm.end():gm.end() + 400]
+            ns = [n for _, n in sorted(
+                (m.start(), int(m.group(1)))
+                for pat in (NOTE_ENTRY, NOTE_ENTRY_PLAIN, NOTE_ENTRY_LI)
+                for m in pat.finditer(tail))]
+            if ns[:3] == [1, 2, 3]:
+                heads.append((i, gm.start()))
+                break
+    heads.sort()
     if len(heads) < 2:
         return stats
     edits: dict[int, list[tuple[int, int, str]]] = {}
@@ -6832,6 +6889,7 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
         for path, hit in zip(chunk_paths, remembered):
             nonlocal_page_i[0] = len(bodies)   # the page these figures sit on
             items = hit if hit is not None else fresh[path]
+            items = demote_mislabelled_heads(items, os.path.basename(path))
             # Furniture is set aside, never merely deleted: its text is the
             # folio audit's evidence, already recognised at full resolution.
             page_furniture.append([_strip_tags(it.html) for it in items
