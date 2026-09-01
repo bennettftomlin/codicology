@@ -398,6 +398,131 @@ SEAM_KEEP_LEN = 2
 # elsewhere.
 
 
+# The aligner keeps replacements only, so words surya read where tesseract
+# has no trace at all — insertions — vanish unexamined. That silence is the
+# strongest fabrication testimony there is: tesseract has no generator and
+# cannot invent, so a page carrying a SUBSTANTIAL mass of surya-only words
+# is either a hallucination or small print earning surya its keep. Measured
+# on a 169-page book: honest pages run ~1% surya-only (median 0.98%, p90
+# 5.9%); the tail — 17-81% — was entirely small-type REAL text (a patent
+# diagram's printed legend, plate captions, small-type citations). Note
+# the stream compared is the EPUB body, which the layout boundary has
+# already curated — artwork-interior text never enters it — so a run here
+# is either small print tesseract fumbled or invention, nothing else.
+# So the mass alone flags, and ink under the claimed words separates the
+# classes: real print carries letterform ink in its boxes, and the measured
+# 140-word invention sat over blank paper. Photo-textured regions defeat
+# the ink test (texture reads as ink); the tier is warn-only and a human
+# judges. Thresholds sit in the measured gap: the tail starts at 17%, the
+# densest honest page below it ran 13%.
+SURYA_ONLY_FRAC = 0.15     # page flagged at this surya-only fraction…
+SURYA_ONLY_MIN = 8         # …with at least this many such words, or
+SURYA_ONLY_RUN = 12        # any single contiguous run this long
+SURYA_RUN_MIN = 3          # runs shorter than this fold into the stat
+SURYA_INKLESS = 0.005      # letterform ink below this = words over blank
+
+
+def surya_only_runs(s_tok: list, t_tok: list,
+                    skip_folds: "set | None" = None) -> tuple:
+    """(fraction, count, runs) of surya words tesseract has no trace of.
+
+    A word counts when its folded form is at least three characters and
+    appears nowhere in tesseract's reading; `skip_folds` excludes words
+    already captured as disputes, which tesseract DID see, just
+    differently. Runs are contiguous counted words in reading order —
+    what a human judges is the sentence, not the word.
+    """
+    t_set = {fold_word(w) for w in t_tok}
+    skip = skip_folds or set()
+    eligible = only = 0
+    runs, cur = [], []
+    for w in s_tok:
+        f = fold_word(w)
+        if len(f) < 3:
+            continue
+        eligible += 1
+        if f not in t_set and f not in skip:
+            only += 1
+            cur.append(w)
+        else:
+            if len(cur) >= SURYA_RUN_MIN:
+                runs.append(cur)
+            cur = []
+    if len(cur) >= SURYA_RUN_MIN:
+        runs.append(cur)
+    return (only / max(1, eligible), only, runs)
+
+
+def _run_box(page, run: list) -> "list | None":
+    """Top-down fraction box for a run, located in the PDF's own text layer.
+
+    The layer is surya's geometry — the words were placed there from the
+    same reading. Search is by the run's first words; a miss (layout join
+    differences) degrades to no crop, never to a wrong one.
+    """
+    try:
+        tp = page.get_textpage()
+        needle = " ".join(run[:3])
+        found = tp.search(needle, match_case=False).get_next()
+        if not found:
+            return None
+        idx, cnt = found
+        n = tp.count_rects(idx, cnt)
+        if not n:
+            return None
+        l = b = r = t = None
+        for k in range(n):
+            x0, y0, x1, y1 = tp.get_rect(k)
+            l = x0 if l is None else min(l, x0)
+            b = y0 if b is None else min(b, y0)
+            r = x1 if r is None else max(r, x1)
+            t = y1 if t is None else max(t, y1)
+        W, H = page.get_width(), page.get_height()
+        return [l / W, 1 - t / H, r / W, 1 - b / H]
+    except Exception:
+        return None
+
+
+def _ink_under(png: str, box: list) -> "float | None":
+    """Letterform ink fraction inside a fraction box of the rendered page."""
+    try:
+        import cv2
+        import numpy as np
+        g = cv2.imread(png, cv2.IMREAD_GRAYSCALE)
+        if g is None:
+            return None
+        h, w = g.shape[:2]
+        x0, y0 = max(0, int(box[0] * w) - 4), max(0, int(box[1] * h) - 4)
+        x1, y1 = min(w, int(box[2] * w) + 4), min(h, int(box[3] * h) + 4)
+        crop = g[y0:y1, x0:x1]
+        if crop.size < 100:
+            return None
+        k = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
+        hat = cv2.morphologyEx(crop, cv2.MORPH_BLACKHAT, k)
+        return float((hat > 40).mean())
+    except Exception:
+        return None
+
+
+def _page_text_density(t_tok: list, t_box: list) -> "float | None":
+    """chars per fraction-area of the page's own witnessed words — the
+    baseline a claimed run's density is compared against. Tiny print runs
+    legitimately 2-3x above body text (that is what tiny means), so the
+    ratio annotates suspicion rather than convicting: its blind-spot
+    coverage is text claimed inside photo regions, where the ink probe
+    reads texture as ink but N words genuinely cannot fit the gap."""
+    chars = area = 0.0
+    for w, b in zip(t_tok, t_box):
+        if not b:
+            continue
+        a = max(0.0, (b[2] - b[0])) * max(0.0, (b[3] - b[1]))
+        if a <= 0:
+            continue
+        chars += len(fold_word(w))
+        area += a
+    return (chars / area) if area > 1e-6 else None
+
+
 def align_disputes(ours: list, theirs: list, stats: "Counter | None" = None
                    ) -> list:
     """Word-level disagreements between two readings of one page, by
@@ -461,6 +586,7 @@ def main(epub: str, pdf: str, report: "str | None" = None,
     surya_tokens = {i: tokens(t) for i, t in pages.items()}
     align_stats = Counter()
     agreed, per_page = [], {}
+    surya_only = []
     disputes = []
     n_done = 0
     witness = {}
@@ -490,6 +616,26 @@ def main(epub: str, pdf: str, report: "str | None" = None,
                    {fold_word(b) for _, b, _ in pairs}
         agreed.append([fold_word(w) for w in s_tok
                        if fold_word(w) not in pair_set])
+        frac, only, runs = surya_only_runs(
+            s_tok, t_tok, skip_folds={fold_word(a) for a, _, _ in pairs})
+        page_rows = []
+        if runs:
+            base = _page_text_density(t_tok, t_box)
+            for run in runs:
+                box = _run_box(doc[i], run)
+                ink = _ink_under(png, box) if box else None
+                density = None
+                if box and base:
+                    a = max(0.0, box[2] - box[0]) * max(0.0, box[3] - box[1])
+                    if a > 1e-6:
+                        density = (sum(len(fold_word(w)) for w in run) / a) / base
+                page_rows.append({
+                    "page": i, "n": len(run),
+                    "text": " ".join(run)[:240],
+                    "box": box, "ink": ink, "density": density})
+        if page_rows:
+            surya_only.append({"page": i, "fraction": round(frac, 4),
+                               "words": only, "runs": page_rows})
         per_page[i] = {"pairs": pairs, "png": png, "boxes": t_box,
                        "cboxes": t_cbox}
 
@@ -540,11 +686,22 @@ def main(epub: str, pdf: str, report: "str | None" = None,
               f"tess={dd['tesseract']!r:<20} {dd['rung']:<10} {note}")
     if len(disputes) > 40:
         print(f"   … and {len(disputes) - 40} more")
+    n_runs = sum(len(p["runs"]) for p in surya_only)
+    if n_runs:
+        inkless = sum(1 for p in surya_only for r in p["runs"]
+                      if r["ink"] is not None and r["ink"] < SURYA_INKLESS)
+        dense = sum(1 for p in surya_only for r in p["runs"]
+                    if r.get("density") and r["density"] > 2.0)
+        print(f"surya-only: {n_runs} run(s) of words no other witness saw, "
+              f"on {len(surya_only)} page(s)"
+              + (f" — {inkless} over blank paper" if inkless else "")
+              + (f", {dense} denser than the page's own type" if dense else ""))
     if report:
         json.dump({"epub": epub, "pdf": pdf, "pages": n_done,
                    "page_files": len(pages),
                    "lexicon_size": len(lexicon),
-                   "rungs": dict(rungs), "disputes": disputes},
+                   "rungs": dict(rungs), "disputes": disputes,
+                   "surya_only": surya_only},
                   open(report, "w"), indent=1)
         print(f"report written: {report}")
     return 0

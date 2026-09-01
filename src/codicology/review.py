@@ -47,6 +47,9 @@ from .adjudicate import _is_word, fold_word
 RUNG_ACCURACY = {"lexicon": "97.8%", "vision": "94.8%", "dictionary": "92.3%"}
 RUNG_ORDER = {"lexicon": 0, "vision": 1, "dictionary": 2}
 
+SURYA_ONLY_TITLE = ("Words no other witness saw — surya read them, "
+                    "tesseract found no trace")
+
 TIER_TITLES = {
     "catches": "The ladder's catches — it believes what shipped is wrong",
     "broken": "Abstains where the shipped word is not a word",
@@ -188,6 +191,86 @@ def crop_data_uris(report, dpi=200, ctx_px=240, base_dir=None) -> dict:
             uris[idx] = ("data:image/jpeg;base64,"
                          + base64.b64encode(buf.getvalue()).decode())
     return uris
+
+
+def _run_crops(report, dpi=200, ctx_px=120, base_dir=None) -> dict:
+    """Ink crops for the surya-only runs, keyed (page, run-index)."""
+    import pypdfium2 as pdfium
+    rows = report.get("surya_only") or []
+    if not rows:
+        return {}
+    pdf = report.get("pdf") or ""
+    for cand in ([pdf] + ([os.path.join(base_dir, pdf)] if base_dir else [])):
+        if cand and os.path.exists(cand):
+            pdf = cand
+            break
+    else:
+        return {}
+    doc = pdfium.PdfDocument(pdf)
+    uris = {}
+    for prow in rows:
+        pno = prow["page"]
+        if pno >= len(doc):
+            continue
+        img = None
+        for ri, r in enumerate(prow["runs"]):
+            box = r.get("box")
+            if not box:
+                continue
+            if img is None:
+                img = doc[pno].render(scale=dpi / 72,
+                                      draw_annots=False).to_pil()
+            x0, y0 = int(box[0] * img.width), int(box[1] * img.height)
+            x1, y1 = int(box[2] * img.width), int(box[3] * img.height)
+            crop = img.crop((max(0, x0 - ctx_px), max(0, y0 - 10),
+                             min(img.width, x1 + ctx_px),
+                             min(img.height, y1 + 10))).convert("RGB")
+            buf = io.BytesIO()
+            crop.save(buf, format="JPEG", quality=85)
+            uris[(pno, ri)] = ("data:image/jpeg;base64,"
+                               + base64.b64encode(buf.getvalue()).decode())
+    return uris
+
+
+def _surya_only_html(report, run_crops) -> list:
+    """The advisory tier: runs ranked no-ink first, then implausibly dense,
+    then long. Not stageable — there is no old→new here; a fake run means
+    the PAGE needs a human's ruling, not a word swap."""
+    rows = report.get("surya_only") or []
+    flat = [(p["page"], ri, r) for p in rows
+            for ri, r in enumerate(p["runs"])]
+    if not flat:
+        return []
+
+    def rank(t):
+        _, _, r = t
+        inkless = r.get("ink") is not None and r["ink"] < 0.005
+        dense = (r.get("density") or 0) > 2.0
+        return (not inkless, not dense, -r["n"])
+
+    flat.sort(key=rank)
+    parts = [f"<h2>{SURYA_ONLY_TITLE} ({len(flat)})</h2>",
+             "<p class='alt'>Advisory rows — tesseract cannot invent, so "
+             "its silence under these words is testimony; but tiny print "
+             "is exactly where surya out-reads it. No ink under a run is "
+             "the suspicious case. These stage no corrections.</p>"]
+    for pno, ri, r in flat:
+        ink = r.get("ink")
+        chips = []
+        if ink is not None and ink < 0.005:
+            chips.append("<b style='color:#b00'>no ink under them</b>")
+        elif ink is not None:
+            chips.append("ink present")
+        if r.get("density") and r["density"] > 2.0:
+            chips.append(f"{r['density']:.1f}× the page's own type density")
+        crop = run_crops.get((pno, ri))
+        parts.append(
+            "<div class='row'><div>"
+            f"p{pno} · {r['n']} words · {' · '.join(chips) or 'no geometry'}"
+            f"<br><i>{html.escape(r['text'])}</i></div>"
+            + (f"<img class='ink' src='{crop}'>" if crop else "")
+            + "</div>")
+    return parts
 
 
 def _row_html(r, crops) -> str:
@@ -354,6 +437,8 @@ def render_sheet(report, crops=None) -> str:
         "position. When the box seems to mark nothing, read the whole "
         "crop before ruling.</p>",
     ]
+    parts += _surya_only_html(report, _run_crops(
+        report, base_dir=report.get("_base_dir")))
     for key in ("catches", "broken", "open"):
         rows = tiers[key]
         if not rows:
@@ -528,6 +613,7 @@ def apply_decisions(epub_path, decisions_path, out=None) -> dict:
 def main(report_path, out=None, dpi=200, crops=True) -> int:
     report = json.load(open(report_path))
     report.setdefault("name", str(report_path))
+    report["_base_dir"] = os.path.dirname(os.path.abspath(report_path))
     uris = {}
     if crops and report.get("pdf"):
         uris = crop_data_uris(

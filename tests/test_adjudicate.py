@@ -333,3 +333,34 @@ def test_two_acronyms_are_still_settled_by_the_book(vtb):
     and the book's own counts remain evidence."""
     v = adj.adjudicate_pair("USA", "USB", Counter({"usa": 9}))
     assert v["winner"] == "USA" and v["rung"] == "lexicon"
+
+
+def test_surya_only_runs_finds_the_unmatched_sentence(vtb):
+    """Words tesseract has no trace of, contiguous, in reading order —
+    the aligner's discarded insertions, recovered as testimony."""
+    from codicology.adjudicate import surya_only_runs
+    s = ("The morning was cold . Invented words nobody witnessed here "
+         "at all . The evening was warm .").split()
+    t = "The morning was cold . The evening was warm .".split()
+    frac, only, runs = surya_only_runs(s, t)
+    assert only == 6 and len(runs) == 1
+    assert runs[0] == ["Invented", "words", "nobody", "witnessed",
+                       "here", "all"]
+
+
+def test_surya_only_ignores_disputed_words(vtb):
+    """A word tesseract read DIFFERENTLY is a dispute, not an invention —
+    the ladder already judges it."""
+    from codicology.adjudicate import surya_only_runs
+    s = "alpha beta gamma delta epsilon".split()
+    t = "alpha bete gamma delta epsilon".split()
+    frac, only, runs = surya_only_runs(s, t, skip_folds={"beta"})
+    assert only == 0 and runs == []
+
+
+def test_short_scatter_is_not_a_run(vtb):
+    from codicology.adjudicate import surya_only_runs
+    s = "one stray word here another there and more filler words done".split()
+    t = "one word here another there and more filler words done".split()
+    frac, only, runs = surya_only_runs(s, t)
+    assert runs == []          # single unmatched word, below the run floor
