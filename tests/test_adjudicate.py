@@ -377,3 +377,20 @@ def test_page_similarity_is_overlap_over_smaller(vtb):
     assert _page_similarity(a, b) == 1.0          # b fully inside a
     assert _page_similarity(a, {"unrelated"}) == 0.0
     assert _page_similarity(set(), b) == 0.0
+
+
+def test_run_verdict_bands(vtb):
+    """0.8 greenlights, 0.3 sends word differences to the ladder, below
+    it the crop shows unrelated ink; an empty read is silence, which ink
+    must arbitrate; no crop at all stays advisory."""
+    from codicology.adjudicate import _run_verdict
+    run = "channel improvement required constant dredging work".split()
+    assert _run_verdict(run, run) == "confirmed"
+    assert _run_verdict(run, "channel improvement required constant "
+                             "dredgmg work".split()) == "confirmed"
+    assert _run_verdict(run, "channel improvement noise other".split()) \
+        == "disputed"
+    assert _run_verdict(run, "totally unrelated words here".split()) \
+        == "advisory"
+    assert _run_verdict(run, []) == "silent"
+    assert _run_verdict(run, None) == "advisory"

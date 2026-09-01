@@ -147,7 +147,7 @@ def crop_data_uris(report, dpi=200, ctx_px=240, base_dir=None) -> dict:
     by_page = collections.defaultdict(list)
     occs = assign_occurrences(report["disputes"])
     for idx, d in enumerate(report["disputes"]):
-        by_page[d["page"]].append((idx, d, occs[idx]))
+        by_page[d.get("pdf_page", d["page"])].append((idx, d, occs[idx]))
     pdf = report.get("pdf") or ""
     for cand in ([pdf] + ([os.path.join(base_dir, pdf)] if base_dir else [])):
         if cand and os.path.exists(cand):
@@ -237,10 +237,14 @@ def _surya_only_html(report, run_crops) -> list:
     then long. Not stageable — there is no old→new here; a fake run means
     the PAGE needs a human's ruling, not a word swap."""
     rows = report.get("surya_only") or []
-    flat = [(p["page"], ri, r) for p in rows
+    allr = [(p["page"], ri, r) for p in rows
             for ri, r in enumerate(p["runs"])]
-    if not flat:
+    if not allr:
         return []
+    confirmed = [t for t in allr if t[2].get("verdict") == "confirmed"]
+    resolved = [t for t in allr if t[2].get("verdict") == "disputed"]
+    flat = [t for t in allr if t[2].get("verdict")
+            in (None, "advisory", "silent")]
 
     def rank(t):
         _, _, r = t
@@ -249,11 +253,21 @@ def _surya_only_html(report, run_crops) -> list:
         return (not inkless, not dense, -r["n"])
 
     flat.sort(key=rank)
+    if not flat and not confirmed:
+        return []
     parts = [f"<h2>{SURYA_ONLY_TITLE} ({len(flat)})</h2>",
+             (f"<p class='alt'>{len(confirmed)} run(s) confirmed by a "
+              f"second look and {len(resolved)} resolved into ordinary "
+              f"disputes are not repeated here.</p>"
+              if (confirmed or resolved) else ""),
              "<p class='alt'>Advisory rows — tesseract cannot invent, so "
-             "its silence under these words is testimony; but tiny print "
-             "is exactly where surya out-reads it. No ink under a run is "
-             "the suspicious case. These stage no corrections.</p>"]
+             "its silence under these words is testimony; but two honest "
+             "causes dominate: tiny print it cannot resolve, and regions "
+             "its page-level layout pass discards without reading — words "
+             "it recognises instantly when handed the crop. No ink under "
+             "a run is the suspicious case. Crops appear only where a "
+             "re-read of the crop confirmed the words are in it. These "
+             "rows stage deletions, not corrections.</p>"]
     for pno, ri, r in flat:
         ink = r.get("ink")
         chips = []
@@ -276,6 +290,17 @@ def _surya_only_html(report, run_crops) -> list:
             f"<br><i>{html.escape(shown)}</i></div>"
             + (f"<img class='ink' src='{crop}'>" if crop else "")
             + "</div>")
+    if confirmed:
+        parts.append(f"<details><summary>Confirmed by a second look "
+                     f"({len(confirmed)})</summary>")
+        for pno, ri, r in confirmed:
+            crop = run_crops.get((pno, ri))
+            parts.append("<div class='row'><div>"
+                         f"p{pno} · {r['n']} words"
+                         f"<br><i>{html.escape(r['text'][:240])}</i></div>"
+                         + (f"<img class='ink' src='{crop}'>" if crop else "")
+                         + "</div>")
+        parts.append("</details>")
     return parts
 
 

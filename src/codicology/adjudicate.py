@@ -530,6 +530,78 @@ def _run_box(page, run: list) -> "list | None":
         return None
 
 
+def _crop_read_tsv(png: str, box: list) -> "tuple | None":
+    """(tokens, page-fraction boxes) read from the crop at this box.
+
+    The layer records no word geometry — surya reports block boxes only,
+    and the PDF writer flows words synthetically inside them — so the box
+    is a claim, not a fact. Reading the crop directly (forced single
+    block, so layout analysis cannot discard it) turns the claim into a
+    second tesseract testimony: agreement greenlights the run, word-level
+    differences become ordinary disputes with REAL crop geometry, and an
+    empty read at the claimed spot is the sharpest phantom evidence there
+    is once ink says the paper is blank. Returns None when the crop
+    cannot be attempted at all.
+    """
+    try:
+        import cv2
+        g = cv2.imread(png, cv2.IMREAD_GRAYSCALE)
+        if g is None:
+            return None
+        h, w = g.shape[:2]
+        x0, y0 = max(0, int(box[0] * w) - 40), max(0, int(box[1] * h) - 8)
+        x1, y1 = min(w, int(box[2] * w) + 40), min(h, int(box[3] * h) + 8)
+        crop = g[y0:y1, x0:x1]
+        if crop.size < 400:
+            return None
+        cp = png + ".crop.png"
+        cv2.imwrite(cp, crop)
+        r = subprocess.run(["tesseract", cp, "stdout", "--psm", "6", "tsv"],
+                           capture_output=True, text=True, timeout=60)
+        toks, boxes = [], []
+        for line in r.stdout.splitlines()[1:]:
+            f = line.split("\t")
+            if len(f) >= 12 and f[0] == "5" and f[11].strip():
+                try:
+                    left, top = float(f[6]), float(f[7])
+                    bw, bh = float(f[8]), float(f[9])
+                except ValueError:
+                    continue
+                toks.append(f[11].strip())
+                boxes.append([(x0 + left) / w, (y0 + top) / h,
+                              (x0 + left + bw) / w, (y0 + top + bh) / h])
+        return toks, boxes
+    except Exception:
+        return None
+
+
+# The three-band verdict on a run, from the crop's own testimony. The
+# bands are deliberately wide apart: 0.8 says the second reader saw the
+# same text (greenlit), 0.3 says it saw THAT text with word-level
+# differences worth the ladder, and below it the crop shows unrelated
+# ink — a drifted box or a phantom over other print — where no verdict
+# is honest.
+RUN_CONFIRM = 0.8
+RUN_DISPUTE = 0.3
+
+
+def _run_verdict(run_words: list, crop_tokens: "list | None") -> str:
+    if crop_tokens is None:
+        return "advisory"
+    want = {fold_word(w) for w in run_words if len(fold_word(w)) >= 3}
+    got = {fold_word(w) for w in crop_tokens if len(fold_word(w)) >= 3}
+    if not got:
+        return "silent"
+    if not want:
+        return "advisory"
+    ov = len(want & got) / len(want)
+    if ov >= RUN_CONFIRM:
+        return "confirmed"
+    if ov >= RUN_DISPUTE:
+        return "disputed"
+    return "advisory"
+
+
 def _ink_under(png: str, box: list) -> "float | None":
     """Letterform ink fraction inside a fraction box of the rendered page."""
     try:
@@ -747,23 +819,46 @@ def main(epub: str, pdf: str, report: "str | None" = None,
         page_rows = []
         if runs:
             base = _page_text_density(t_tok, t_box)
+            crop_pairs = []
             for run_words, n_only in runs:
                 box = _run_box(doc[pdf_of[i]], run_words)
-                ink = _ink_under(png, box) if box else None
-                density = None
-                if box and base:
+                crop = _crop_read_tsv(png, box) if box else None
+                verdict = _run_verdict(run_words,
+                                       crop[0] if crop else None)
+                ink = density = None
+                if verdict == "silent":
+                    # Nothing readable where the layer puts these words.
+                    # Ink arbitrates: blank paper is the phantom
+                    # signature; inked-but-unreadable is rotated or
+                    # display type and stays advisory without geometry.
+                    ink = _ink_under(png, box)
+                    if ink is not None and ink >= SURYA_INKLESS:
+                        verdict, box, ink = "advisory", None, None
+                elif verdict == "disputed":
+                    ct, cb = crop
+                    for a, b, jx in align_disputes(run_words, ct):
+                        crop_pairs.append(
+                            (a, b, cb[jx] if jx < len(cb) else None))
+                elif verdict == "advisory":
+                    box = None
+                if box and base and verdict != "confirmed":
                     a = max(0.0, box[2] - box[0]) * max(0.0, box[3] - box[1])
                     if a > 1e-6:
                         density = (sum(len(fold_word(w))
                                        for w in run_words) / a) / base
+                if verdict in ("confirmed", "disputed"):
+                    density = None
                 page_rows.append({
                     "page": i, "pdf_page": pdf_of[i], "n": n_only,
-                    "text": " ".join(run_words)[:2000],
+                    "text": " ".join(run_words)[:2000], "verdict": verdict,
                     "box": box, "ink": ink, "density": density})
         if page_rows:
             surya_only.append({"page": i, "pdf_page": pdf_of[i],
                                "fraction": round(frac, 4),
                                "words": only, "runs": page_rows})
+            if crop_pairs:
+                per_page.setdefault(i, {}).setdefault("crop_pairs", [])
+                per_page[i]["crop_pairs"] = crop_pairs
         per_page[i] = {"pairs": pairs, "png": png, "boxes": t_box,
                        "cboxes": t_cbox}
 
@@ -771,6 +866,17 @@ def main(epub: str, pdf: str, report: "str | None" = None,
     rungs = Counter()
     for i, info in per_page.items():
         vis_tok = None
+        for a, b, cbox in info.get("crop_pairs", []):
+            verdict = adjudicate_pair(a, b, lexicon)
+            if verdict["rung"] == "fold":
+                continue
+            rungs[verdict["rung"]] += 1
+            disputes.append({"page": i, "pdf_page": pdf_of.get(i, i),
+                             "surya": a, "tesseract": b,
+                             "rung": verdict["rung"],
+                             "winner": verdict.get("winner"),
+                             "shipped": a, "box": cbox,
+                             "via": "crop"})
         for a, b, j in info["pairs"]:
             verdict = adjudicate_pair(a, b, lexicon)
             if verdict["rung"] == "fold":
@@ -822,14 +928,16 @@ def main(epub: str, pdf: str, report: "str | None" = None,
         print(f"   … and {len(disputes) - 40} more")
     n_runs = sum(len(p["runs"]) for p in surya_only)
     if n_runs:
+        vc = Counter(r.get("verdict") for p in surya_only for r in p["runs"])
         inkless = sum(1 for p in surya_only for r in p["runs"]
                       if r["ink"] is not None and r["ink"] < SURYA_INKLESS)
-        dense = sum(1 for p in surya_only for r in p["runs"]
-                    if r.get("density") and r["density"] > 2.0)
-        print(f"surya-only: {n_runs} run(s) of words no other witness saw, "
-              f"on {len(surya_only)} page(s)"
-              + (f" — {inkless} over blank paper" if inkless else "")
-              + (f", {dense} denser than the page's own type" if dense else ""))
+        n_cp = sum(len(v.get("crop_pairs", [])) for v in per_page.values())
+        print(f"surya-only: {n_runs} run(s) of words the page read missed — "
+              f"{vc.get('confirmed', 0)} confirmed by a second look, "
+              f"{vc.get('disputed', 0)} sent to the ladder as "
+              f"{n_cp} dispute(s), "
+              f"{vc.get('advisory', 0) + vc.get('silent', 0)} advisory"
+              + (f" — {inkless} OVER BLANK PAPER" if inkless else ""))
     if report:
         json.dump({"epub": epub, "pdf": pdf, "pages": n_done,
                    "page_files": len(pages),
