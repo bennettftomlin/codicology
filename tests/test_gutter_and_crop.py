@@ -362,3 +362,46 @@ def test_a_spread_with_one_blank_side_still_splits(vtb):
     corners = vtb.detect_page(img, 0.15)
     assert corners is not None
     assert len(vtb.split_spread(vtb.warp_page(img, vtb.limit_quad(corners)))) == 2
+
+
+def test_gutter_prefers_ink_free_columns_over_a_dark_text_column(vtb):
+    """A bright flat spread can carry a spine shadow FAINTER than a text
+    column's own ink; cutting at the column once amputated the opening
+    characters of every line of a preface. The spine is always among the
+    ink-free columns."""
+    img = np.full((900, 1400), 235, np.uint8)
+    img[:, 690:710] = 216                     # faint spine band at centre
+    for row in range(80, 820, 30):            # dense text column, darker net
+        img[row:row + 6, 520:640] = 20
+    x = vtb._gutter_x(img)
+    assert 660 <= x <= 740, f"cut at {x}, inside text (520-640) or astray"
+
+
+def test_overlapping_sibling_quads_fall_back_to_the_union(vtb):
+    """A weak gutter lets one page's blob bleed across the spine; warping
+    both contour quads would ship the bled column twice. Overlap means the
+    contours cannot divide the spread — the ink-aware gutter can."""
+    f = np.full((900, 1400, 3), 25, np.uint8)
+    f[100:800, 120:760] = 235                 # left blob bleeds past centre
+    f[100:800, 700:1280] = 235                # right page overlaps it 60px
+    quads = vtb.detect_page_quads(f)
+    assert len(quads) == 1
+    w = quads[0][:, 0].max() - quads[0][:, 0].min()
+    assert w > 1000, "must span the whole spread"
+
+
+def test_a_sliver_quad_keeps_the_whole_frame(vtb, tmp_path):
+    """A lone quad covering a sliver of the frame found SOMETHING — a
+    cover's title label — but not the page. Keeping the frame loses
+    nothing; cropping to the sliver loses the page."""
+    import cv2 as _cv2
+    f = np.full((1000, 1300, 3), 15, np.uint8)
+    f[200:800, 500:800] = 235                 # label: ~14% of the frame
+    src = str(tmp_path / "IMG_0001.png")
+    _cv2.imwrite(src, f)
+    pages, ids = vtb.pages_from_images([src], str(tmp_path), 0.10, 0,
+                                       False, False, False, True,
+                                       dewarp=False)
+    assert len(pages) == 1
+    out = _cv2.imread(pages[0])
+    assert out.shape[:2] == (1000, 1300), "must keep the frame uncropped"

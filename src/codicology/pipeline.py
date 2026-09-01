@@ -474,6 +474,15 @@ def detect_page_quads(image: np.ndarray,
                     pair = sorted((_order_corners(quad) / scale,
                                    _order_corners(sq) / scale),
                                   key=lambda q: float(q[:, 0].mean()))
+                    # A weak gutter lets one page's blob bleed across the
+                    # spine: the "left page" then carries a column of the
+                    # right one, and warping both quads ships that column
+                    # twice. Overlapping quads mean the contours cannot be
+                    # trusted to divide the spread — the union can, because
+                    # the gutter hunt divides it by ink instead.
+                    a, b = pair
+                    if min(a[:, 0].max(), b[:, 0].max()) -                             max(a[:, 0].min(), b[:, 0].min()) > 0.03 * sw / scale:
+                        return [_quad_union(pair)]
                     return pair
             return [_order_corners(quad) / scale]
     return []
@@ -575,7 +584,27 @@ def _gutter_x(image: np.ndarray) -> int:
     inner = right - left
 
     lo, hi = left + int(inner * 0.35), left + int(inner * 0.65)
-    x = lo + int(np.argmin(smooth[lo:hi]))
+    # The darkest band is not always the spine: on a bright, flat spread the
+    # spine shadow can be fainter than a TEXT COLUMN's own ink, and cutting
+    # at the column amputated the opening characters of every line of one
+    # book's preface. Measured there: the chosen column carried a black-hat
+    # ink fraction of 0.19 while 156 of the 300 window columns were ink-free
+    # (<0.002) — the spine is always among the ink-free ones, because a
+    # shadow darkens paper smoothly and strokes do not live in the fold.
+    # So the hunt runs over ink-free columns first; only a window with no
+    # ink-free candidate falls back to the plain darkest.
+    probe_w = 1000
+    small_g = cv2.resize(gray, (probe_w, max(8, int(h * probe_w / w))))
+    hat = cv2.morphologyEx(small_g, cv2.MORPH_BLACKHAT,
+                           cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9)))
+    ink_cols = np.interp(np.arange(w), np.linspace(0, w - 1, probe_w),
+                         (hat > 40).mean(axis=0))
+    window = np.arange(lo, hi)
+    inkfree = window[ink_cols[lo:hi] < 0.002]
+    if inkfree.size:
+        x = int(inkfree[np.argmin(smooth[inkfree])])
+    else:
+        x = lo + int(np.argmin(smooth[lo:hi]))
 
     # A spine in view is a pronounced shadow. When the crop caught only part of
     # the spread the profile across the middle is flat instead, and argmin picks
@@ -7727,12 +7756,13 @@ def _prepare_page_image(img: np.ndarray, min_area_ratio: float, rotate: int,
         if modelled and not _adds_clip(img, cand):
             img = cand
         elif not modelled and _cubic.available():
-            cand, ok = _cubic.cubic_dewarp(img, workdir)
-            if ok:
-                _, ca = _cubic.witness(img, workdir)
-                _, cb = _cubic.witness(cand, workdir)
-                if cb >= ca - 1.0 and not _adds_clip(img, cand):
-                    img = cand
+            wa, ca, spana = _cubic.witness(img, workdir)
+            if wa >= 15 and spana >= 0.4:
+                cand, ok = _cubic.cubic_dewarp(img, workdir)
+                if ok:
+                    _, cb, _sb = _cubic.witness(cand, workdir)
+                    if cb >= ca - 1.0 and not _adds_clip(img, cand):
+                        img = cand
     return img
 
 
@@ -7859,7 +7889,7 @@ def pages_from_images(
     page_paths: list[str] = []
     page_ids: list[str] = []
     n_nopage = n_dewarped = n_cubic = n_cubic_rej = n_cubic_cand = 0
-    n_clip_veto = 0
+    n_clip_veto = n_cubic_blind = 0
     n_split = 0
     for group in groups:
         best_path, best_score = image_paths[group[0]], None
@@ -7881,6 +7911,16 @@ def pages_from_images(
         pages = None
         if not no_warp:
             quads = detect_page_quads(img, min_area_ratio)
+            # A lone quad covering a sliver of the frame found SOMETHING —
+            # a cover's title label, a plate's white border — but not the
+            # page. Measured: the one such find covered 18.7% of its frame
+            # while every honest single-page find covered 42% or more (and
+            # pair members 33%+, unaffected by this single-quad gate).
+            # Keeping the whole frame loses nothing; cropping to the
+            # sliver loses the page.
+            if len(quads) == 1 and cv2.contourArea(
+                    quads[0].astype(np.float32)) < 0.30 * img.shape[0] * img.shape[1]:
+                quads = []
             if not quads:
                 n_nopage += 1
                 cropped = False
@@ -7937,17 +7977,26 @@ def pages_from_images(
                     n_dewarped += 1
                 if not modelled:
                     if _cubic.available():
-                        cand, ok = _cubic.cubic_dewarp(part, pages_dir)
-                        if ok:
-                            _wA, cA = _cubic.witness(part, pages_dir)
-                            _wB, cB = _cubic.witness(cand, pages_dir)
-                            if cB >= cA - 1.0 and _adds_clip(part, cand):
-                                n_clip_veto += 1
-                            elif cB >= cA - 1.0:
-                                part = cand
-                                n_cubic += 1
-                            else:
-                                n_cubic_rej += 1
+                        # The witness reads the page BEFORE the sheet is
+                        # fitted: on a page with almost no readable text —
+                        # a plate, a map — zero words before and zero
+                        # after satisfy any confidence bar, and the sheet
+                        # once smeared two plate pages into swirls that
+                        # sailed through. No testimony, no transform.
+                        _wA, cA, spanA = _cubic.witness(part, pages_dir)
+                        if _wA < 15 or spanA < 0.4:
+                            n_cubic_blind += 1
+                        else:
+                            cand, ok = _cubic.cubic_dewarp(part, pages_dir)
+                            if ok:
+                                _wB, cB, _sB = _cubic.witness(cand, pages_dir)
+                                if cB >= cA - 1.0 and _adds_clip(part, cand):
+                                    n_clip_veto += 1
+                                elif cB >= cA - 1.0:
+                                    part = cand
+                                    n_cubic += 1
+                                else:
+                                    n_cubic_rej += 1
                     else:
                         n_cubic_cand += 1
             out = os.path.join(pages_dir, f"page_{len(page_paths):04d}.jpg")
@@ -7972,6 +8021,9 @@ def pages_from_images(
     if n_clip_veto:
         print(f"  {n_clip_veto} correction(s) declined for pressing text "
               f"against the canvas edge")
+    if n_cubic_blind:
+        print(f"  {n_cubic_blind} page(s) kept the plain deskew — too "
+              f"little text for any witness to judge a correction")
     if n_cubic_cand:
         print(f"  [~] {n_cubic_cand} page(s) the line finder declined kept "
               f"the plain deskew — cubic-sheet dewarp is not installed; "
@@ -7992,7 +8044,7 @@ def dewarp_scan_pages(page_paths: list[str], pages_dir: str) -> None:
     invalidates its OCR cache entry, which is the point of opting in.
     """
     n_deskewed = n_dewarped = n_cubic = n_cubic_rej = n_cubic_cand = 0
-    n_clip_veto = 0
+    n_clip_veto = n_cubic_blind = 0
     for path in page_paths:
         img = cv2.imread(path)
         if img is None:
@@ -8008,17 +8060,20 @@ def dewarp_scan_pages(page_paths: list[str], pages_dir: str) -> None:
             n_dewarped += 1
         if not modelled:
             if _cubic.available():
-                cand, ok = _cubic.cubic_dewarp(img, pages_dir)
-                if ok:
-                    _, ca = _cubic.witness(img, pages_dir)
-                    _, cb = _cubic.witness(cand, pages_dir)
-                    if cb >= ca - 1.0 and _adds_clip(img, cand):
-                        n_clip_veto += 1
-                    elif cb >= ca - 1.0:
-                        img = cand
-                        n_cubic += 1
-                    else:
-                        n_cubic_rej += 1
+                wa, ca, spana = _cubic.witness(img, pages_dir)
+                if wa < 15 or spana < 0.4:
+                    n_cubic_blind += 1
+                else:
+                    cand, ok = _cubic.cubic_dewarp(img, pages_dir)
+                    if ok:
+                        _, cb, _sb = _cubic.witness(cand, pages_dir)
+                        if cb >= ca - 1.0 and _adds_clip(img, cand):
+                            n_clip_veto += 1
+                        elif cb >= ca - 1.0:
+                            img = cand
+                            n_cubic += 1
+                        else:
+                            n_cubic_rej += 1
             else:
                 n_cubic_cand += 1
         if img is not before:

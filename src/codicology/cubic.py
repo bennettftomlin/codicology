@@ -122,8 +122,15 @@ def cubic_dewarp(image: np.ndarray, workdir: str) -> tuple[np.ndarray, bool]:
 
 
 def witness(image: np.ndarray, workdir: str,
-            scale: float = 0.6) -> tuple[int, float]:
-    """(words, mean confidence) from tesseract — the acceptance judge."""
+            scale: float = 0.6) -> tuple[int, float, float]:
+    """(words, mean confidence, y-span) from tesseract — the acceptance judge.
+
+    y-span is the fraction of the page height the witnessed words cover.
+    The sheet models page-wide curvature, so testimony clustered in one
+    band — a plate's captions — is testimony about almost none of what
+    the transform touches; two plate pages were once smeared into swirls
+    while their captions read the same before and after.
+    """
     p = os.path.join(workdir, "_cubic_wit.png")
     h, w = image.shape[:2]
     cv2.imwrite(p, cv2.resize(image, (int(w * scale), int(h * scale))))
@@ -137,14 +144,18 @@ def witness(image: np.ndarray, workdir: str,
             os.remove(p)
         except OSError:
             pass
-    confs = []
+    confs, tops, bottoms = [], [], []
     for line in r.stdout.decode("utf-8", "replace").splitlines()[1:]:
         f = line.split("\t")
         if len(f) >= 12 and f[0] == "5" and f[11].strip():
             try:
                 c = float(f[10])
+                top, height = float(f[7]), float(f[9])
             except ValueError:
                 continue
             if c >= 0:
                 confs.append(c)
-    return len(confs), (float(np.mean(confs)) if confs else 0.0)
+                tops.append(top)
+                bottoms.append(top + height)
+    span = ((max(bottoms) - min(tops)) / max(1.0, h * scale)) if confs else 0.0
+    return len(confs), (float(np.mean(confs)) if confs else 0.0), float(span)

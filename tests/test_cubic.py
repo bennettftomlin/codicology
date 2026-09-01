@@ -71,8 +71,9 @@ def test_missing_library_degrades_to_a_no_op(vtb, tmp_path, monkeypatch):
 
 @needs_pd
 def test_the_witness_reads_a_page(vtb, tmp_path):
-    words, conf = C.witness(_text_page(w=900, h=700, pitch=60), str(tmp_path))
-    assert words >= 0 and 0.0 <= conf <= 100.0
+    words, conf, span = C.witness(_text_page(w=900, h=700, pitch=60),
+                                  str(tmp_path))
+    assert words >= 0 and 0.0 <= conf <= 100.0 and 0.0 <= span <= 1.0
 
 
 @needs_pd
@@ -87,7 +88,16 @@ def test_scan_opt_in_rewrites_only_what_the_ladder_changed(vtb, tmp_path):
     cv2.imwrite(p1, bowed)
     cv2.imwrite(p2, flat)
     sig2 = open(p2, "rb").read()
-    vtb.dewarp_scan_pages([p1, p2], str(tmp_path))
+    # Synthetic stroke-rows are not words: the real witness reads none and
+    # the blind-page gate would (rightly) refuse the sheet. This test is
+    # about rewrite-only-what-changed, so the witness testifies by proxy.
+    monkey = lambda img, wd, **k: (30, 80.0, 0.9)
+    orig = vtb._cubic.witness
+    vtb._cubic.witness = monkey
+    try:
+        vtb.dewarp_scan_pages([p1, p2], str(tmp_path))
+    finally:
+        vtb._cubic.witness = orig
     after = cv2.imread(p1)
     assert _bow_of(after) < _bow_of(bowed) * 0.6
     assert open(p2, "rb").read() == sig2, "untouched page must not be rewritten"
