@@ -272,3 +272,49 @@ def test_apply_reaches_words_stored_as_entities(vtb, tmp_path):
     import zipfile
     got = zipfile.ZipFile(epub).read("EPUB/page_0004.xhtml").decode()
     assert "letters, etc. s&amp;nt to H&amp;M" in got
+
+
+def test_delete_run_removes_words_and_only_words(vtb):
+    """A staged deletion removes the run from text nodes, tags untouched,
+    neighbouring prose intact."""
+    from codicology.review import apply_one_decision
+    x = ("<p>The morning was cold. Invented words nobody witnessed. "
+         "The evening was warm.</p>")
+    got = apply_one_decision(x, {"kind": "delete_run",
+                                 "old": "Invented words nobody witnessed.",
+                                 "new": ""})
+    assert got == "<p>The morning was cold. The evening was warm.</p>"
+
+
+def test_delete_run_across_markup_reports_stale(vtb):
+    """A run the markup interrupts is not guessed at — partial deletion is
+    worse than none."""
+    from codicology.review import apply_one_decision
+    x = "<p>Invented words <i>nobody</i> witnessed here today.</p>"
+    got = apply_one_decision(x, {"kind": "delete_run",
+                                 "old": "Invented words nobody witnessed here",
+                                 "new": ""})
+    assert got is None
+
+
+def test_deletions_run_before_swaps(vtb, tmp_path, capsys):
+    """Both kinds were recorded against the same shipped text, and a swap
+    mutates the characters a deletion must match — swap-first leaves the
+    condemned run alive. Deletion first; the swap inside it goes stale,
+    truthfully: its site is gone, and gone was the point."""
+    import json
+    from codicology.pipeline import apply_reviewer_decisions
+    bodies = ["<p>Real prose here. Fake sentence with a tpyo inside it. "
+              "More real prose.</p>"]
+    dec = {"page_files": 1, "decisions": [
+        {"page": 0, "occurrence": 0, "old": "Fake sentence with a tpyo inside it.",
+         "new": "", "kind": "delete_run", "source": "human", "rung": "surya-only"},
+        {"page": 0, "occurrence": 0, "old": "tpyo", "new": "typo",
+         "source": "ladder", "rung": "lexicon"},
+    ]}
+    f = tmp_path / "d.json"
+    f.write_text(json.dumps(dec))
+    stats = apply_reviewer_decisions(bodies, str(f))
+    assert stats["applied"] == 1 and stats["stale"] == 1
+    assert "Fake sentence" not in bodies[0]
+    assert "Real prose here." in bodies[0] and "More real prose." in bodies[0]

@@ -264,10 +264,16 @@ def _surya_only_html(report, run_crops) -> list:
         if r.get("density") and r["density"] > 2.0:
             chips.append(f"{r['density']:.1f}× the page's own type density")
         crop = run_crops.get((pno, ri))
+        shown = r["text"] if len(r["text"]) <= 240 else r["text"][:240] + "…"
+        old_attr = html.escape(r["text"], quote=True)
         parts.append(
-            "<div class='row'><div>"
+            f"<div class='row srow' data-sidx='so-{pno}-{ri}' "
+            f"data-page='{pno}' data-old='{old_attr}'>"
+            "<div>"
             f"p{pno} · {r['n']} words · {' · '.join(chips) or 'no geometry'}"
-            f"<br><i>{html.escape(r['text'])}</i></div>"
+            f" · <button data-sact='delete'>delete run</button>"
+            "<span class='state'></span>"
+            f"<br><i>{html.escape(shown)}</i></div>"
             + (f"<img class='ink' src='{crop}'>" if crop else "")
             + "</div>")
     return parts
@@ -318,7 +324,7 @@ function paint(row) {
     s => s.choice && s.choice !== 'keep').length;
   document.getElementById('count').textContent = n + ' corrections staged';
 }
-document.querySelectorAll('.row').forEach(row => {
+document.querySelectorAll('.row:not(.srow)').forEach(row => {
   row.addEventListener('click', e => {
     const act = e.target.closest('[data-act]');
     if (act) {
@@ -328,12 +334,31 @@ document.querySelectorAll('.row').forEach(row => {
     }
   });
   const own = row.querySelector('.own');
+  if (!own) return;
   own.addEventListener('input', () => {
     state[row.dataset.idx] = own.value === row.dataset.old
       ? {choice: 'keep'} : {choice: 'human', text: own.value};
     save(); paint(row);
   });
   paint(row);
+});
+function paintS(row) {
+  const s = state[row.dataset.sidx] || {};
+  row.querySelector('.state').textContent =
+    s.choice === 'delete' ? ' \u2192 run deleted' : '';
+  row.classList.toggle('staged', s.choice === 'delete');
+  const n = Object.values(state).filter(
+    s => s.choice && s.choice !== 'keep').length;
+  document.getElementById('count').textContent = n + ' corrections staged';
+}
+document.querySelectorAll('.srow').forEach(row => {
+  row.querySelector('[data-sact]').addEventListener('click', () => {
+    const cur = state[row.dataset.sidx] || {};
+    state[row.dataset.sidx] = cur.choice === 'delete'
+      ? {choice: 'keep'} : {choice: 'delete'};
+    save(); paintS(row);
+  });
+  paintS(row);
 });
 function save() { localStorage.setItem(KEY, JSON.stringify(state)); }
 document.getElementById('export').addEventListener('click', () => {
@@ -347,6 +372,14 @@ document.getElementById('export').addEventListener('click', () => {
       new: s.choice === 'human' ? s.text : row.dataset.new,
       source: s.choice === 'human' ? 'human' : 'ladder',
       rung: s.choice === 'human' ? 'human' : row.dataset.rung});
+  });
+  document.querySelectorAll('.srow').forEach(row => {
+    const s = state[row.dataset.sidx];
+    if (!s || s.choice !== 'delete') return;
+    decisions.push({
+      page: +row.dataset.page, occurrence: 0,
+      old: row.dataset.old, new: '',
+      source: 'human', rung: 'surya-only', kind: 'delete_run'});
   });
   const meta = JSON.parse(document.getElementById('meta').textContent);
   const blob = new Blob([JSON.stringify(
@@ -489,6 +522,31 @@ def _apply_to_xhtml(xhtml, old, new, occurrence) -> "str | None":
     return None
 
 
+def _delete_from_xhtml(xhtml, old) -> "str | None":
+    """Remove one run of words from a page's text nodes, tags untouched.
+
+    The run is matched whole — its words in order, any whitespace between,
+    word boundaries at both ends — inside a single text segment; a run the
+    markup interrupts reports stale rather than guessing at a partial
+    deletion. Leftover doubled spaces are collapsed where the words left."""
+    words = old.split()
+    if not words:
+        return None
+    pat = re.compile(r"(?<![\w])" + r"\s+".join(re.escape(w) for w in words)
+                     + r"(?![\w])")
+    segs = re.split(r"(<[^>]+>)", xhtml)
+    for k, seg in enumerate(segs):
+        if k % 2 == 1 or not seg.strip():
+            continue
+        m = pat.search(seg)
+        if m:
+            cleaned = seg[:m.start()] + seg[m.end():]
+            cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+            segs[k] = cleaned
+            return "".join(segs)
+    return None
+
+
 def apply_one_decision(xhtml, d) -> "str | None":
     """One decision against one page's xhtml, with the quote-shape retry
     both consumers owe: the reviewer's old was recorded through the
@@ -500,6 +558,14 @@ def apply_one_decision(xhtml, d) -> "str | None":
     import html
     from .adjudicate import _TYPO
     curl = str.maketrans({"'": "\u2019"})
+    if d.get("kind") == "delete_run":
+        for old in (d["old"], d["old"].translate(curl),
+                    d["old"].translate(_TYPO),
+                    html.escape(d["old"], quote=False)):
+            got = _delete_from_xhtml(xhtml, old)
+            if got is not None:
+                return got
+        return None
     # the reviewer's words live in text space; the page is xhtml. old must
     # also be tried entity-escaped (the printed &c. is stored as &amp;c.),
     # and new must land escaped or an ampersand corrupts the page.

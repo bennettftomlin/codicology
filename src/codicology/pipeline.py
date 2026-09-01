@@ -6136,7 +6136,14 @@ def apply_reviewer_decisions(bodies: list, decisions_path: str,
     applied = stale = 0
     # highest occurrence first, so an earlier replacement of the same word
     # on the same page cannot renumber a later one
-    for d in sorted(rows, key=lambda d: -d.get("occurrence", 0)):
+    # deletions run FIRST: both kinds were recorded against the same
+    # shipped text, and a word swap mutates the very characters a deletion
+    # must match — swap-first leaves the condemned run alive and the
+    # deletion stale, which is the harm the reviewer asked to remove. The
+    # swap inside a deleted run then reports stale, which is true: its
+    # site is gone, and gone was the point.
+    for d in sorted(rows, key=lambda d: (d.get("kind") != "delete_run",
+                                         -d.get("occurrence", 0))):
         i = coerce_page(d)
         if i is None or not (0 <= i < len(bodies)):
             stale += 1

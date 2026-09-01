@@ -631,7 +631,7 @@ def main(epub: str, pdf: str, report: "str | None" = None,
                         density = (sum(len(fold_word(w)) for w in run) / a) / base
                 page_rows.append({
                     "page": i, "n": len(run),
-                    "text": " ".join(run)[:240],
+                    "text": " ".join(run)[:2000],
                     "box": box, "ink": ink, "density": density})
         if page_rows:
             surya_only.append({"page": i, "fraction": round(frac, 4),
