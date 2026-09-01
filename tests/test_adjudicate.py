@@ -344,8 +344,12 @@ def test_surya_only_runs_finds_the_unmatched_sentence(vtb):
     t = "The morning was cold . The evening was warm .".split()
     frac, only, runs = surya_only_runs(s, t)
     assert only == 6 and len(runs) == 1
-    assert runs[0] == ["Invented", "words", "nobody", "witnessed",
-                       "here", "all"]
+    words, n_only = runs[0]
+    assert n_only == 6
+    # the span is VERBATIM — interior short words ride along, so the text
+    # is findable in the layer and deletable from the body
+    assert words == ["Invented", "words", "nobody", "witnessed",
+                     "here", "at", "all"]
 
 
 def test_surya_only_ignores_disputed_words(vtb):
@@ -364,3 +368,12 @@ def test_short_scatter_is_not_a_run(vtb):
     t = "one word here another there and more filler words done".split()
     frac, only, runs = surya_only_runs(s, t)
     assert runs == []          # single unmatched word, below the run floor
+
+
+def test_page_similarity_is_overlap_over_smaller(vtb):
+    from codicology.adjudicate import _page_similarity
+    a = {"river", "channel", "dredge", "engineer"}
+    b = {"river", "channel", "dredge"}
+    assert _page_similarity(a, b) == 1.0          # b fully inside a
+    assert _page_similarity(a, {"unrelated"}) == 0.0
+    assert _page_similarity(set(), b) == 0.0

@@ -435,48 +435,95 @@ def surya_only_runs(s_tok: list, t_tok: list,
     t_set = {fold_word(w) for w in t_tok}
     skip = skip_folds or set()
     eligible = only = 0
-    runs, cur = [], []
+    runs = []
+    cur, cur_only, shorts = [], 0, []
+
+    def close():
+        nonlocal cur, cur_only, shorts
+        if cur_only >= SURYA_RUN_MIN:
+            runs.append((list(cur), cur_only))
+        cur, cur_only, shorts = [], 0, []
+
     for w in s_tok:
         f = fold_word(w)
         if len(f) < 3:
+            # Short words neither witness nor convict, but the run's TEXT
+            # must be the page's verbatim span — a recorded run with its
+            # "of"s and "a"s dropped is a sequence the page never printed,
+            # unfindable in the layer and undeletable from the body (the
+            # first version shipped exactly that). Interior shorts ride
+            # along; leading and trailing ones are trimmed, since nothing
+            # says they belong to the run rather than its neighbours.
+            if cur:
+                shorts.append(w)
             continue
         eligible += 1
         if f not in t_set and f not in skip:
             only += 1
+            if cur:
+                cur.extend(shorts)
+            shorts = []
             cur.append(w)
+            cur_only += 1
         else:
-            if len(cur) >= SURYA_RUN_MIN:
-                runs.append(cur)
-            cur = []
-    if len(cur) >= SURYA_RUN_MIN:
-        runs.append(cur)
+            close()
+    close()
     return (only / max(1, eligible), only, runs)
+
+
+def _fold_stream_char(ch: str) -> str:
+    """One layer character folded for matching: case and curly quotes
+    dropped, whitespace removed entirely — the layer breaks lines and
+    sometimes joins words where the book text has spaces, and character-
+    level matching is how neither can break the hunt."""
+    ch = ch.translate(_TYPO).casefold()
+    return "" if ch.isspace() else ch
 
 
 def _run_box(page, run: list) -> "list | None":
     """Top-down fraction box for a run, located in the PDF's own text layer.
 
     The layer is surya's geometry — the words were placed there from the
-    same reading. Search is by the run's first words; a miss (layout join
-    differences) degrades to no crop, never to a wrong one.
+    same reading. The hunt is character-level on folded text with all
+    whitespace removed, because the extracted layer carries its own line
+    breaks and occasionally joins adjacent words; a literal string search
+    missed most runs and sometimes matched the wrong ink. The matched
+    characters' own boxes are unioned; a miss degrades to no crop, never
+    a wrong one.
     """
     try:
         tp = page.get_textpage()
-        needle = " ".join(run[:3])
-        found = tp.search(needle, match_case=False).get_next()
-        if not found:
-            return None
-        idx, cnt = found
-        n = tp.count_rects(idx, cnt)
+        n = tp.count_chars()
         if not n:
             return None
+        raw = tp.get_text_range(0, n)
+        stream, idx = [], []
+        for k, ch in enumerate(raw):
+            f = _fold_stream_char(ch)
+            for fc in f:
+                stream.append(fc)
+                idx.append(k)
+        needle = "".join(_fold_stream_char(c) for c in " ".join(run))
+        if len(needle) < 8:
+            return None
+        pos = "".join(stream).find(needle)
+        if pos < 0:
+            return None
+        ks = idx[pos:pos + len(needle)]
         l = b = r = t = None
-        for k in range(n):
-            x0, y0, x1, y1 = tp.get_rect(k)
+        for k in range(ks[0], ks[-1] + 1):
+            try:
+                x0, y0, x1, y1 = tp.get_charbox(k)
+            except Exception:
+                continue
+            if x1 - x0 <= 0 or y1 - y0 <= 0:
+                continue
             l = x0 if l is None else min(l, x0)
             b = y0 if b is None else min(b, y0)
             r = x1 if r is None else max(r, x1)
             t = y1 if t is None else max(t, y1)
+        if l is None:
+            return None
         W, H = page.get_width(), page.get_height()
         return [l / W, 1 - t / H, r / W, 1 - b / H]
     except Exception:
@@ -575,6 +622,17 @@ def epub_page_texts(epub_path: str) -> dict:
     return out
 
 
+ALIGN_DRIFT = 12        # how far ahead in the PDF a book page may sit
+ALIGN_FLOOR = 0.25      # token overlap below this is not the same page
+
+
+def _page_similarity(epub_folds: set, tess_folds: set) -> float:
+    if not epub_folds or not tess_folds:
+        return 0.0
+    return len(epub_folds & tess_folds) / max(1, min(len(epub_folds),
+                                                     len(tess_folds)))
+
+
 def main(epub: str, pdf: str, report: "str | None" = None,
          scale: float = 200 / 72, limit: "int | None" = None) -> int:
     import pypdfium2 as pdfium
@@ -590,20 +648,88 @@ def main(epub: str, pdf: str, report: "str | None" = None,
     disputes = []
     n_done = 0
     witness = {}
+    pdf_of = {}
+
+    # The book's pages and the source PDF's need not align one to one:
+    # most shelf EPUBs dropped blanks and duplicate shots the source still
+    # carries, so page i of the book sits at page j >= i of the PDF, the
+    # gap growing with each drop. The walk is monotone with a bounded
+    # lookahead; a book page nothing in the window resembles goes
+    # unwitnessed and is counted, never guessed at.
+    tess_cache: dict = {}
+
+    def tess_page(j):
+        if j not in tess_cache:
+            png = f"{tmp}/p{j}.png"
+            img = doc[j].render(scale=scale, draw_annots=False).to_pil()
+            img.save(png)
+            tsv = read_tesseract_tsv(png)
+            if tsv is None:
+                tess_cache[j] = None
+            else:
+                tess_cache[j] = list(_tsv_tokens(tsv, img.width, img.height))                     + [png]
+        return tess_cache[j]
+
+    drifted = unmatched = 0
+    # Only a book whose page count disagrees with its PDF needs the walk:
+    # our own generated PDFs are aligned by construction, and running the
+    # matcher over them once desynchronised on the first sparse plate and
+    # shredded a clean book into 878 phantom runs. Aligned books pair by
+    # position, the walker exists for the shelf's original-scan PDFs.
+    drift_mode = len(pages) != len(doc)
+    j = 0
     for i in sorted(pages):
-        if i >= len(doc):
-            continue
         if limit and n_done >= limit:
             break
+        if j >= len(doc):
+            break
         n_done += 1
-        png = f"{tmp}/p{i}.png"
-        img = doc[i].render(scale=scale,
-                            draw_annots=False).to_pil()
-        img.save(png)
-        tsv = read_tesseract_tsv(png)
-        if tsv is None:
+        if not drift_mode:
+            data = tess_page(i) if i < len(doc) else None
+            if data is None:
+                continue
+            witness[i] = data
+            pdf_of[i] = i
             continue
-        witness[i] = list(_tsv_tokens(tsv, img.width, img.height)) + [png]
+        epub_folds = {fold_word(w) for w in surya_tokens[i]
+                      if len(fold_word(w)) >= 3}
+        if len(epub_folds) < 8:
+            # A plate or near-blank page has no vocabulary to match on;
+            # position is the only evidence, and the monotone prior says
+            # the next PDF page is it.
+            data = tess_page(j)
+            if data is not None:
+                witness[i] = data
+                pdf_of[i] = j
+            j += 1
+            continue
+        def sim_at(cand):
+            data = tess_page(cand)
+            if data is None:
+                return 0.0
+            return _page_similarity(
+                epub_folds, {fold_word(w) for w in data[0]
+                             if len(fold_word(w)) >= 3})
+        here = sim_at(j)
+        best, best_sim = j, here
+        if here < 0.5:
+            # Shop the window only when the expected page is doubtful, and
+            # a later page must CLEARLY beat it — chapters share vocabulary
+            # and a narrow win ahead is how a walker jumps a real page.
+            for cand in range(j + 1, min(len(doc), j + 1 + ALIGN_DRIFT)):
+                sim = sim_at(cand)
+                if sim > best_sim + 0.2:
+                    best, best_sim = cand, sim
+                if sim > 0.8:
+                    break
+        if best_sim < ALIGN_FLOOR:
+            unmatched += 1
+            j += 1                          # the prior still walks forward
+            continue
+        drifted += best != j
+        witness[i] = tess_page(best)
+        pdf_of[i] = best
+        j = best + 1
     shipped_last = {i: fold_word(surya_tokens[i][-1])
                     for i in witness if surya_tokens.get(i)}
     n_stitched = _stitch_page_turns(
@@ -621,20 +747,22 @@ def main(epub: str, pdf: str, report: "str | None" = None,
         page_rows = []
         if runs:
             base = _page_text_density(t_tok, t_box)
-            for run in runs:
-                box = _run_box(doc[i], run)
+            for run_words, n_only in runs:
+                box = _run_box(doc[pdf_of[i]], run_words)
                 ink = _ink_under(png, box) if box else None
                 density = None
                 if box and base:
                     a = max(0.0, box[2] - box[0]) * max(0.0, box[3] - box[1])
                     if a > 1e-6:
-                        density = (sum(len(fold_word(w)) for w in run) / a) / base
+                        density = (sum(len(fold_word(w))
+                                       for w in run_words) / a) / base
                 page_rows.append({
-                    "page": i, "n": len(run),
-                    "text": " ".join(run)[:2000],
+                    "page": i, "pdf_page": pdf_of[i], "n": n_only,
+                    "text": " ".join(run_words)[:2000],
                     "box": box, "ink": ink, "density": density})
         if page_rows:
-            surya_only.append({"page": i, "fraction": round(frac, 4),
+            surya_only.append({"page": i, "pdf_page": pdf_of[i],
+                               "fraction": round(frac, 4),
                                "words": only, "runs": page_rows})
         per_page[i] = {"pairs": pairs, "png": png, "boxes": t_box,
                        "cboxes": t_cbox}
@@ -657,7 +785,8 @@ def main(epub: str, pdf: str, report: "str | None" = None,
                                "winner": a if fa in vis_tok else b}
             rungs[verdict["rung"]] += 1
             boxes, cboxes = info["boxes"], info["cboxes"]
-            row = {"page": i, "surya": a, "tesseract": b,
+            row = {"page": i, "pdf_page": pdf_of.get(i, i),
+                   "surya": a, "tesseract": b,
                    "rung": verdict["rung"],
                    "winner": verdict.get("winner"),
                    "shipped": a,
@@ -667,6 +796,11 @@ def main(epub: str, pdf: str, report: "str | None" = None,
             disputes.append(row)
 
     print(f"pages examined: {n_done}")
+    if drifted or unmatched:
+        print(f"alignment: {drifted} page(s) sat later in the PDF than in "
+              f"the book"
+              + (f"; {unmatched} matched nothing in the window and went "
+                 f"unwitnessed" if unmatched else ""))
     if align_stats["seam"]:
         print(f"reading order: {align_stats['seam']} word pair(s) discarded "
               f"where the readers walked the page in different orders — the "
