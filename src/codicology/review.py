@@ -241,8 +241,9 @@ def _surya_only_html(report, run_crops) -> list:
             for ri, r in enumerate(p["runs"])]
     if not allr:
         return []
-    confirmed = [t for t in allr if t[2].get("verdict") == "confirmed"]
-    resolved = [t for t in allr if t[2].get("verdict") == "disputed"]
+    confirmed = [t for t in allr
+                 if t[2].get("verdict") in ("confirmed", "located")]
+    resolved = []
     flat = [t for t in allr if t[2].get("verdict")
             in (None, "advisory", "silent")]
 
@@ -256,10 +257,9 @@ def _surya_only_html(report, run_crops) -> list:
     if not flat and not confirmed:
         return []
     parts = [f"<h2>{SURYA_ONLY_TITLE} ({len(flat)})</h2>",
-             (f"<p class='alt'>{len(confirmed)} run(s) confirmed by a "
-              f"second look and {len(resolved)} resolved into ordinary "
-              f"disputes are not repeated here.</p>"
-              if (confirmed or resolved) else ""),
+             (f"<p class='alt'>{len(confirmed)} run(s) the second look "
+              f"found on the page are collapsed below.</p>"
+              if confirmed else ""),
              "<p class='alt'>Advisory rows — tesseract cannot invent, so "
              "its silence under these words is testimony; but two honest "
              "causes dominate: tiny print it cannot resolve, and regions "
@@ -291,7 +291,7 @@ def _surya_only_html(report, run_crops) -> list:
             + (f"<img class='ink' src='{crop}'>" if crop else "")
             + "</div>")
     if confirmed:
-        parts.append(f"<details><summary>Confirmed by a second look "
+        parts.append(f"<details><summary>Seen by the second look "
                      f"({len(confirmed)})</summary>")
         for pno, ri, r in confirmed:
             crop = run_crops.get((pno, ri))

@@ -575,14 +575,18 @@ def _crop_read_tsv(png: str, box: list) -> "tuple | None":
         return None
 
 
-# The three-band verdict on a run, from the crop's own testimony. The
-# bands are deliberately wide apart: 0.8 says the second reader saw the
-# same text (greenlit), 0.3 says it saw THAT text with word-level
-# differences worth the ladder, and below it the crop shows unrelated
-# ink — a drifted box or a phantom over other print — where no verdict
-# is honest.
+# The verdict bands, from the crop's own testimony. 0.8 says the second
+# reader saw the same text — greenlit. 0.3 says the second look FOUND THE
+# PLACE: enough of the run's words are visibly there, and what differs is
+# measured to be crop-edge fragments and degraded-print junk ("weer oe"
+# edon" beside real 'several old'), not clean word disputes — the run is
+# real text with a weak witness, greenlit with that note, and only
+# word-shaped equal-length differences ever reach the ladder. Below 0.3
+# the crop shows unrelated ink — a drifted box inside a large block —
+# and no verdict is honest. An empty read is silence for ink to
+# arbitrate.
 RUN_CONFIRM = 0.8
-RUN_DISPUTE = 0.3
+RUN_LOCATED = 0.3
 
 
 def _run_verdict(run_words: list, crop_tokens: "list | None") -> str:
@@ -597,8 +601,8 @@ def _run_verdict(run_words: list, crop_tokens: "list | None") -> str:
     ov = len(want & got) / len(want)
     if ov >= RUN_CONFIRM:
         return "confirmed"
-    if ov >= RUN_DISPUTE:
-        return "disputed"
+    if ov >= RUN_LOCATED:
+        return "located"
     return "advisory"
 
 
@@ -834,20 +838,31 @@ def main(epub: str, pdf: str, report: "str | None" = None,
                     ink = _ink_under(png, box)
                     if ink is not None and ink >= SURYA_INKLESS:
                         verdict, box, ink = "advisory", None, None
-                elif verdict == "disputed":
+                elif verdict == "located":
+                    # Only clean, word-shaped, equal-length differences are
+                    # ladder material; the crop's edge fragments and noise
+                    # stay with the crop.
+                    import difflib as _dl
                     ct, cb = crop
-                    for a, b, jx in align_disputes(run_words, ct):
-                        crop_pairs.append(
-                            (a, b, cb[jx] if jx < len(cb) else None))
+                    fo = [fold_word(w) for w in run_words]
+                    ft = [fold_word(w) for w in ct]
+                    sm = _dl.SequenceMatcher(None, fo, ft, autojunk=False)
+                    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+                        if tag != "replace" or (i2 - i1) != (j2 - j1):
+                            continue
+                        for k in range(i2 - i1):
+                            a, b = run_words[i1 + k], ct[j1 + k]
+                            if _is_word(fold_word(b)) and                                     abs(len(a) - len(b)) <= 3:
+                                crop_pairs.append(
+                                    (a, b, cb[j1 + k]
+                                     if j1 + k < len(cb) else None))
                 elif verdict == "advisory":
                     box = None
-                if box and base and verdict != "confirmed":
+                if box and base and verdict == "silent":
                     a = max(0.0, box[2] - box[0]) * max(0.0, box[3] - box[1])
                     if a > 1e-6:
                         density = (sum(len(fold_word(w))
                                        for w in run_words) / a) / base
-                if verdict in ("confirmed", "disputed"):
-                    density = None
                 page_rows.append({
                     "page": i, "pdf_page": pdf_of[i], "n": n_only,
                     "text": " ".join(run_words)[:2000], "verdict": verdict,
@@ -932,11 +947,11 @@ def main(epub: str, pdf: str, report: "str | None" = None,
         inkless = sum(1 for p in surya_only for r in p["runs"]
                       if r["ink"] is not None and r["ink"] < SURYA_INKLESS)
         n_cp = sum(len(v.get("crop_pairs", [])) for v in per_page.values())
+        seen = vc.get("confirmed", 0) + vc.get("located", 0)
         print(f"surya-only: {n_runs} run(s) of words the page read missed — "
-              f"{vc.get('confirmed', 0)} confirmed by a second look, "
-              f"{vc.get('disputed', 0)} sent to the ladder as "
-              f"{n_cp} dispute(s), "
-              f"{vc.get('advisory', 0) + vc.get('silent', 0)} advisory"
+              f"{seen} seen by a second look"
+              + (f" ({n_cp} word difference(s) to the ladder)" if n_cp else "")
+              + f", {vc.get('advisory', 0) + vc.get('silent', 0)} advisory"
               + (f" — {inkless} OVER BLANK PAPER" if inkless else ""))
     if report:
         json.dump({"epub": epub, "pdf": pdf, "pages": n_done,

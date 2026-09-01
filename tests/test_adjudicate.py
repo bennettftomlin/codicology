@@ -389,7 +389,7 @@ def test_run_verdict_bands(vtb):
     assert _run_verdict(run, "channel improvement required constant "
                              "dredgmg work".split()) == "confirmed"
     assert _run_verdict(run, "channel improvement noise other".split()) \
-        == "disputed"
+        == "located"
     assert _run_verdict(run, "totally unrelated words here".split()) \
         == "advisory"
     assert _run_verdict(run, []) == "silent"
