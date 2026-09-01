@@ -386,13 +386,46 @@ def _corners_from_edges(contour: np.ndarray) -> np.ndarray | None:
     return _order_corners(np.array(corners, dtype=np.float32))
 
 
+def _quad_union(quads) -> np.ndarray:
+    """One quad around several, for callers that need a single outline."""
+    merged = np.concatenate(quads).astype(np.float32)
+    return _order_corners(_quad_from_contour(
+        cv2.convexHull(merged.reshape(-1, 1, 2))))
+
+
 def detect_page(image: np.ndarray, min_area_ratio: float = 0.15) -> np.ndarray | None:
     """
     Find the page (or two-page spread) in the frame.
     Returns ordered (4, 2) float32 corners in source coordinates, or None.
 
-    Detection runs on a downscaled copy: contour finding on a 24-megapixel phone
-    photo is slow, and the edges we want survive downscaling easily.
+    Where a deep gutter shadow has cut an open spread into two page blobs,
+    this returns their union — the callers that can do better use
+    detect_page_quads, which keeps the pages separate so each gets its own
+    perspective.
+    """
+    quads = detect_page_quads(image, min_area_ratio)
+    if not quads:
+        return None
+    return quads[0] if len(quads) == 1 else _quad_union(quads)
+
+
+def detect_page_quads(image: np.ndarray,
+                      min_area_ratio: float = 0.15) -> "list[np.ndarray]":
+    """
+    The page quads in the frame, in reading order. [] when none is found.
+
+    One quad is the usual case: a single page, or an open spread whose
+    sheet forms one bright blob for the gutter split to divide later. Two
+    quads mean the gutter shadow already divided the spread at detection —
+    and the facing pages of an open book lie in two different planes, so
+    warping each by its own quad corrects a keystone the union warp would
+    bake into both halves. Measured on one book: 62 of 92 spread
+    photographs lost their facing page entirely when only the larger blob
+    was taken, including a chapter opening discarded while its blank verso
+    shipped.
+
+    Detection runs on a downscaled copy: contour finding on a 24-megapixel
+    phone photo is slow, and the edges we want survive downscaling easily.
     """
     h, w = image.shape[:2]
     scale = DETECT_WIDTH / float(w) if w > DETECT_WIDTH else 1.0
@@ -423,7 +456,8 @@ def detect_page(image: np.ndarray, min_area_ratio: float = 0.15) -> np.ndarray |
         mask[hands > 0] = 0
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        for contour in sorted(contours, key=cv2.contourArea, reverse=True)[:10]:
+        ranked = sorted(contours, key=cv2.contourArea, reverse=True)[:10]
+        for contour in ranked:
             if cv2.contourArea(contour) < min_area:
                 break
             quad = _corners_from_edges(contour)
@@ -431,7 +465,46 @@ def detect_page(image: np.ndarray, min_area_ratio: float = 0.15) -> np.ndarray |
                 quad = _quad_from_contour(contour)
                 if cv2.contourArea(quad) < min_area:
                     continue
-            return _order_corners(quad) / scale
+            sib = _facing_page(ranked, contour, sw, sh)
+            if sib is not None:
+                sq = _corners_from_edges(sib)
+                if sq is None or cv2.contourArea(sq) < 0.4 * cv2.contourArea(quad):
+                    sq = _quad_from_contour(sib)
+                if cv2.contourArea(sq) >= 0.4 * cv2.contourArea(quad):
+                    pair = sorted((_order_corners(quad) / scale,
+                                   _order_corners(sq) / scale),
+                                  key=lambda q: float(q[:, 0].mean()))
+                    return pair
+            return [_order_corners(quad) / scale]
+    return []
+
+
+def _facing_page(contours, winner, sw, sh) -> "np.ndarray | None":
+    """The contour of the page facing the winner across a gutter, or None.
+
+    A sibling must look like the other half of an open book: comparable
+    area (a fore-edge stack strip or a stray bright patch is far smaller),
+    aligned with the winner (bounding boxes overlap most of their height),
+    and beside it with at most a gutter's worth of separation. Frames
+    where the whole sheet already formed one blob have no such contour,
+    so single-page books and working spreads are untouched.
+    """
+    wx, wy, ww, wh = cv2.boundingRect(winner)
+    w_area = cv2.contourArea(winner)
+    for cand in contours:
+        if cand is winner:
+            continue
+        c_area = cv2.contourArea(cand)
+        if c_area < 0.4 * w_area:
+            continue
+        cx, cy, cw, ch = cv2.boundingRect(cand)
+        overlap = min(wy + wh, cy + ch) - max(wy, cy)
+        if overlap < 0.5 * min(wh, ch):
+            continue
+        gap = max(cx - (wx + ww), wx - (cx + cw))
+        if gap > 0.2 * sw:
+            continue
+        return cand
     return None
 
 
@@ -457,6 +530,18 @@ def split_spread(image: np.ndarray, min_aspect: float = 1.15) -> list[np.ndarray
     if h == 0 or w / float(h) < min_aspect:
         return [image]
 
+    x = _gutter_x(image)
+    return [image[:, :x], image[:, x:]]
+
+
+def _gutter_x(image: np.ndarray) -> int:
+    """The column where the spine divides a spread crop.
+
+    The darkest smoothed vertical band near the middle, with the fallbacks
+    split_spread has always used: trim to the lit page first, and take the
+    middle when no pronounced shadow exists.
+    """
+    h, w = image.shape[:2]
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
     kernel = max(3, (w // 100) | 1)
 
@@ -499,7 +584,7 @@ def split_spread(image: np.ndarray, min_aspect: float = 1.15) -> list[np.ndarray
     # by a predictable margin instead of severing a paragraph mid-word.
     if float(np.median(smooth[left:right])) - float(smooth[x]) < GUTTER_MIN_DEPTH:
         x = left + inner // 2
-    return [image[:, :x], image[:, x:]]
+    return x
 
 
 def _quad_corner_error(corners: np.ndarray) -> float:
@@ -727,8 +812,8 @@ def warp_page_guarded(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
     return out
 
 
-def warp_page(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
-    """Perspective-correct the detected page to a flat rectangle."""
+def _warp_transform(corners: np.ndarray):
+    """The perspective matrix and output size warp_page would use."""
     tl, tr, br, bl = corners
     out_w = int(max(np.linalg.norm(tr - tl), np.linalg.norm(br - bl)))
     out_h = int(max(np.linalg.norm(bl - tl), np.linalg.norm(br - tr)))
@@ -736,8 +821,46 @@ def warp_page(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
         [[0, 0], [out_w - 1, 0], [out_w - 1, out_h - 1], [0, out_h - 1]],
         dtype=np.float32,
     )
-    M = cv2.getPerspectiveTransform(corners, dst)
+    return cv2.getPerspectiveTransform(corners, dst), out_w, out_h
+
+
+def warp_page(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
+    """Perspective-correct the detected page to a flat rectangle."""
+    M, out_w, out_h = _warp_transform(corners)
     return cv2.warpPerspective(image, M, (out_w, out_h))
+
+
+def per_plane_pages(image: np.ndarray, corners: np.ndarray,
+                    min_aspect: float = 1.15) -> "list[np.ndarray] | None":
+    """Both pages of a one-blob spread, each warped in its own plane.
+
+    The facing pages of an open book are two planes meeting at the spine.
+    Warping their union flat corrects the sheet as if it were one plane,
+    which bakes a keystone into both halves that deskew cannot remove —
+    it is perspective, not rotation. Here the union warp is used only to
+    FIND the gutter; the gutter line is then mapped back into source
+    coordinates and the sheet quad is cut through it, giving each page a
+    quad in its own plane. Returns None for anything not spread-shaped,
+    leaving the single-page path untouched.
+
+    The half-quads skip limit_quad on the spine side by construction —
+    their inner corners come from the measured gutter, not from a contour
+    guess, and easing them toward a bounding box would reintroduce the
+    exact keystone this exists to remove.
+    """
+    quad = limit_quad(corners)
+    M, out_w, out_h = _warp_transform(quad)
+    if out_h == 0 or out_w / float(out_h) < min_aspect:
+        return None
+    warped = cv2.warpPerspective(image, M, (out_w, out_h))
+    gx = _gutter_x(warped)
+    back = np.linalg.inv(M)
+    ends = np.array([[[gx, 0]], [[gx, out_h - 1]]], dtype=np.float32)
+    (gtop,), (gbot,) = cv2.perspectiveTransform(ends, back)
+    tl, tr, br, bl = quad
+    left = _order_corners(np.array([tl, gtop, gbot, bl], dtype=np.float32))
+    right = _order_corners(np.array([gtop, tr, br, gbot], dtype=np.float32))
+    return [warp_page_guarded(image, left), warp_page_guarded(image, right)]
 
 
 # ── Page deduplication ────────────────────────────────────────────────────────
@@ -7750,13 +7873,27 @@ def pages_from_images(
         if rotate:
             img = rotate_image(img, rotate)
         cropped = True
+        pages = None
         if not no_warp:
-            corners = detect_page(img, min_area_ratio)
-            if corners is None:
+            quads = detect_page_quads(img, min_area_ratio)
+            if not quads:
                 n_nopage += 1
                 cropped = False
+            elif len(quads) == 2 and split_spreads:
+                # The gutter shadow divided the spread at detection. The
+                # facing pages of an open book lie in two planes, so each
+                # is warped by its own quad — a keystone the union warp
+                # would bake into both halves never happens.
+                pages = [warp_page_guarded(img, limit_quad(q)) for q in quads]
+                n_split += 1
             else:
-                img = warp_page_guarded(img, limit_quad(corners))
+                corners = quads[0] if len(quads) == 1 else _quad_union(quads)
+                if split_spreads:
+                    pages = per_plane_pages(img, corners)
+                    if pages is not None:
+                        n_split += 1
+                if pages is None:
+                    img = warp_page_guarded(img, limit_quad(corners))
 
         stem = os.path.splitext(os.path.basename(best_path))[0]
         # Splitting a frame whose page was never found is guesswork: what is in
@@ -7768,8 +7905,10 @@ def pages_from_images(
         # halves of a genuine spread match to within 0.94-0.97 of each other and
         # one cover shot sat at 0.93 — but whether a page was found at all
         # separates them completely.
-        parts = split_spread(img) if (split_spreads and cropped) else [img]
-        n_split += len(parts) > 1
+        if pages is None:
+            pages = split_spread(img) if (split_spreads and cropped) else [img]
+            n_split += len(pages) > 1
+        parts = pages
         for part_idx, part in enumerate(parts):
             if enhance:
                 part = enhance_page(part)
