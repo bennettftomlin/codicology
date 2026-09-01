@@ -4267,7 +4267,11 @@ def find_numbered_entries(bodies: list[str]) -> list[tuple[int, str, int]]:
 
 NOTE_ENTRY = re.compile(r"<p>\s*<sup>\s*(\d{1,3})\s*</sup>")
 BODY_MARKER = re.compile(r"<sup>\s*(\d{1,3})\s*</sup>")
-NOTES_HEAD = re.compile(r"<h\d[^>]*>\s*NOTES?\s*</h\d>", re.I)
+# FOOTNOTES and ENDNOTES included: one book heads every chapter-end notes
+# section "FOOTNOTES", and the bare word blocked all of them — the linker,
+# the group walk, and the rank probe all gate on this one pattern. The word
+# must still be the whole heading.
+NOTES_HEAD = re.compile(r"<h\d[^>]*>\s*(?:FOOT|END)?NOTES?\s*</h\d>", re.I)
 # The names a notes section gives its groups. Chapter forms, spelled out or
 # numbered — and the sections a book's front and back matter use, because a
 # book that annotates its introduction gives those notes a group of their
@@ -4375,7 +4379,8 @@ def _ungrouped_notes(bodies: list[str], start: int) -> list:
     opens with a heading of the notes head's own rank, and numbered entries
     beyond that boundary are somebody else's.
     """
-    rank = re.search(r"<(h[1-6])[^>]*>\s*NOTES?\s*</\1>", bodies[start], re.I)
+    rank = re.search(r"<(h[1-6])[^>]*>\s*(?:FOOT|END)?NOTES?\s*</\1>",
+                     bodies[start], re.I)
     stop = rf"<{rank.group(1)}[^>]*>" if rank else r"<h1[^>]*>"
     entries: list[tuple[int, int, int]] = []
     for i in range(start, len(bodies)):
