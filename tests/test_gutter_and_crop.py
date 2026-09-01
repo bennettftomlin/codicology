@@ -405,3 +405,33 @@ def test_a_sliver_quad_keeps_the_whole_frame(vtb, tmp_path):
     assert len(pages) == 1
     out = _cv2.imread(pages[0])
     assert out.shape[:2] == (1000, 1300), "must keep the frame uncropped"
+
+
+def test_the_cut_never_amputates_text_that_hugs_the_spine(vtb, tmp_path):
+    """A blob's thresholded edge once cut off the captions sitting inside
+    the spine shadow. The cut is always the measured ink-free gutter now,
+    so every stroke of both pages survives, each exactly once."""
+    import cv2 as _cv2
+    f = np.full((900, 1400, 3), 25, np.uint8)
+    f[100:800, 120:660] = 235
+    f[100:800, 700:1240] = 235                    # deep gutter: two blobs
+    n_left = n_right = 0
+    for row in range(160, 740, 40):               # left page text
+        f[row:row + 5, 170:600] = 20; n_left += 1
+    for row in range(160, 740, 40):               # right text HUGS the spine
+        f[row:row + 5, 715:1000] = 20; n_right += 1
+    src = str(tmp_path / "IMG_0001.png")
+    _cv2.imwrite(src, f)
+    pages, ids = vtb.pages_from_images([src], str(tmp_path), 0.10, 0,
+                                       False, False, False, True,
+                                       dewarp=False)
+    assert len(pages) == 2
+    def strokes(path):
+        g = _cv2.imread(path, _cv2.IMREAD_GRAYSCALE)
+        n, _, stats, _ = _cv2.connectedComponentsWithStats(
+            (g < 100).astype("uint8"))
+        return sum(1 for i in range(1, n)
+                   if stats[i, _cv2.CC_STAT_WIDTH] > 50)
+    total = strokes(pages[0]) + strokes(pages[1])
+    assert total == n_left + n_right, \
+        f"{total} strokes across halves, expected {n_left + n_right}"

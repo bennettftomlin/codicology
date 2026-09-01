@@ -125,11 +125,13 @@ def witness(image: np.ndarray, workdir: str,
             scale: float = 0.6) -> tuple[int, float, float]:
     """(words, mean confidence, y-span) from tesseract — the acceptance judge.
 
-    y-span is the fraction of the page height the witnessed words cover.
-    The sheet models page-wide curvature, so testimony clustered in one
-    band — a plate's captions — is testimony about almost none of what
-    the transform touches; two plate pages were once smeared into swirls
-    while their captions read the same before and after.
+    The third value is COVERAGE: the fraction of ten horizontal bands
+    that contain at least one word. The sheet models page-wide curvature,
+    so testimony must be spread across the page: a plate's caption
+    clusters plus a folio can stretch a raw top-to-bottom span past any
+    bar while still describing almost nothing — one such page was smeared
+    twice, surviving both a word-count floor and a span test. Bands
+    cannot be stretched; they are either inhabited or empty.
     """
     p = os.path.join(workdir, "_cubic_wit.png")
     h, w = image.shape[:2]
@@ -144,7 +146,7 @@ def witness(image: np.ndarray, workdir: str,
             os.remove(p)
         except OSError:
             pass
-    confs, tops, bottoms = [], [], []
+    confs, centers = [], []
     for line in r.stdout.decode("utf-8", "replace").splitlines()[1:]:
         f = line.split("\t")
         if len(f) >= 12 and f[0] == "5" and f[11].strip():
@@ -155,7 +157,10 @@ def witness(image: np.ndarray, workdir: str,
                 continue
             if c >= 0:
                 confs.append(c)
-                tops.append(top)
-                bottoms.append(top + height)
-    span = ((max(bottoms) - min(tops)) / max(1.0, h * scale)) if confs else 0.0
-    return len(confs), (float(np.mean(confs)) if confs else 0.0), float(span)
+                centers.append(top + height / 2.0)
+    if confs:
+        bands = {min(9, int(10.0 * y / max(1.0, h * scale))) for y in centers}
+        coverage = len(bands) / 10.0
+    else:
+        coverage = 0.0
+    return len(confs), (float(np.mean(confs)) if confs else 0.0), coverage

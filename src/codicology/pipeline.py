@@ -604,7 +604,11 @@ def _gutter_x(image: np.ndarray) -> int:
     if inkfree.size:
         x = int(inkfree[np.argmin(smooth[inkfree])])
     else:
-        x = lo + int(np.argmin(smooth[lo:hi]))
+        # No ink-free column at all — a tight layout runs text hard
+        # against the spine on both sides. The least-ink column is still
+        # the fold; the DARKEST column is a text column, and cutting
+        # there amputates it.
+        x = int(window[np.argmin(ink_cols[lo:hi])])
 
     # A spine in view is a pronounced shadow. When the crop caught only part of
     # the spread the profile across the middle is flat instead, and argmin picks
@@ -7757,7 +7761,7 @@ def _prepare_page_image(img: np.ndarray, min_area_ratio: float, rotate: int,
             img = cand
         elif not modelled and _cubic.available():
             wa, ca, spana = _cubic.witness(img, workdir)
-            if wa >= 15 and spana >= 0.4:
+            if wa >= 15 and spana >= 0.5:
                 cand, ok = _cubic.cubic_dewarp(img, workdir)
                 if ok:
                     _, cb, _sb = _cubic.witness(cand, workdir)
@@ -7924,14 +7928,15 @@ def pages_from_images(
             if not quads:
                 n_nopage += 1
                 cropped = False
-            elif len(quads) == 2 and split_spreads:
-                # The gutter shadow divided the spread at detection. The
-                # facing pages of an open book lie in two planes, so each
-                # is warped by its own quad — a keystone the union warp
-                # would bake into both halves never happens.
-                pages = [warp_page_guarded(img, limit_quad(q)) for q in quads]
-                n_split += 1
             else:
+                # Whether the gutter shadow split the sheet into two blobs
+                # or left it whole, the contours only establish that a
+                # spread exists and how far it extends. The CUT is always
+                # the measured ink-free gutter: a blob's thresholded edge
+                # once amputated the captions that sat inside the spine
+                # shadow, and the clip guard could not object — the band
+                # at a spine-side edge is dark, which blinds its
+                # brightness gate by design.
                 corners = quads[0] if len(quads) == 1 else _quad_union(quads)
                 if split_spreads:
                     pages = per_plane_pages(img, corners)
@@ -7984,7 +7989,7 @@ def pages_from_images(
                         # once smeared two plate pages into swirls that
                         # sailed through. No testimony, no transform.
                         _wA, cA, spanA = _cubic.witness(part, pages_dir)
-                        if _wA < 15 or spanA < 0.4:
+                        if _wA < 15 or spanA < 0.5:
                             n_cubic_blind += 1
                         else:
                             cand, ok = _cubic.cubic_dewarp(part, pages_dir)
@@ -8061,7 +8066,7 @@ def dewarp_scan_pages(page_paths: list[str], pages_dir: str) -> None:
         if not modelled:
             if _cubic.available():
                 wa, ca, spana = _cubic.witness(img, pages_dir)
-                if wa < 15 or spana < 0.4:
+                if wa < 15 or spana < 0.5:
                     n_cubic_blind += 1
                 else:
                     cand, ok = _cubic.cubic_dewarp(img, pages_dir)
