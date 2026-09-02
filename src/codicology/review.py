@@ -215,16 +215,22 @@ def _run_crops(report, dpi=200, ctx_px=120, base_dir=None) -> dict:
         img = None
         for ri, r in enumerate(prow["runs"]):
             box = r.get("box")
-            if not box:
-                continue
             if img is None:
                 img = doc[pno].render(scale=dpi / 72,
                                       draw_annots=False).to_pil()
-            x0, y0 = int(box[0] * img.width), int(box[1] * img.height)
-            x1, y1 = int(box[2] * img.width), int(box[3] * img.height)
-            crop = img.crop((max(0, x0 - ctx_px), max(0, y0 - 10),
-                             min(img.width, x1 + ctx_px),
-                             min(img.height, y1 + 10))).convert("RGB")
+            if box:
+                pad = 60 if r.get("approx") else 10
+                cx = 200 if r.get("approx") else ctx_px
+                x0, y0 = int(box[0] * img.width), int(box[1] * img.height)
+                x1, y1 = int(box[2] * img.width), int(box[3] * img.height)
+                crop = img.crop((max(0, x0 - cx), max(0, y0 - pad),
+                                 min(img.width, x1 + cx),
+                                 min(img.height, y1 + pad))).convert("RGB")
+            else:
+                # No location at all: the page itself, small — a reader
+                # hunting handwriting needs the scene, not a blank row.
+                w = 560
+                crop = img.resize((w, int(img.height * w / img.width)))                           .convert("RGB")
             buf = io.BytesIO()
             crop.save(buf, format="JPEG", quality=85)
             uris[(pno, ri)] = ("data:image/jpeg;base64,"
@@ -278,6 +284,16 @@ def _surya_only_html(report, run_crops) -> list:
         if r.get("density") and r["density"] > 2.0:
             chips.append(f"{r['density']:.1f}× the page's own type density")
         crop = run_crops.get((pno, ri))
+        why = {"unlocated": "scattered blocks — not one span in the layer "
+                            "(handwriting and inset documents live here)",
+               "unrelated": "the located crop showed other ink",
+               "inked-unreadable": "ink is there but no reader resolves it "
+                                   "(rotated, display, or degraded type)",
+               }.get(r.get("why"))
+        if why:
+            chips.append(why)
+        if r.get("approx"):
+            chips.append("crop ≈ anchored on the run's rarest word")
         shown = r["text"] if len(r["text"]) <= 240 else r["text"][:240] + "…"
         old_attr = html.escape(r["text"], quote=True)
         parts.append(

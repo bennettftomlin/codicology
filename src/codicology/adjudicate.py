@@ -606,6 +606,22 @@ def _run_verdict(run_words: list, crop_tokens: "list | None") -> str:
     return "advisory"
 
 
+def _word_anchor(page, run_words: list) -> "list | None":
+    """An approximate box from the run's most distinctive single word.
+
+    When the span scatters across blocks (handwriting read line by line,
+    inset documents) the whole run cannot be found in the layer stream,
+    but one long rare word usually can — enough to show the human the
+    neighbourhood, never enough to trust for ink."""
+    for w in sorted(set(run_words), key=len, reverse=True):
+        if len(fold_word(w)) < 6:
+            break
+        box = _run_box(page, [w])
+        if box:
+            return box
+    return None
+
+
 def _ink_under(png: str, box: list) -> "float | None":
     """Letterform ink fraction inside a fraction box of the rendered page."""
     try:
@@ -852,6 +868,8 @@ def main(epub: str, pdf: str, report: "str | None" = None,
                 crop = _crop_read_tsv(png, box) if box else None
                 verdict = _run_verdict(run_words,
                                        crop[0] if crop else None)
+                why = None if box else "unlocated"
+                approx = False
                 ink = density = None
                 if verdict == "silent":
                     # Nothing readable where the layer puts these words.
@@ -860,7 +878,11 @@ def main(epub: str, pdf: str, report: "str | None" = None,
                     # display type and stays advisory without geometry.
                     ink = _ink_under(png, box)
                     if ink is not None and ink >= SURYA_INKLESS:
-                        verdict, box, ink = "advisory", None, None
+                        # The box stays for the reader's eyes — the ink IS
+                        # the run's ink, merely unreadable — but the ink
+                        # number itself is withheld from the verdict.
+                        verdict, ink = "advisory", None
+                        why = "inked-unreadable"
                 elif verdict == "located":
                     # Only clean, word-shaped, equal-length differences are
                     # ladder material; the crop's edge fragments and noise
@@ -880,7 +902,12 @@ def main(epub: str, pdf: str, report: "str | None" = None,
                                     (a, b, cb[j1 + k]
                                      if j1 + k < len(cb) else None))
                 elif verdict == "advisory":
-                    box = None
+                    if box is not None:
+                        why = "unrelated"
+                        box = None
+                if box is None and why in ("unlocated", "unrelated"):
+                    box = _word_anchor(doc[pdf_of[i]], run_words)
+                    approx = box is not None
                 if box and base and verdict == "silent":
                     a = max(0.0, box[2] - box[0]) * max(0.0, box[3] - box[1])
                     if a > 1e-6:
@@ -889,7 +916,8 @@ def main(epub: str, pdf: str, report: "str | None" = None,
                 page_rows.append({
                     "page": i, "pdf_page": pdf_of[i], "n": n_only,
                     "text": " ".join(run_words)[:2000], "verdict": verdict,
-                    "box": box, "ink": ink, "density": density})
+                    "why": why, "approx": approx, "box": box, "ink": ink,
+                    "density": density})
         if page_rows:
             surya_only.append({"page": i, "pdf_page": pdf_of[i],
                                "fraction": round(frac, 4),
