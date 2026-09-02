@@ -106,6 +106,16 @@ def test_paper_crop_trims_through_a_sliver_to_the_spine_shadow():
     ruled = page.copy()
     ruled[int(h * 0.07):int(h * 0.07) + 4, :] = 30
     assert R.paper_crop(ruled).shape == page.shape
+    # A wider gap that is DIM — the facing page's penumbra — is surround too.
+    penumbra = page.copy()
+    penumbra[:, :int(w * 0.05)] = 160                # 0.68 of this paper
+    penumbra[:, int(w * 0.05):int(w * 0.07)] = 35    # then the shadow
+    out = R.paper_crop(penumbra)
+    assert abs(out.shape[1] - (w - int(w * 0.07))) <= 3, out.shape
+    # ...but a vertical rule behind a margin at paper brightness is content.
+    margined = page.copy()
+    margined[:, int(w * 0.06):int(w * 0.06) + 3] = 30
+    assert R.paper_crop(margined).shape == page.shape
 
 
 def _justified_page(w=1400, h=1900, n_lines=28):

@@ -47,6 +47,10 @@ PAPER_MAX_TRIM = 0.12
 # dark run is the facing page's sliver, not the page's margin; measured
 # gutter slivers run 1-2%, the narrowest real margin several times that.
 PAPER_SLIVER = 0.03
+# A wider gap is still surround when it is dimmer than this fraction of
+# the page's paper: the facing page's penumbra measured 0.65-0.8 of paper,
+# a real margin 0.95 and up.
+PAPER_DIM_RATIO = 0.85
 # A rectified sheet that reads fewer than this fraction of the photograph's
 # words has lost text — a folded map, a boundary that excluded a page. The
 # build keeps the photograph for that page and says so.
@@ -176,18 +180,22 @@ def paper_crop(page: np.ndarray) -> np.ndarray:
     sh, sw = small.shape
     core = small[int(sh * 0.2):max(int(sh * 0.2) + 1, int(sh * 0.8)),
                  int(sw * 0.2):max(int(sw * 0.2) + 1, int(sw * 0.8))]
-    level = float(np.percentile(core, 75)) * PAPER_LEVEL_RATIO
+    paper = float(np.percentile(core, 75))
+    level = paper * PAPER_LEVEL_RATIO
+    dim = paper * PAPER_DIM_RATIO
     cols = np.median(small, axis=0)
     rows = np.median(small, axis=1)
 
     def walk(p, chain):
         """How far in from one edge the surround reaches: dark runs, and —
-        along columns only — dark runs separated by a bright gap no wider
-        than a sliver. The split leaves a sliver of the facing page
-        between the cut and the spine's shadow, and a walk that stopped
-        at the sliver left the shadow's line on 27 of 130 pages. A gap
-        wider than a sliver is the page's own margin, so a rule under a
-        running head is never reached; rows never chain at all."""
+        along columns only — dark runs behind a gap that is not paper.
+        The split leaves the facing page's edge between the cut and the
+        spine's shadow: a sliver at most a few percent wide, or a wider
+        penumbra that is dim (measured 145-173 grey against paper at
+        220). A walk that stopped there left the shadow's line on 27 of
+        130 pages. A gap at paper brightness is the page's own margin,
+        so a rule behind a real margin is never reached; rows never chain
+        at all."""
         lim = len(p)
         sliver = max(2, int(lim * PAPER_SLIVER / PAPER_MAX_TRIM))
         i = 0
@@ -195,7 +203,13 @@ def paper_crop(page: np.ndarray) -> np.ndarray:
             k = i
             while k < lim and p[k] >= level:
                 k += 1
-            if k >= lim or (k - i > sliver) or (k > i and not chain):
+            if k >= lim or (k > i and not chain):
+                break
+            # The gap's MEAN, not its brightest column: a penumbra fades
+            # from near-paper at the cut to the shadow, and its first
+            # column alone sat above the mark on two pages.
+            gap_is_surround = (k - i <= sliver) or float(np.mean(p[i:k])) < dim
+            if k > i and not gap_is_surround:
                 break
             j = k
             while j < lim and p[j] < level:
