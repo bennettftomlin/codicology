@@ -112,9 +112,17 @@ def build_tiers(disputes) -> dict:
 
 
 def _fingerprint(report) -> str:
-    raw = json.dumps([len(report.get("disputes", [])),
-                      report.get("pdf", ""), report.get("epub", "")],
-                     sort_keys=True)
+    """Keys the browser-side staging state. It must change whenever the
+    ROWS change: a count-and-paths key once let round one's staged choices
+    reattach themselves by row index to a regenerated round-two sheet of
+    the same book. Reopening the same sheet still resumes — the content
+    is identical, so the key is."""
+    rows = [(d.get("page"), d.get("surya"), d.get("tesseract"))
+            for d in report.get("disputes", [])]
+    runs = [(p.get("page"), r.get("text"))
+            for p in report.get("surya_only", []) for r in p.get("runs", [])]
+    raw = json.dumps([rows, runs, report.get("pdf", ""),
+                      report.get("epub", "")], sort_keys=True)
     return hashlib.sha1(raw.encode()).hexdigest()[:12]
 
 
@@ -571,26 +579,56 @@ def _apply_to_xhtml(xhtml, old, new, occurrence) -> "str | None":
 def _delete_from_xhtml(xhtml, old) -> "str | None":
     """Remove one run of words from a page's text nodes, tags untouched.
 
-    The run is matched whole — its words in order, any whitespace between,
-    word boundaries at both ends — inside a single text segment; a run the
-    markup interrupts reports stale rather than guessing at a partial
-    deletion. Leftover doubled spaces are collapsed where the words left."""
+    A run is contiguous in the READING — but the page's markup may split
+    it across several blocks: a diagram legend is one <li> per line, a
+    flowchart's labels one <p> each, and six of a reviewer's nine
+    deletions once came back stale for exactly that. The words are
+    matched in order across consecutive text segments, with the markup
+    between them standing where it stands; only text is removed, and a
+    block the deletion empties entirely is dropped so no blank paragraph
+    marks the spot. A run whose words are not found in order reports
+    stale — partial deletion is worse than none."""
     words = old.split()
     if not words:
         return None
+    segs = re.split(r"(<[^>]+>)", xhtml)
+    # the text segments, concatenated with single spaces at the joins, and
+    # a map from each concatenated character back to (segment, offset)
+    text_parts, owner = [], []
+    for k, seg in enumerate(segs):
+        if k % 2 == 1:
+            continue
+        if text_parts:
+            text_parts.append(" ")
+            owner.append((None, None))
+        text_parts.append(seg)
+        owner.extend((k, off) for off in range(len(seg)))
+    flat = "".join(text_parts)
     pat = re.compile(r"(?<![\w])" + r"\s+".join(re.escape(w) for w in words)
                      + r"(?![\w])")
-    segs = re.split(r"(<[^>]+>)", xhtml)
-    for k, seg in enumerate(segs):
-        if k % 2 == 1 or not seg.strip():
+    m = pat.search(flat)
+    if not m:
+        return None
+    cuts: dict = {}
+    for pos in range(m.start(), m.end()):
+        k, off = owner[pos]
+        if k is None:
             continue
-        m = pat.search(seg)
-        if m:
-            cleaned = seg[:m.start()] + seg[m.end():]
-            cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
-            segs[k] = cleaned
-            return "".join(segs)
-    return None
+        lo, hi = cuts.get(k, (off, off))
+        cuts[k] = (min(lo, off), max(hi, off + 1))
+    for k, (lo, hi) in cuts.items():
+        seg = segs[k]
+        left, right = seg[:lo], seg[hi:]
+        # a cut that reaches a segment's edge leaves the neighbour's
+        # separating space stranded at the block boundary
+        if not left.strip():
+            right = right.lstrip()
+        if not right.strip():
+            left = left.rstrip()
+        segs[k] = re.sub(r"[ \t]{2,}", " ", left + right)
+    out = "".join(segs)
+    out = re.sub(r"<(p|li)\b[^>]*>\s*</\1>", "", out)
+    return out
 
 
 def apply_one_decision(xhtml, d) -> "str | None":

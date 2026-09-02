@@ -286,14 +286,35 @@ def test_delete_run_removes_words_and_only_words(vtb):
     assert got == "<p>The morning was cold. The evening was warm.</p>"
 
 
-def test_delete_run_across_markup_reports_stale(vtb):
-    """A run the markup interrupts is not guessed at — partial deletion is
-    worse than none."""
+def test_delete_run_spans_blocks_and_drops_the_emptied_ones(vtb):
+    """A diagram legend is one <li> per line; the reviewer's run covers
+    them all. Text goes, tags stay, blocks left empty are dropped, the
+    prose around it is untouched."""
     from codicology.review import apply_one_decision
-    x = "<p>Invented words <i>nobody</i> witnessed here today.</p>"
+    x = ("<p>Real prose before.</p><ol><li>AA twin hulls</li>"
+         "<li>G main windlass chain</li><li>R gallows frame</li></ol>"
+         "<p>Real prose after.</p>")
     got = apply_one_decision(x, {"kind": "delete_run",
-                                 "old": "Invented words nobody witnessed here",
+                                 "old": "AA twin hulls G main windlass "
+                                        "chain R gallows frame",
                                  "new": ""})
+    assert got == "<p>Real prose before.</p><ol></ol><p>Real prose after.</p>"
+
+
+def test_delete_run_partial_inside_a_block_keeps_the_rest(vtb):
+    from codicology.review import apply_one_decision
+    x = "<p>Junk read here FIG. 32 real caption text.</p>"
+    got = apply_one_decision(x, {"kind": "delete_run",
+                                 "old": "Junk read here", "new": ""})
+    assert got == "<p>FIG. 32 real caption text.</p>"
+
+
+def test_delete_run_out_of_order_reports_stale(vtb):
+    """Words present but not in the run's order are somebody else's text."""
+    from codicology.review import apply_one_decision
+    x = "<p>chain windlass main</p>"
+    got = apply_one_decision(x, {"kind": "delete_run",
+                                 "old": "main windlass chain", "new": ""})
     assert got is None
 
 
@@ -318,3 +339,13 @@ def test_deletions_run_before_swaps(vtb, tmp_path, capsys):
     assert stats["applied"] == 1 and stats["stale"] == 1
     assert "Fake sentence" not in bodies[0]
     assert "Real prose here." in bodies[0] and "More real prose." in bodies[0]
+
+
+def test_decision_rounds_accept_one_path_or_several(vtb):
+    """The plugin passes one path; the CLI may repeat the flag per review
+    round. Order is the history and must survive."""
+    from codicology.pipeline import _decision_rounds
+    assert _decision_rounds(None) == []
+    assert _decision_rounds("a.json") == ["a.json"]
+    assert _decision_rounds(["r1.json", "r2.json"]) == ["r1.json", "r2.json"]
+    assert _decision_rounds(["r1.json", None]) == ["r1.json"]

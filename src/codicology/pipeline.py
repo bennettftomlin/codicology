@@ -6130,6 +6130,15 @@ def join_page_break_hyphens(bodies: list, dropped: "set[int]") -> dict:
     return {"joined": joined, "refused": refused}
 
 
+def _decision_rounds(decisions_path) -> list:
+    """The decisions files to apply, in order: none, one, or several."""
+    if not decisions_path:
+        return []
+    if isinstance(decisions_path, (str, bytes, os.PathLike)):
+        return [decisions_path]
+    return [p for p in decisions_path if p]
+
+
 def apply_reviewer_decisions(bodies: list, decisions_path: str,
                              kept_pages: "int | None" = None) -> dict:
     """A review sheet's exported decisions, reapplied at rebuild time —
@@ -7332,13 +7341,16 @@ def build_epub(
               + (f", {jst['refused']} left as printed (compound or unknown)"
                  if jst["refused"] else ""))
 
-    if decisions_path:
+    # Review happens in rounds, each reviewed against the book the
+    # previous round produced, so the files apply in the order given — a
+    # later round's "occurrence 1" counts among the text the earlier round
+    # left. Merging rounds into one file would sort that history away.
+    for rnd, path_ in enumerate(_decision_rounds(decisions_path), 1):
         dst = apply_reviewer_decisions(
-            bodies, decisions_path,
-            kept_pages=len(bodies) - len(dropped))
+            bodies, path_, kept_pages=len(bodies) - len(dropped))
         if dst["applied"] or dst["stale"]:
-            print(f"    decisions: {dst['applied']} reviewer correction(s) "
-                  f"reapplied"
+            print(f"    decisions (round {rnd}): {dst['applied']} reviewer "
+                  f"correction(s) reapplied"
                   + (f", {dst['stale']} stale" if dst["stale"] else ""))
 
     # One placement of the printed contents serves every consumer below —
@@ -9819,10 +9831,13 @@ def main(argv: "list[str] | None" = None) -> None:
                              "instead of reading them again. Faster, and the "
                              "label consumers stay dark on those pages")
     parser.add_argument("--apply-decisions", metavar="JSON", default=None,
+                        action="append",
                         help="review-sheet decisions to reapply at build time, "
                              "before the linkers run — the reviewer's "
                              "corrections survive rebuilds; sites that no "
-                             "longer exist are reported stale, never guessed")
+                             "longer exist are reported stale, never guessed. "
+                             "Repeat the flag for successive review rounds; "
+                             "they apply in the order given")
     parser.add_argument("--cover", metavar="PAGE_OR_FILE", default="auto",
                         help="The EPUB's cover: a page named like --drop-pages names them, "
                              "a path to an image file, or 'none'. Default 'auto' takes the "
