@@ -212,3 +212,19 @@ def test_an_already_encodable_image_is_passed_through_untouched(vtb):
     assert vtb._encodable(rgb) is rgb
     grey = Image.new("L", (8, 8), 128)
     assert vtb._encodable(grey) is grey
+
+
+def test_a_thumb_is_not_a_figure(vtb):
+    """The layout pass boxed a thumb resting on a blank verso as a Picture
+    and the detail test passed it — skin has texture. Mostly-skin crops
+    are the reader's hand, not the book's."""
+    import numpy as np
+    from PIL import Image
+    skin = np.zeros((120, 60, 3), np.uint8)
+    skin[:, :, 0] = 205; skin[:, :, 1] = 150; skin[:, :, 2] = 125   # RGB flesh
+    rng = np.random.default_rng(3)
+    skin = np.clip(skin + rng.integers(-12, 12, skin.shape), 0, 255).astype(np.uint8)
+    assert vtb.figure_is_a_hand(Image.fromarray(skin))
+    paper = np.full((120, 60, 3), 235, np.uint8)
+    paper[40:80, 10:50] = 20                                          # an inked plate
+    assert not vtb.figure_is_a_hand(Image.fromarray(paper))

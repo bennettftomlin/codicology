@@ -3394,6 +3394,27 @@ def fill_folio_gaps(folios: list[Folio]) -> tuple[dict[int, int], list[tuple]]:
 FIGURE_MIN_DETAIL = 0.01
 
 
+# A figure crop that is mostly the reader's hand is not a figure. The layout
+# pass boxes a thumb resting on a blank verso as a Picture — reasonably, it
+# is the only thing on the page — and the detail test passes it, because
+# skin has texture. Measured on the crop that shipped: a 179x504 thumbnail
+# of a thumbnail. The same skin classifier page detection uses to keep a
+# hand out of the page outline keeps it out of the book here.
+FIGURE_MAX_SKIN = 0.5
+
+
+def figure_is_a_hand(img: Image.Image) -> bool:
+    """Whether the crop is mostly skin — a hand, not a picture."""
+    try:
+        rgb = np.asarray(img.convert("RGB"))
+    except (OSError, ValueError):
+        return False
+    if rgb.shape[0] < 8 or rgb.shape[1] < 8:
+        return False
+    bgr = np.ascontiguousarray(rgb[:, :, ::-1])
+    return float((_skin_mask(bgr) > 0).mean()) > FIGURE_MAX_SKIN
+
+
 def figure_has_content(img: Image.Image) -> bool:
     """
     Whether a detected figure holds a picture or just the paper it was printed on.
@@ -6811,6 +6832,7 @@ class ReadPages(NamedTuple):
     n_reattached: int
     n_phantoms: int
     n_forms: int
+    n_hand_figures: int
     label_heads: list
     toc_label_pages: set
 
@@ -6830,6 +6852,7 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
     furniture_known: list[bool] = []       # False = cached before heads were kept
     n_figures = 0
     n_blank_figures = 0
+    n_hand_figures = 0
     n_label_rules = 0
     n_reattached = 0
     n_phantoms = 0
@@ -6843,7 +6866,11 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
 
     def emit_figure(item: PageItem, caption: PageItem | None, caption_first: bool) -> str:
         """Store the crop in the book and wrap it, with its caption, in one <figure>."""
-        nonlocal n_figures, n_blank_figures
+        nonlocal n_figures, n_blank_figures, n_hand_figures
+        if figure_is_a_hand(item.figure):
+            n_hand_figures += 1
+            item.figure.close()
+            return f"<p>{caption.html}</p>" if caption is not None else ""
         if not figure_has_content(item.figure):
             # A blank leaf the layout pass boxed for want of anything else to
             # call it. Its caption, if any, is still worth keeping: a plate's
@@ -7021,7 +7048,7 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
     return ReadPages(bodies, page_figures, figure_data, page_furniture,
                      furniture_known, n_figures, n_blank_figures,
                      n_label_rules, n_reattached, n_phantoms, n_forms,
-                     label_heads, toc_label_pages)
+                     n_hand_figures, label_heads, toc_label_pages)
 
 
 def build_epub(
@@ -7080,11 +7107,14 @@ def build_epub(
     rp = _read_pages(page_paths, backend, cache, book, strip_furniture)
     (bodies, page_figures, figure_data, page_furniture, furniture_known,
      n_figures, n_blank_figures, n_label_rules, n_reattached, n_phantoms,
-     n_forms, label_heads, toc_label_pages) = rp
+     n_forms, n_hand_figures, label_heads, toc_label_pages) = rp
     if n_figures:
         print(f"    extracted {n_figures} figures")
     if n_blank_figures:
         print(f"    skipped {n_blank_figures} blank-page image(s)")
+    if n_hand_figures:
+        print(f"    skipped {n_hand_figures} figure(s) that were the "
+              f"reader's hand, not a picture")
     if n_label_rules:
         print(f"    drew {n_label_rules} footnote rule(s) the layout labels "
               f"assert but the page never showed")
