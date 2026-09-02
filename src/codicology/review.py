@@ -604,7 +604,14 @@ def _delete_from_xhtml(xhtml, old) -> "str | None":
         text_parts.append(seg)
         owner.extend((k, off) for off in range(len(seg)))
     flat = "".join(text_parts)
-    pat = re.compile(r"(?<![\w])" + r"\s+".join(re.escape(w) for w in words)
+    # The run was recorded as TOKENS — punctuation stripped — while the
+    # body keeps its colons, commas and the periods in "U.S.": a legend
+    # reading "AA': twin hulls G: main windlass" must match the run
+    # "AA' twin hulls G main windlass". Anything non-word may stand
+    # between consecutive words; six of nine deletions once went stale on
+    # exactly this.
+    pat = re.compile(r"(?<![\w])"
+                     + r"[^\w]*?".join(re.escape(w) for w in words)
                      + r"(?![\w])")
     m = pat.search(flat)
     if not m:

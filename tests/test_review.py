@@ -349,3 +349,19 @@ def test_decision_rounds_accept_one_path_or_several(vtb):
     assert _decision_rounds("a.json") == ["a.json"]
     assert _decision_rounds(["r1.json", "r2.json"]) == ["r1.json", "r2.json"]
     assert _decision_rounds(["r1.json", None]) == ["r1.json"]
+
+
+def test_delete_run_tolerates_the_punctuation_tokens_dropped(vtb):
+    """Runs are recorded as tokens; the body keeps its colons and the
+    periods in U.S. — the legend must still go."""
+    from codicology.review import apply_one_decision
+    x = ("<p>Caption stays.</p><ol><li>AA’: twin hulls</li>"
+         "<li>G: main windlass chain</li></ol><p>MAP: U.S. GEOGRAPHIC OFFICE</p>")
+    got = apply_one_decision(x, {"kind": "delete_run",
+                                 "old": "AA' twin hulls G main windlass chain",
+                                 "new": ""})
+    assert got == "<p>Caption stays.</p><ol></ol><p>MAP: U.S. GEOGRAPHIC OFFICE</p>"
+    got2 = apply_one_decision(got, {"kind": "delete_run",
+                                    "old": "MAP U S GEOGRAPHIC OFFICE",
+                                    "new": ""})
+    assert got2 == "<p>Caption stays.</p><ol></ol>"
