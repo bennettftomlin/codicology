@@ -65,6 +65,42 @@ def available() -> bool:
     return _load() is not None
 
 
+def _input_extent(project_xy, norm2pix, params, dims, shape,
+                  reach: float = 0.6, step: float = 0.02):
+    """The sheet-coordinate range (x0, x1, y0, y1) that covers the input.
+
+    Starting from the fitted box, each side steps outward while at least
+    half of a line of sample points still projects inside the image; the
+    walk stops where the page ends (or the model, extrapolating into desk,
+    folds away). Bounded by `reach` sheet units so a folded extrapolation
+    cannot run off to infinity. A margin of one step is kept so the last
+    inside line is inside the canvas too.
+    """
+    h, w = shape[:2]
+
+    def inside_frac(xs, ys):
+        xy = np.hstack([xs.reshape(-1, 1), ys.reshape(-1, 1)]).astype(np.float32)
+        pts = norm2pix(shape, project_xy(xy, params), False).reshape(-1, 2)
+        ok = (pts[:, 0] >= 0) & (pts[:, 0] < w) & (pts[:, 1] >= 0) & (pts[:, 1] < h)
+        return float(ok.mean())
+
+    ys_line = np.linspace(0, dims[1], 24)
+    xs_line = np.linspace(0, dims[0], 24)
+    x1 = dims[0]
+    while x1 < dims[0] + reach and inside_frac(np.full_like(ys_line, x1 + step), ys_line) >= 0.5:
+        x1 += step
+    x0 = 0.0
+    while x0 > -reach and inside_frac(np.full_like(ys_line, x0 - step), ys_line) >= 0.5:
+        x0 -= step
+    y1 = dims[1]
+    while y1 < dims[1] + reach and inside_frac(xs_line, np.full_like(xs_line, y1 + step)) >= 0.5:
+        y1 += step
+    y0 = 0.0
+    while y0 > -reach and inside_frac(xs_line, np.full_like(xs_line, y0 - step)) >= 0.5:
+        y0 -= step
+    return x0 - step, x1 + step, y0 - step, y1 + step
+
+
 def cubic_dewarp(image: np.ndarray, workdir: str) -> tuple[np.ndarray, bool]:
     """The page under the cubic-sheet correction, or untouched.
 
@@ -98,13 +134,21 @@ def cubic_dewarp(image: np.ndarray, workdir: str) -> tuple[np.ndarray, bool]:
     # pages and rendered a landscape page's type at h/w scale; a synthetic
     # landscape page caught it at exactly 0.53x.
     h_img = max(image.shape[:2])
-    height = 0.5 * (dims[1] + 2 * MARGIN) * h_img
+    # The canvas must cover the INPUT's extent under the model, not the
+    # solver's fitted text box: the box is fitted to the text it found, and
+    # everything it under-covers — a second column, a wide caption — used
+    # to land outside the output. One page shipped with its right column
+    # cut (351px, folio 86) and a synthetic came back shifted 8.6% -> 21%
+    # on the left and 8.6% -> 0.25% on the right. Each side walks outward
+    # from the box until the model's projections leave the image.
+    x0, x1, y0, y1 = _input_extent(project_xy, norm2pix, params, dims,
+                                   image.shape)
+    height = 0.5 * (y1 - y0) * h_img
     height = max(64, int(np.round(height / 16) * 16))
-    width = int(np.round(height * (dims[0] + 2 * MARGIN)
-                         / (dims[1] + 2 * MARGIN) / 16) * 16)
+    width = int(np.round(height * (x1 - x0) / max(1e-6, (y1 - y0)) / 16) * 16)
     hs, ws = max(4, height // 16), max(4, width // 16)
-    xr = np.linspace(-MARGIN, dims[0] + MARGIN, ws)
-    yr = np.linspace(-MARGIN, dims[1] + MARGIN, hs)
+    xr = np.linspace(x0, x1, ws)
+    yr = np.linspace(y0, y1, hs)
     xc, yc = np.meshgrid(xr, yr)
     xy = np.hstack([xc.reshape(-1, 1), yc.reshape(-1, 1)]).astype(np.float32)
     try:

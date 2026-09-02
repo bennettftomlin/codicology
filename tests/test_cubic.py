@@ -94,28 +94,26 @@ def test_scan_opt_in_rewrites_only_what_the_ladder_changed(vtb, tmp_path):
     monkey = lambda img, wd, **k: (30, 80.0, 0.9)
     orig = vtb._cubic.witness
     vtb._cubic.witness = monkey
-    sig1 = open(p1, "rb").read()
     try:
         vtb.dewarp_scan_pages([p1, p2], str(tmp_path))
     finally:
         vtb._cubic.witness = orig
-    # The sheet's candidate for this page comes back SHIFTED — measured:
-    # left margin 8.6% -> 21%, right margin 8.6% -> 0.25% — so the margin
-    # veto refuses it and the page must be left exactly as it was. (Until
-    # the sheet's canvas placement is fixed, a shifted correction is worse
-    # than the bow it removes.)
-    assert open(p1, "rb").read() == sig1, "a refused correction rewrites nothing"
+    after = cv2.imread(p1)
+    assert _bow_of(after) < _bow_of(bowed) * 0.6
     assert open(p2, "rb").read() == sig2, "untouched page must not be rewritten"
 
 
 @needs_pd
-def test_a_shifted_sheet_is_refused_by_the_margin_veto(vtb, tmp_path):
-    """The cubic sheet returned a page whose ink ended at the right edge
-    where the input had 2.5% of margin — folio 86 of one book lost 351px
-    of a column while the confidence witness applauded."""
+def test_the_sheet_keeps_every_margin(vtb, tmp_path):
+    """The sheet's canvas once spanned the solver's fitted text box, so a
+    candidate came back SHIFTED — left margin 8.6% -> 21%, right 8.6% ->
+    0.25% — and a real page lost 351px of a column (folio 86) while the
+    confidence witness applauded. The canvas now covers the input's whole
+    extent under the model: every side keeps a margin, and the margin
+    veto has nothing to refuse."""
     page = _thin_bowed()
     out, ok = C.cubic_dewarp(page, str(tmp_path))
     assert ok
     mb, ma = vtb._ink_margins(page), vtb._ink_margins(out)
-    assert mb[1] >= 0.01 and ma[1] < 0.005, (mb, ma)
-    assert vtb._adds_clip(page, out)
+    assert all(a >= 0.02 for a in ma), (mb, ma)
+    assert not vtb._adds_clip(page, out)
