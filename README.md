@@ -131,13 +131,16 @@ held steady for a few frames to count, and the motion threshold is chosen
 from the footage itself. Hold each page flat for a second or two at a
 steady pace, use even lighting, and a dark background helps detection.
 
-Both paths share the same cleanup: the page is found in the frame,
-perspective-corrected, deskewed against its own text lines, and — where
-those lines can prove a curve — the binding's bow is modelled out of them
-too (a page the model declines keeps the plain deskew, so nothing is ever
-warped on a guess). A landscape spread is split at the gutter into two
-pages (each step has a
-`--no-*` off switch, and `--rotate` handles sideways captures). Both also
+Both paths share the same cleanup: a document rectifier (UVDoc, served
+through transformers; `pip install 'codicology[geometry]'`) flattens the
+whole photographed sheet in one pass — perspective, the curl into the
+gutter and the crease at the spine come out of a single learned map —
+then a landscape sheet is split at its ink-free gutter, each page is
+trimmed back to its paper and levelled against its own text lines.
+Tesseract reads the flat sheet against the photograph, and a sheet that
+lost most of the photograph's words is refused and named, never shipped
+quietly. Each step has a `--no-*` off switch, and `--rotate` handles
+sideways captures. Both also
 share the same safety net — pages the duplicate pass was unsure about go
 on an HTML review sheet (`--review-sheet`), and its verdicts feed
 `--drop-pages` and `--swap` by stable run ids that survive re-extraction.
@@ -145,7 +148,7 @@ A page that came out blurred or occluded can be re-shot later and patched
 in by name (`--patch r060p1=folio60.jpg`) without redoing the capture.
 
 Either path also works with no OCR at all — point it at the capture and
-name only the PDF, and the geometry ladder runs, the spreads split, and a
+name only the PDF, and the sheets are flattened, the spreads split, and a
 corrected facsimile is saved in minutes, no text engine ever loaded. For
 a book worth preserving before it is worth reading by machine, that is
 the whole job:
@@ -158,9 +161,9 @@ The `book.pdf` these paths produce is a facsimile of the physical book —
 with `--pdf-text-layer`, one that searches and copies like a born-digital
 file — and it feeds back into `--pages-from` for every later rebuild, so
 the camera work is done exactly once. Pages loaded that way are left
-geometrically untouched: they have been through the ladder already, and
-warping them again would drift. A third-party scan that visibly leans or
-curls can opt in with `--dewarp-scans`.
+geometrically untouched: they have been rectified already, and flattening
+them again would drift. A third-party scan that visibly leans or curls
+can opt in with `--dewarp-scans`.
 
 ## What every build does
 

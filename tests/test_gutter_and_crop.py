@@ -42,10 +42,15 @@ def hard_gutter_spread(width=2000, height=1400, bar=60):
 
 
 def crop_of(vtb, spread):
-    """The pipeline as process_video runs it: detect, limit, warp."""
+    """The outline-and-warp crop these gutter tests were written against.
+
+    The build itself no longer warps by an outline — the rectifier
+    flattens the whole sheet — but split_spread must still divide a flat
+    spread at its gutter, and a warped crop of the fixture is exactly such
+    a sheet with the fixture's known geometry."""
     quad = vtb.detect_page(spread)
     assert quad is not None
-    return vtb.warp_page(spread, vtb.limit_quad(quad))
+    return vtb.warp_page(spread, quad)
 
 
 def single_band_minimum(crop):
@@ -102,63 +107,17 @@ def test_hand_over_the_page_edge_does_not_drag_the_outline_onto_the_arm(vtb, mak
     np.testing.assert_allclose(quad, clean, atol=3)
 
 
-def test_hard_edged_gutter_keeps_both_pages_of_the_spread(vtb):
-    """Once a strict xfail documenting the defect this suite waited on: a
-    hard-edged gutter made detect_page take the left page alone and drop the
-    facing page without a warning. Fixed by sibling detection — measured in
-    the field at 62 of 92 spread photographs losing a page each."""
+def test_hard_edged_gutter_spread_is_seen_and_splits_in_two(vtb):
+    """A hard-edged gutter once made detect_page take the left page alone.
+    The outline no longer decides the pages — the rectifier does — but it
+    still has to see the spread at all, because a photograph in which no
+    page can be seen is never split."""
     spread = hard_gutter_spread()
     quad = vtb.detect_page(spread)
-
     assert quad is not None
-    # The spread runs 120..1880; anything much narrower has eaten a page.
-    assert quad[:, 0].max() - quad[:, 0].min() > 1600
-
-    parts = vtb.split_spread(vtb.warp_page(spread, vtb.limit_quad(quad)))
-    assert len(parts) == 2
-
-
-# ── limit_quad ───────────────────────────────────────────────────────────────
-
-def test_limit_quad_leaves_a_squarely_shot_page_alone(vtb, make_spread):
-    """A quad already within cap passes through untouched, corner for corner."""
-    quad = vtb.detect_page(make_spread())
-    limited = vtb.limit_quad(quad)
-
-    np.testing.assert_array_equal(limited, quad)
-
-
-def test_limit_quad_eases_a_knuckle_quad_only_as_far_as_the_cap(vtb):
-    """
-    One corner left on a knuckle shears every line of text, so the quad is
-    blended toward its bounding box — but by the least amount that is safe, or
-    the camera tilt that was worth correcting is thrown away with it.
-    """
-    knuckle = np.array([[100, 100], [900, 140], [820, 1200], [100, 1200]], np.float32)
-    assert vtb._quad_skew(knuckle) > vtb.MAX_QUAD_SKEW  # scenario is over cap
-
-    limited = vtb.limit_quad(knuckle)
-    box = np.array([[100, 100], [900, 100], [900, 1200], [100, 1200]], np.float32)
-
-    assert vtb._quad_skew(limited) <= vtb.MAX_QUAD_SKEW + 1e-6
-    # Nowhere near flattened to the bounding box: it still leans.
-    assert np.abs(limited - knuckle).max() < np.abs(limited - box).max()
-
-
-def test_limit_quad_corrects_a_lean_that_the_side_length_test_scores_as_perfect(vtb):
-    """
-    Comparing opposite sides scores a parallelogram at zero however far it
-    leans, which is why the corner-angle check exists alongside it. This quad
-    is 14 degrees off square with a skew of exactly 0.
-    """
-    leaning = np.array([[200, 100], [1000, 100], [1250, 1100], [450, 1100]], np.float32)
-    assert vtb._quad_skew(leaning) == 0.0
-    assert vtb._quad_corner_error(leaning) > vtb.MAX_CORNER_ERROR_DEG
-
-    limited = vtb.limit_quad(leaning)
-
-    assert not np.array_equal(limited, leaning)
-    assert vtb._quad_corner_error(limited) <= vtb.MAX_CORNER_ERROR_DEG + 1e-6
+    # and a flat sheet of it — what the rectifier hands back — splits in two
+    flat = spread[90:1310, 120:1880]
+    assert len(vtb.split_spread(flat)) == 2
 
 
 # ── warp_page ────────────────────────────────────────────────────────────────
@@ -327,7 +286,7 @@ def test_an_uncropped_frame_is_not_split_into_halves(vtb, make_spread):
     spread = make_spread(0)
     corners = vtb.detect_page(spread, 0.15)
     assert corners is not None, "fixture should be detectable"
-    assert len(vtb.split_spread(vtb.warp_page(spread, vtb.limit_quad(corners)))) == 2
+    assert len(vtb.split_spread(vtb.warp_page(spread, corners))) == 2
 
     # A frame the detector cannot resolve: a page adrift in a large dark scene.
     import numpy as np
@@ -361,7 +320,7 @@ def test_a_spread_with_one_blank_side_still_splits(vtb):
 
     corners = vtb.detect_page(img, 0.15)
     assert corners is not None
-    assert len(vtb.split_spread(vtb.warp_page(img, vtb.limit_quad(corners)))) == 2
+    assert len(vtb.split_spread(vtb.warp_page(img, corners))) == 2
 
 
 def test_gutter_prefers_ink_free_columns_over_a_dark_text_column(vtb):
@@ -375,19 +334,6 @@ def test_gutter_prefers_ink_free_columns_over_a_dark_text_column(vtb):
         img[row:row + 6, 520:640] = 20
     x = vtb._gutter_x(img)
     assert 660 <= x <= 740, f"cut at {x}, inside text (520-640) or astray"
-
-
-def test_overlapping_sibling_quads_fall_back_to_the_union(vtb):
-    """A weak gutter lets one page's blob bleed across the spine; warping
-    both contour quads would ship the bled column twice. Overlap means the
-    contours cannot divide the spread — the ink-aware gutter can."""
-    f = np.full((900, 1400, 3), 25, np.uint8)
-    f[100:800, 120:760] = 235                 # left blob bleeds past centre
-    f[100:800, 700:1280] = 235                # right page overlaps it 60px
-    quads = vtb.detect_page_quads(f)
-    assert len(quads) == 1
-    w = quads[0][:, 0].max() - quads[0][:, 0].min()
-    assert w > 1000, "must span the whole spread"
 
 
 def test_a_sliver_quad_keeps_the_whole_frame(vtb, tmp_path):
@@ -409,25 +355,21 @@ def test_a_sliver_quad_keeps_the_whole_frame(vtb, tmp_path):
 
 def test_the_cut_never_amputates_text_that_hugs_the_spine(vtb, tmp_path):
     """A blob's thresholded edge once cut off the captions sitting inside
-    the spine shadow. The cut is always the measured ink-free gutter now,
-    so every stroke of both pages survives, each exactly once."""
+    the spine shadow. The cut is the measured ink-free gutter of the flat
+    sheet, so every stroke of both pages survives, each exactly once."""
     import cv2 as _cv2
-    f = np.full((900, 1400, 3), 25, np.uint8)
-    f[100:800, 120:660] = 235
-    f[100:800, 700:1240] = 235                    # deep gutter: two blobs
+    sheet = np.full((700, 1120, 3), 235, np.uint8)
+    sheet[:, 540:580] = 40                        # a deep spine shadow
     n_left = n_right = 0
-    for row in range(160, 740, 40):               # left page text
-        f[row:row + 5, 170:600] = 20; n_left += 1
-    for row in range(160, 740, 40):               # right text HUGS the spine
-        f[row:row + 5, 715:1000] = 20; n_right += 1
-    src = str(tmp_path / "IMG_0001.png")
-    _cv2.imwrite(src, f)
-    pages, ids = vtb.pages_from_images([src], str(tmp_path), 0.10, 0,
-                                       False, False, False, True,
-                                       dewarp=False)
+    for row in range(60, 640, 40):                # left page text
+        sheet[row:row + 5, 50:480] = 20; n_left += 1
+    for row in range(60, 640, 40):                # right text HUGS the spine
+        sheet[row:row + 5, 595:880] = 20; n_right += 1
+    pages = vtb.split_spread(sheet)
     assert len(pages) == 2
-    def strokes(path):
-        g = _cv2.imread(path, _cv2.IMREAD_GRAYSCALE)
+
+    def strokes(img):
+        g = _cv2.cvtColor(img, _cv2.COLOR_BGR2GRAY)
         n, _, stats, _ = _cv2.connectedComponentsWithStats(
             (g < 100).astype("uint8"))
         return sum(1 for i in range(1, n)

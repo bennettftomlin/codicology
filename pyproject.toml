@@ -22,10 +22,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# The cubic-sheet dewarp rung (rung 2 of the page-geometry ladder). Without
-# it, pages the leptonica line finder declines keep the plain deskew and
-# the build says so; with it, they are modelled and gated by the witness.
-geometry = ["page-dewarp"]
+# The page rectifier for photographed and filmed pages: UVDoc, served
+# through transformers from the Hub (PaddlePaddle/UVDoc_safetensors, ~30
+# MB, fetched on first use). Without it, captures are kept as photographed
+# and the build says so; with it, perspective, curl and the spine's crease
+# come out in one pass. torch picks the Mac GPU (mps) or CUDA when present.
+geometry = ["transformers>=5.14", "torch>=2.2", "safetensors>=0.4"]
 # OCR backends are chosen with --ocr; install the one you want.
 # Surya is pinned to the exact version this pipeline is developed and
 # tested against: its API has broken across minor versions before, and

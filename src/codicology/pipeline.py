@@ -133,8 +133,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
-from . import cubic as _cubic
-from .dewarp import dewarp_page
+from . import rectify as _rectify
 
 from . import progress
 
@@ -212,14 +211,6 @@ PAGE_LEVEL_RATIO = 0.6
 # for a spine that is dark the same way at every height.
 GUTTER_STRIPS = 4
 
-# Opposite sides of the page quad may disagree by this much and still be read as
-# camera tilt rather than a mis-placed corner. A roughly overhead shot measures
-# 0-7% once the corners are fitted from the page edges; an outline that wandered
-# onto the reader's fingers measures 16-25%. Do not raise this to accommodate the
-# synthetic fixtures, which are posed at a steeper angle than real footage: an
-# under-corrected page costs nothing an OCR engine cannot absorb, while trusting
-# a bad corner slants every line of text.
-MAX_QUAD_SKEW = 0.08
 # Hand pixels in YCrCb. Chroma separates skin from both the page (neutral) and
 # the desk (dark) far more cleanly than brightness, which is the whole problem.
 SKIN_LO = (0, 135, 85)
@@ -291,9 +282,6 @@ CACHE_CHECKPOINT_PAGES = 25
 # re-read once and stamped current, whatever its ink turns out to hold.
 CACHE_VERSION = 4
 
-# A corner may sit this far from a right angle before the quad stops looking like
-# a photograph of a rectangle. Genuine tilt bends a corner by a few degrees.
-MAX_CORNER_ERROR_DEG = 12.0
 
 # Text deskew. The search runs to 15 degrees because a page can sit further off
 # level than a quad ever admits to; below a quarter of a degree, rotating costs
@@ -386,11 +374,6 @@ def _corners_from_edges(contour: np.ndarray) -> np.ndarray | None:
     return _order_corners(np.array(corners, dtype=np.float32))
 
 
-def _quad_union(quads) -> np.ndarray:
-    """One quad around several, for callers that need a single outline."""
-    merged = np.concatenate(quads).astype(np.float32)
-    return _order_corners(_quad_from_contour(
-        cv2.convexHull(merged.reshape(-1, 1, 2))))
 
 
 def detect_page(image: np.ndarray, min_area_ratio: float = 0.15) -> np.ndarray | None:
@@ -398,15 +381,13 @@ def detect_page(image: np.ndarray, min_area_ratio: float = 0.15) -> np.ndarray |
     Find the page (or two-page spread) in the frame.
     Returns ordered (4, 2) float32 corners in source coordinates, or None.
 
-    Where a deep gutter shadow has cut an open spread into two page blobs,
-    this returns their union — the callers that can do better use
-    detect_page_quads, which keeps the pages separate so each gets its own
-    perspective.
+    Used to score frames and to tell a photograph with a page in it from
+    one of bare desk; the rectifier, not this outline, flattens the page.
     """
     quads = detect_page_quads(image, min_area_ratio)
     if not quads:
         return None
-    return quads[0] if len(quads) == 1 else _quad_union(quads)
+    return quads[0]
 
 
 def detect_page_quads(image: np.ndarray,
@@ -465,56 +446,10 @@ def detect_page_quads(image: np.ndarray,
                 quad = _quad_from_contour(contour)
                 if cv2.contourArea(quad) < min_area:
                     continue
-            sib = _facing_page(ranked, contour, sw, sh)
-            if sib is not None:
-                sq = _corners_from_edges(sib)
-                if sq is None or cv2.contourArea(sq) < 0.4 * cv2.contourArea(quad):
-                    sq = _quad_from_contour(sib)
-                if cv2.contourArea(sq) >= 0.4 * cv2.contourArea(quad):
-                    pair = sorted((_order_corners(quad) / scale,
-                                   _order_corners(sq) / scale),
-                                  key=lambda q: float(q[:, 0].mean()))
-                    # A weak gutter lets one page's blob bleed across the
-                    # spine: the "left page" then carries a column of the
-                    # right one, and warping both quads ships that column
-                    # twice. Overlapping quads mean the contours cannot be
-                    # trusted to divide the spread — the union can, because
-                    # the gutter hunt divides it by ink instead.
-                    a, b = pair
-                    if min(a[:, 0].max(), b[:, 0].max()) -                             max(a[:, 0].min(), b[:, 0].min()) > 0.03 * sw / scale:
-                        return [_quad_union(pair)]
-                    return pair
             return [_order_corners(quad) / scale]
     return []
 
 
-def _facing_page(contours, winner, sw, sh) -> "np.ndarray | None":
-    """The contour of the page facing the winner across a gutter, or None.
-
-    A sibling must look like the other half of an open book: comparable
-    area (a fore-edge stack strip or a stray bright patch is far smaller),
-    aligned with the winner (bounding boxes overlap most of their height),
-    and beside it with at most a gutter's worth of separation. Frames
-    where the whole sheet already formed one blob have no such contour,
-    so single-page books and working spreads are untouched.
-    """
-    wx, wy, ww, wh = cv2.boundingRect(winner)
-    w_area = cv2.contourArea(winner)
-    for cand in contours:
-        if cand is winner:
-            continue
-        c_area = cv2.contourArea(cand)
-        if c_area < 0.4 * w_area:
-            continue
-        cx, cy, cw, ch = cv2.boundingRect(cand)
-        overlap = min(wy + wh, cy + ch) - max(wy, cy)
-        if overlap < 0.5 * min(wh, ch):
-            continue
-        gap = max(cx - (wx + ww), wx - (cx + cw))
-        if gap > 0.2 * sw:
-            continue
-        return cand
-    return None
 
 
 def rotate_image(image: np.ndarray, degrees: int) -> np.ndarray:
@@ -620,253 +555,10 @@ def _gutter_x(image: np.ndarray) -> int:
     return x
 
 
-def _quad_corner_error(corners: np.ndarray) -> float:
-    """Largest departure of a corner from a right angle, in degrees."""
-    worst = 0.0
-    for i in range(4):
-        a = corners[i - 1] - corners[i]
-        b = corners[(i + 1) % 4] - corners[i]
-        na, nb = float(np.linalg.norm(a)), float(np.linalg.norm(b))
-        if na < 1e-6 or nb < 1e-6:
-            continue
-        cos = float(np.clip(np.dot(a, b) / (na * nb), -1.0, 1.0))
-        worst = max(worst, abs(float(np.degrees(np.arccos(cos))) - 90.0))
-    return worst
 
 
-def _quad_unsafe(corners: np.ndarray) -> bool:
-    """
-    Whether warping through this quad would distort the page rather than flatten it.
-
-    Two different failures, and neither metric sees the other. Comparing the
-    lengths of opposite sides catches a trapezoid but scores a parallelogram at
-    zero, because its opposite sides are equal however far it leans. Comparing
-    corners against a right angle catches the lean but not the taper.
-    """
-    return (_quad_skew(corners) > MAX_QUAD_SKEW
-            or _quad_corner_error(corners) > MAX_CORNER_ERROR_DEG)
 
 
-def _quad_skew(corners: np.ndarray) -> float:
-    """How far the quad is from a plausible photo of a rectangle, 0 = perfect."""
-    tl, tr, br, bl = corners
-    top, bottom = np.linalg.norm(tr - tl), np.linalg.norm(br - bl)
-    left, right = np.linalg.norm(bl - tl), np.linalg.norm(br - tr)
-    # A collapsed quad has no meaningful skew; it fails the area check upstream.
-    horizontal = abs(top - bottom) / max(top, bottom) if max(top, bottom) else 0.0
-    vertical = abs(left - right) / max(left, right) if max(left, right) else 0.0
-    return max(horizontal, vertical)
-
-
-def limit_quad(corners: np.ndarray, cap: float = MAX_QUAD_SKEW) -> np.ndarray:
-    """
-    Ease an over-skewed quad back toward its bounding box until it is within cap.
-
-    A homography has eight degrees of freedom, so a single corner left on a
-    knuckle shears the whole page — every line of text slants — rather than
-    merely framing it badly. Correcting real camera tilt is worth keeping, so
-    rather than abandon the warp, blend the quad toward the rectangle it should
-    resemble by the least amount that brings it back into range. Quads already
-    within cap pass through untouched.
-    """
-    if not _quad_unsafe(corners):
-        return corners
-
-    x0, y0 = corners.min(axis=0)
-    x1, y1 = corners.max(axis=0)
-    box = np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype=np.float32)
-
-    lo, hi = 0.0, 1.0  # bisect for the gentlest blend that is safe
-    for _ in range(24):
-        mid = (lo + hi) / 2
-        if _quad_unsafe((1 - mid) * corners + mid * box):
-            lo = mid
-        else:
-            hi = mid
-    return ((1 - hi) * corners + hi * box).astype(np.float32)
-
-
-# A side counts as clipped only when this many distinct strokes press the
-# edge, each at least this thick. Measured at the probe's 800px scale on a
-# photographed book: a KEPT page-edge crease — the thin dark line where the
-# page meets its own stack, bright paper behind it — produces 0-4 such
-# components across every sampled page (it is one long thin line, dashed or
-# not, and thinness is what it cannot escape); pages deliberately cropped
-# into their own text produce 21-48 per cut side, because every ascender is
-# its own thick component. The first guard shipped without this test and
-# grew quads on ~117 of 130 healthy pages — "harmless extra border" that
-# changed every page's hash and re-paid an hour of OCR, because cache
-# identity rides on the pixels. A clip of less than a line's worth of
-# letters (a corner nicking two words) sits below the count and is accepted
-# as a miss; it is also the least damaging clip there is.
-CLIPPED_MIN_STROKES = 8
-CLIPPED_MIN_THICK = 5
-
-
-def _clipped_sides(image: np.ndarray, guard_px: int = 8) -> "list[str]":
-    """Which edges of a warped page have text pressed against them.
-
-    A page whose text touches the canvas edge was cropped by its quad, not
-    framed by it — the outline is a guess made against shadow and a curled
-    fore-edge, and the text is the truth about where the page's content
-    ends. "Text" is judged by shape: many distinct thick strokes touching
-    the edge band, which a page-edge crease cannot counterfeit. Probed at
-    reduced width so the answer costs milliseconds.
-    """
-    g = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
-    h, w = g.shape[:2]
-    scale = 800.0 / max(w, 1)
-    small = cv2.resize(g, (800, max(8, int(h * scale)))) if w > 800 else g
-    k = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
-    st = cv2.morphologyEx(small, cv2.MORPH_BLACKHAT, k)
-    ink = (st > max(12.0, float(np.percentile(st, 99)) * 0.35)).astype(np.uint8)
-    # A quad lying exactly on the page boundary samples a sliver of desk at
-    # the border, and that one-pixel dark line reads as ink pressed against
-    # every edge it runs along. Genuinely clipped text extends inward well
-    # past it, so the outermost ring is ignored, not the guard band.
-    ink[:2, :] = ink[-2:, :] = 0
-    ink[:, :2] = ink[:, -2:] = 0
-    if not ink.any():
-        return []
-    guard = max(3, int(guard_px * scale)) if w > 800 else guard_px
-    deep = guard * 3
-
-    def on_paper(band, band_ink):
-        # Text can only be cropped where the canvas edge lands ON the page:
-        # a bright band with ink is clipped letters, a dark band is desk or
-        # edge-curl the quad chose to keep, cropping nothing. Judged on the
-        # band's non-ink pixels, so the letters themselves cannot darken
-        # the verdict.
-        bg = band[band_ink == 0] if (band_ink == 0).any() else band
-        return float(np.median(bg)) > 150
-
-    def strokes(strip, touch, perp):
-        # Components in the wider strip that both touch the edge band and
-        # are thick enough to be letter strokes rather than a crease.
-        n, _, stats, _ = cv2.connectedComponentsWithStats(strip)
-        if n <= 1:
-            return 0
-        s = stats[1:]
-        return int((touch(s) & (perp(s) >= CLIPPED_MIN_THICK)).sum())
-
-    W, L = cv2.CC_STAT_WIDTH, cv2.CC_STAT_LEFT
-    H, T = cv2.CC_STAT_HEIGHT, cv2.CC_STAT_TOP
-    sh, sw = small.shape[:2]
-    sides = []
-    if strokes(ink[:, :deep + 1],
-               lambda s: s[:, L] <= guard,
-               lambda s: s[:, W]) >= CLIPPED_MIN_STROKES and on_paper(
-            small[:, :guard + 1], ink[:, :guard + 1]):
-        sides.append("left")
-    if strokes(ink[:, sw - 1 - deep:],
-               lambda s: s[:, L] + s[:, W] >= deep + 1 - guard,
-               lambda s: s[:, W]) >= CLIPPED_MIN_STROKES and on_paper(
-            small[:, sw - 1 - guard:], ink[:, sw - 1 - guard:]):
-        sides.append("right")
-    if strokes(ink[:deep + 1, :],
-               lambda s: s[:, T] <= guard,
-               lambda s: s[:, H]) >= CLIPPED_MIN_STROKES and on_paper(
-            small[:guard + 1, :], ink[:guard + 1, :]):
-        sides.append("top")
-    if strokes(ink[sh - 1 - deep:, :],
-               lambda s: s[:, T] + s[:, H] >= deep + 1 - guard,
-               lambda s: s[:, H]) >= CLIPPED_MIN_STROKES and on_paper(
-            small[sh - 1 - guard:, :], ink[sh - 1 - guard:, :]):
-        sides.append("bottom")
-    return sides
-
-
-def _grow_quad(corners: np.ndarray, sides: "list[str]", frame_shape,
-               frac: float = 0.035) -> np.ndarray:
-    """Push the named sides of the quad outward by a fraction of its size."""
-    tl, tr, br, bl = corners.copy()
-    w = float(np.linalg.norm(tr - tl) + np.linalg.norm(br - bl)) / 2
-    h = float(np.linalg.norm(bl - tl) + np.linalg.norm(br - tr)) / 2
-    out = corners.copy()
-
-    def push(a, b, other_a, other_b, dist):
-        d = (a - other_a) + (b - other_b)
-        n = np.linalg.norm(d)
-        if n < 1e-6:
-            return np.zeros(2, np.float32)
-        return (d / n) * dist
-
-    if "left" in sides:
-        v = push(tl, bl, tr, br, frac * w)
-        out[0] += v; out[3] += v
-    if "right" in sides:
-        v = push(tr, br, tl, bl, frac * w)
-        out[1] += v; out[2] += v
-    if "top" in sides:
-        v = push(tl, tr, bl, br, frac * h)
-        out[0] += v; out[1] += v
-    if "bottom" in sides:
-        v = push(bl, br, tl, tr, frac * h)
-        out[2] += v; out[3] += v
-    H, W = frame_shape[:2]
-    out[:, 0] = np.clip(out[:, 0], 0, W - 1)
-    out[:, 1] = np.clip(out[:, 1], 0, H - 1)
-    return out
-
-
-# A rung may not push ink to the canvas edge. Measured at the 800px probe
-# scale on a two-column page: the cubic sheet took a page whose text ended
-# 1.4% of the width from the right edge and returned one where it ended at
-# 0.0% — 351px of column gone, the confidence witness applauding because
-# straighter lines read better. Two shape-based edge tests missed it (their
-# stroke calibration belonged to another book's type); margins ask nothing
-# about shape. A side counts only if it HAD a margin to lose.
-CLIP_MARGIN_HAD = 0.010     # a side with at least this margin before…
-CLIP_MARGIN_LEFT = 0.005    # …that ends with less than this after is cut
-
-
-def _ink_margins(image: np.ndarray) -> "tuple[float, float, float, float]":
-    """(left, right, top, bottom) distance from each canvas edge to the
-    outermost ink, as fractions of width/height, at probe scale."""
-    g = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
-    h, w = g.shape[:2]
-    scale = 800.0 / max(w, 1)
-    small = cv2.resize(g, (800, max(8, int(h * scale)))) if w > 800 else g
-    k = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
-    st = cv2.morphologyEx(small, cv2.MORPH_BLACKHAT, k)
-    ink = (st > max(12.0, float(np.percentile(st, 99)) * 0.35))
-    ink[:2, :] = ink[-2:, :] = False
-    ink[:, :2] = ink[:, -2:] = False
-    sh, sw = ink.shape
-    cols = np.flatnonzero(ink.mean(axis=0) > 0.02)
-    rows = np.flatnonzero(ink.mean(axis=1) > 0.02)
-    if not cols.size or not rows.size:
-        return (1.0, 1.0, 1.0, 1.0)
-    return (cols[0] / sw, (sw - 1 - cols[-1]) / sw,
-            rows[0] / sh, (sh - 1 - rows[-1]) / sh)
-
-
-def _adds_clip(before: np.ndarray, after: np.ndarray) -> bool:
-    """Whether a transform pushed ink to a canvas edge it had margin from."""
-    mb, ma = _ink_margins(before), _ink_margins(after)
-    return any(b >= CLIP_MARGIN_HAD and a < CLIP_MARGIN_LEFT
-               for b, a in zip(mb, ma))
-
-
-def warp_page_guarded(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
-    """Warp, then let the text push back on a quad that cropped it.
-
-    One chapter-opening spread put letters against both canvas edges: the
-    detector's quad ran inside the curled fore-edge on one side and the
-    gutter shadow on the other, and every later stage inherited the loss —
-    the dewarp rungs cannot restore ink the warp never sampled. Up to two
-    rounds of grow-and-rewarp; a page whose text genuinely reaches its
-    margins simply gets a slightly generous crop.
-    """
-    quad = corners
-    out = warp_page(image, quad)
-    for _ in range(2):
-        sides = _clipped_sides(out)
-        if not sides:
-            break
-        quad = _grow_quad(quad, sides, image.shape)
-        out = warp_page(image, quad)
-    return out
 
 
 def _warp_transform(corners: np.ndarray):
@@ -887,37 +579,6 @@ def warp_page(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
     return cv2.warpPerspective(image, M, (out_w, out_h))
 
 
-def per_plane_pages(image: np.ndarray, corners: np.ndarray,
-                    min_aspect: float = 1.15) -> "list[np.ndarray] | None":
-    """Both pages of a one-blob spread, each warped in its own plane.
-
-    The facing pages of an open book are two planes meeting at the spine.
-    Warping their union flat corrects the sheet as if it were one plane,
-    which bakes a keystone into both halves that deskew cannot remove —
-    it is perspective, not rotation. Here the union warp is used only to
-    FIND the gutter; the gutter line is then mapped back into source
-    coordinates and the sheet quad is cut through it, giving each page a
-    quad in its own plane. Returns None for anything not spread-shaped,
-    leaving the single-page path untouched.
-
-    The half-quads skip limit_quad on the spine side by construction —
-    their inner corners come from the measured gutter, not from a contour
-    guess, and easing them toward a bounding box would reintroduce the
-    exact keystone this exists to remove.
-    """
-    quad = limit_quad(corners)
-    M, out_w, out_h = _warp_transform(quad)
-    if out_h == 0 or out_w / float(out_h) < min_aspect:
-        return None
-    warped = cv2.warpPerspective(image, M, (out_w, out_h))
-    gx = _gutter_x(warped)
-    back = np.linalg.inv(M)
-    ends = np.array([[[gx, 0]], [[gx, out_h - 1]]], dtype=np.float32)
-    (gtop,), (gbot,) = cv2.perspectiveTransform(ends, back)
-    tl, tr, br, bl = quad
-    left = _order_corners(np.array([tl, gtop, gbot, bl], dtype=np.float32))
-    right = _order_corners(np.array([gtop, tr, br, gbot], dtype=np.float32))
-    return [warp_page_guarded(image, left), warp_page_guarded(image, right)]
 
 
 # ── Page deduplication ────────────────────────────────────────────────────────
@@ -1355,6 +1016,72 @@ def enhance_page(image: np.ndarray) -> np.ndarray:
     pil = ImageEnhance.Contrast(pil).enhance(1.3)
     pil = ImageEnhance.Sharpness(pil).enhance(1.5)
     return cv2.cvtColor(np.array(pil), cv2.COLOR_RGB2BGR)
+
+
+# Fewer words than this on the photograph and the witness has nothing to
+# compare: a plate, a blank, a cover. The rectified sheet is then taken on
+# the model's word alone, which on such pages is the only word there is.
+WITNESS_MIN_WORDS = 20
+
+
+def capture_pages(image: np.ndarray, *, rectify: bool = True, enhance: bool = True,
+                  deskew: bool = True, split_spreads: bool = True,
+                  workdir: "str | None" = None, min_area_ratio: float = 0.15,
+                  ) -> "tuple[list[np.ndarray], dict]":
+    """One photograph (already rotated) → its pages, flat and upright.
+
+    The rectifier flattens the whole sheet; a landscape sheet is a spread
+    and is split at the ink-free gutter; each page is trimmed back to its
+    paper, enhanced, and levelled against its own text. Nothing here
+    guesses at page outlines, corner quads or curve models — that was the
+    ladder this replaced, and its failures were the worst pages in two
+    books.
+
+    The witness is the one gate: tesseract reads the photograph and the
+    flat sheet, and a sheet that has lost most of the photograph's words
+    (a folded map, a boundary that excluded a page) is refused — the
+    photograph is kept for that shot and the build says so. The returned
+    dict reports what happened: rectified, split, and why the photograph
+    was kept if it was.
+    """
+    info = {"rectified": False, "split": False, "kept_photo": None}
+    sheet = image
+    if rectify:
+        cand, ok = _rectify.rectify(image)
+        if not ok:
+            info["kept_photo"] = "no rectifier"
+        else:
+            sheet = cand
+            info["rectified"] = True
+            if workdir and shutil.which("tesseract"):
+                before, _, _ = _rectify.witness(image, workdir)
+                after, _, _ = _rectify.witness(sheet, workdir)
+                if before >= WITNESS_MIN_WORDS and after < _rectify.WITNESS_KEEP_RATIO * before:
+                    info.update(rectified=False, kept_photo=(before, after))
+                    sheet = image
+    # A flat sheet is a spread when it is landscape — but only a photograph
+    # that shows a page, and more than a label's worth of one, is split at
+    # all. The gutter hunt on a frame of bare desk finds whatever is darkest
+    # down the middle, and a cover shot's title label (14% of its frame,
+    # where honest pages cover 42% or more) makes a landscape "sheet" of the
+    # whole frame whose halves are two pages of table.
+    seen = False
+    if split_spreads:
+        outline = detect_page(image, min_area_ratio)
+        seen = outline is not None and cv2.contourArea(
+            outline.astype(np.float32)) >= 0.30 * image.shape[0] * image.shape[1]
+    parts = split_spread(sheet) if seen else [sheet]
+    info["split"] = len(parts) > 1
+    out = []
+    for part in parts:
+        if info["rectified"]:
+            part = _rectify.paper_crop(part)
+        if enhance:
+            part = enhance_page(part)
+        if deskew:
+            part = deskew_page(part)
+        out.append(part)
+    return out, info
 
 
 # ══ OCR backends ══════════════════════════════════════════════════════════════
@@ -7907,27 +7634,13 @@ def _prepare_page_image(img: np.ndarray, min_area_ratio: float, rotate: int,
     """
     if rotate:
         img = rotate_image(img, rotate)
-    if not no_warp:
-        corners = detect_page(img, min_area_ratio)
-        if corners is not None:
-            img = warp_page_guarded(img, limit_quad(corners))
-    if enhance:
-        img = enhance_page(img)
-    if deskew:
-        img = deskew_page(img)
-    if dewarp and workdir:
-        cand, modelled = dewarp_page(img)
-        if modelled and not _adds_clip(img, cand):
-            img = cand
-        elif not modelled and _cubic.available():
-            wa, ca, spana = _cubic.witness(img, workdir)
-            if wa >= 15 and spana >= 0.5:
-                cand, ok = _cubic.cubic_dewarp(img, workdir)
-                if ok:
-                    _, cb, _sb = _cubic.witness(cand, workdir)
-                    if cb >= ca - 1.0 and not _adds_clip(img, cand):
-                        img = cand
-    return img
+    if no_warp and not enhance and not deskew:
+        return img
+    parts, _info = capture_pages(img, rectify=not no_warp, enhance=enhance,
+                                 deskew=deskew, split_spreads=False,
+                                 workdir=workdir if dewarp else None,
+                                 min_area_ratio=min_area_ratio)
+    return parts[0]
 
 
 def load_patches(spec: str) -> dict[str, str]:
@@ -8052,9 +7765,8 @@ def pages_from_images(
 
     page_paths: list[str] = []
     page_ids: list[str] = []
-    n_nopage = n_dewarped = n_cubic = n_cubic_rej = n_cubic_cand = 0
-    n_clip_veto = n_cubic_blind = 0
-    n_split = 0
+    n_rectified = n_split = n_no_model = 0
+    refused: list[tuple[str, int, int]] = []
     for group in groups:
         best_path, best_score = image_paths[group[0]], None
         if len(group) > 1:
@@ -8071,99 +7783,18 @@ def pages_from_images(
             continue
         if rotate:
             img = rotate_image(img, rotate)
-        cropped = True
-        pages = None
-        if not no_warp:
-            quads = detect_page_quads(img, min_area_ratio)
-            # A lone quad covering a sliver of the frame found SOMETHING —
-            # a cover's title label, a plate's white border — but not the
-            # page. Measured: the one such find covered 18.7% of its frame
-            # while every honest single-page find covered 42% or more (and
-            # pair members 33%+, unaffected by this single-quad gate).
-            # Keeping the whole frame loses nothing; cropping to the
-            # sliver loses the page.
-            if len(quads) == 1 and cv2.contourArea(
-                    quads[0].astype(np.float32)) < 0.30 * img.shape[0] * img.shape[1]:
-                quads = []
-            if not quads:
-                n_nopage += 1
-                cropped = False
-            else:
-                # Whether the gutter shadow split the sheet into two blobs
-                # or left it whole, the contours only establish that a
-                # spread exists and how far it extends. The CUT is always
-                # the measured ink-free gutter: a blob's thresholded edge
-                # once amputated the captions that sat inside the spine
-                # shadow, and the clip guard could not object — the band
-                # at a spine-side edge is dark, which blinds its
-                # brightness gate by design.
-                corners = quads[0] if len(quads) == 1 else _quad_union(quads)
-                if split_spreads:
-                    pages = per_plane_pages(img, corners)
-                    if pages is not None:
-                        n_split += 1
-                if pages is None:
-                    img = warp_page_guarded(img, limit_quad(corners))
-
         stem = os.path.splitext(os.path.basename(best_path))[0]
-        # Splitting a frame whose page was never found is guesswork: what is in
-        # hand is the whole photograph, desk and all, and the "gutter" the
-        # search settles on is wherever that scene happens to be darkest down
-        # the middle. On the cover shots of one book it fell between the desk
-        # and the cover, turning each into a page of bare table. Brightness
-        # cannot tell those apart from a real spread either — measured here, two
-        # halves of a genuine spread match to within 0.94-0.97 of each other and
-        # one cover shot sat at 0.93 — but whether a page was found at all
-        # separates them completely.
-        if pages is None:
-            pages = split_spread(img) if (split_spreads and cropped) else [img]
-            n_split += len(pages) > 1
-        parts = pages
+        parts, info = capture_pages(img, rectify=not no_warp and dewarp,
+                                    enhance=enhance, deskew=deskew,
+                                    split_spreads=split_spreads, workdir=pages_dir,
+                                    min_area_ratio=min_area_ratio)
+        n_rectified += info["rectified"]
+        n_split += info["split"]
+        if info["kept_photo"] == "no rectifier":
+            n_no_model += 1
+        elif info["kept_photo"]:
+            refused.append((stem, *info["kept_photo"]))
         for part_idx, part in enumerate(parts):
-            if enhance:
-                part = enhance_page(part)
-            if deskew:
-                part = deskew_page(part)
-            if dewarp:
-                # After the rigid deskew, never instead of it: leptonica
-                # models the residual curve from the page's own lines and
-                # declines pages that cannot prove one. Those fall to the
-                # cubic-sheet rung, whose different eye reads the inset-
-                # heavy pages the line finder cannot — and whose every
-                # correction must pass the witness, because its one failure
-                # mode in measurement was an inset-newsprint page where
-                # more tiny words read at lower confidence. A page both
-                # rungs decline keeps the deskew alone: the old behaviour.
-                cand, modelled = dewarp_page(part)
-                if modelled and _adds_clip(part, cand):
-                    n_clip_veto += 1
-                elif modelled:
-                    part = cand
-                    n_dewarped += 1
-                if not modelled:
-                    if _cubic.available():
-                        # The witness reads the page BEFORE the sheet is
-                        # fitted: on a page with almost no readable text —
-                        # a plate, a map — zero words before and zero
-                        # after satisfy any confidence bar, and the sheet
-                        # once smeared two plate pages into swirls that
-                        # sailed through. No testimony, no transform.
-                        _wA, cA, spanA = _cubic.witness(part, pages_dir)
-                        if _wA < 15 or spanA < 0.5:
-                            n_cubic_blind += 1
-                        else:
-                            cand, ok = _cubic.cubic_dewarp(part, pages_dir)
-                            if ok:
-                                _wB, cB, _sB = _cubic.witness(cand, pages_dir)
-                                if cB >= cA - 1.0 and _adds_clip(part, cand):
-                                    n_clip_veto += 1
-                                elif cB >= cA - 1.0:
-                                    part = cand
-                                    n_cubic += 1
-                                else:
-                                    n_cubic_rej += 1
-                    else:
-                        n_cubic_cand += 1
             out = os.path.join(pages_dir, f"page_{len(page_paths):04d}.jpg")
             Image.fromarray(cv2.cvtColor(part, cv2.COLOR_BGR2RGB)).save(
                 out, "JPEG", quality=92, dpi=(300, 300)
@@ -8171,29 +7802,23 @@ def pages_from_images(
             page_paths.append(out)
             page_ids.append(page_id(stem, part_idx))
 
-    print(f"  {len(page_paths)} pages kept ({n_nopage} kept uncropped, "
-          f"no page outline found)")
+    print(f"  {len(page_paths)} pages kept; {n_rectified} photograph(s) "
+          f"flattened by the rectifier")
     if n_split:
         print(f"  {n_split} two-page spreads split at the gutter")
-    if n_dewarped:
-        print(f"  {n_dewarped} page(s) had the binding's curve modelled out "
-              f"of their own text lines")
-    if n_cubic or n_cubic_rej:
-        print(f"  {n_cubic} more page(s) modelled by the cubic sheet where "
-              f"the line finder could not"
-              + (f"; the witness refused {n_cubic_rej}"
-                 if n_cubic_rej else ""))
-    if n_clip_veto:
-        print(f"  {n_clip_veto} correction(s) declined for pressing text "
-              f"against the canvas edge")
-    if n_cubic_blind:
-        print(f"  {n_cubic_blind} page(s) kept the plain deskew — too "
-              f"little text for any witness to judge a correction")
-    if n_cubic_cand:
-        print(f"  [~] {n_cubic_cand} page(s) the line finder declined kept "
-              f"the plain deskew — cubic-sheet dewarp is not installed; "
-              f"pip install 'codicology[geometry]' may improve them")
+    _report_kept_photos(n_no_model, refused)
     return page_paths, page_ids
+
+
+def _report_kept_photos(n_no_model: int, refused: list) -> None:
+    """Say which shots were kept as photographed, and why."""
+    if n_no_model:
+        print(f"  [!] {n_no_model} photograph(s) kept as shot — the page "
+              f"rectifier is not available ({_rectify.unavailable_reason()}); "
+              f"pip install 'codicology[geometry]' flattens them")
+    for stem, before, after in refused:
+        print(f"  [!] {stem}: the rectified sheet read {after} words where the "
+              f"photograph read {before} — kept the photograph; look at this page")
 
 
 def dewarp_scan_pages(page_paths: list[str], pages_dir: str) -> None:
@@ -8208,53 +7833,28 @@ def dewarp_scan_pages(page_paths: list[str], pages_dir: str) -> None:
     dewarp, and the cubic sheet under the witness. Every changed page
     invalidates its OCR cache entry, which is the point of opting in.
     """
-    n_deskewed = n_dewarped = n_cubic = n_cubic_rej = n_cubic_cand = 0
-    n_clip_veto = n_cubic_blind = 0
+    n_rectified = n_no_model = 0
+    refused: list[tuple[str, int, int]] = []
     for path in page_paths:
         img = cv2.imread(path)
         if img is None:
             continue
-        before = img
-        img = deskew_page(img)
-        n_deskewed += img is not before
-        cand, modelled = dewarp_page(img)
-        if modelled and _adds_clip(img, cand):
-            n_clip_veto += 1
-        elif modelled:
-            img = cand
-            n_dewarped += 1
-        if not modelled:
-            if _cubic.available():
-                wa, ca, spana = _cubic.witness(img, pages_dir)
-                if wa < 15 or spana < 0.5:
-                    n_cubic_blind += 1
-                else:
-                    cand, ok = _cubic.cubic_dewarp(img, pages_dir)
-                    if ok:
-                        _, cb, _sb = _cubic.witness(cand, pages_dir)
-                        if cb >= ca - 1.0 and _adds_clip(img, cand):
-                            n_clip_veto += 1
-                        elif cb >= ca - 1.0:
-                            img = cand
-                            n_cubic += 1
-                        else:
-                            n_cubic_rej += 1
-            else:
-                n_cubic_cand += 1
-        if img is not before:
+        parts, info = capture_pages(img, rectify=True, enhance=False, deskew=True,
+                                    split_spreads=False, workdir=pages_dir)
+        n_rectified += info["rectified"]
+        if info["kept_photo"] == "no rectifier":
+            n_no_model += 1
+        elif info["kept_photo"]:
+            refused.append((os.path.basename(path), *info["kept_photo"]))
+        out = parts[0]
+        if out is not img:
             if path.lower().endswith((".jpg", ".jpeg")):
-                cv2.imwrite(path, img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                cv2.imwrite(path, out, [cv2.IMWRITE_JPEG_QUALITY, 95])
             else:
-                cv2.imwrite(path, img)
-    print(f"  scan geometry: {n_deskewed} page(s) deskewed, "
-          f"{n_dewarped} curve-modelled, {n_cubic} cubic-modelled"
-          + (f"; the witness refused {n_cubic_rej}" if n_cubic_rej else "")
-          + (f"; {n_clip_veto} declined for pressing text against the "
-             f"canvas edge" if n_clip_veto else ""))
-    if n_cubic_cand:
-        print(f"  [~] {n_cubic_cand} page(s) the line finder declined kept "
-              f"the plain deskew — cubic-sheet dewarp is not installed; "
-              f"pip install 'codicology[geometry]' may improve them")
+                cv2.imwrite(path, out)
+    print(f"  scan geometry: {n_rectified} page(s) flattened by the rectifier "
+          f"and levelled")
+    _report_kept_photos(n_no_model, refused)
 
 
 def load_pages_from_pdf(pdf_path: str, pages_dir: str) -> list[str]:
@@ -9679,7 +9279,8 @@ def process_video(
 
         page_paths: list[str] = []
         page_ids: list[str] = []
-        n_rejected = n_nopage = n_split = 0
+        n_rejected = n_split = n_rectified = n_no_model = 0
+        refused: list[tuple[str, int, int]] = []
         for run_ordinal, (path, score, held) in enumerate(
                 zip(selected, sharpness, held_frames)):
             if blur_threshold is not None:
@@ -9695,47 +9296,16 @@ def process_video(
                 continue
             if rotate:
                 img = rotate_image(img, rotate)
-            cropped = True
-            if not no_warp:
-                corners = detect_page(img, min_area_ratio)
-                if corners is None:
-                    # Keep the frame uncropped: an untrimmed page still OCRs,
-                    # whereas dropping it loses that page from the book entirely.
-                    n_nopage += 1
-                    cropped = False
-                else:
-                    img = warp_page_guarded(img, limit_quad(corners))
-
-        # Splitting a frame whose page was never found is guesswork: what is in
-        # hand is the whole photograph, desk and all, and the "gutter" the
-        # search settles on is wherever that scene happens to be darkest down
-        # the middle. On the cover shots of one book it fell between the desk
-        # and the cover, turning each into a page of bare table. Brightness
-        # cannot tell those apart from a real spread either — measured here, two
-        # halves of a genuine spread match to within 0.94-0.97 of each other and
-        # one cover shot sat at 0.93 — but whether a page was found at all
-        # separates them completely.
-            parts = split_spread(img) if (split_spreads and cropped) else [img]
-            n_split += len(parts) > 1
+            parts, info = capture_pages(img, rectify=not no_warp and dewarp, enhance=enhance,
+                                        deskew=deskew, split_spreads=split_spreads,
+                                        workdir=pages_dir, min_area_ratio=min_area_ratio)
+            n_rectified += info["rectified"]
+            n_split += info["split"]
+            if info["kept_photo"] == "no rectifier":
+                n_no_model += 1
+            elif info["kept_photo"]:
+                refused.append((f"run {run_ordinal}", *info["kept_photo"]))
             for part_idx, part in enumerate(parts):
-                # Enhance first: deskew reads the page's own text to find level,
-                # and it reads it more surely once the contrast has been lifted.
-                if enhance:
-                    part = enhance_page(part)
-                if deskew:
-                    part = deskew_page(part)
-                if dewarp:
-                    # Same ladder as the photograph path: leptonica, then
-                    # the cubic sheet under the witness, then the deskewed
-                    # page as it was.
-                    part, _modelled = dewarp_page(part)
-                    if not _modelled and _cubic.available():
-                        _cand, _ok = _cubic.cubic_dewarp(part, pages_dir)
-                        if _ok:
-                            _, _cA = _cubic.witness(part, pages_dir)
-                            _, _cB = _cubic.witness(_cand, pages_dir)
-                            if _cB >= _cA - 1.0:
-                                part = _cand
                 out = os.path.join(pages_dir, f"page_{len(page_paths):04d}.jpg")
                 Image.fromarray(cv2.cvtColor(part, cv2.COLOR_BGR2RGB)).save(
                     out, "JPEG", quality=92, dpi=(300, 300)
@@ -9745,7 +9315,8 @@ def process_video(
             os.remove(path)  # raw frame is no longer needed
 
         print(f"  {len(page_paths)} pages kept (discarded {n_rejected} mid-turn "
-              f"fragments; {n_nopage} kept uncropped, no page outline found)")
+              f"fragments); {n_rectified} frame(s) flattened by the rectifier")
+        _report_kept_photos(n_no_model, refused)
         if n_split:
             print(f"  {n_split} two-page spreads split at the gutter")
 
@@ -9966,24 +9537,24 @@ def main(argv: "list[str] | None" = None) -> None:
                              "failed to read. The run says at the end how many "
                              "pages went unwitnessed")
     parser.add_argument("--no-warp", action="store_true",
-                        help="Skip perspective correction (useful when detection fails)")
+                        help="Keep captures as photographed: no rectification of "
+                             "perspective or curl. Spreads are still split where "
+                             "a page can be seen")
     parser.add_argument("--no-enhance", action="store_true",
                         help="Skip contrast/sharpness enhancement")
     parser.add_argument("--no-deskew", action="store_true",
                         help="Skip straightening each page against its own text lines")
     parser.add_argument("--dewarp-scans", action="store_true",
-                        help="Run the geometry ladder (deskew, line-model "
-                             "dewarp, cubic sheet under the witness) on pages "
-                             "loaded with --pages-from. Off by default: pages "
-                             "this script wrote have been laddered once and "
-                             "would drift if warped again, and changing a "
-                             "scan's pixels invalidates its OCR cache. Opt in "
-                             "for a third-party scan that visibly leans or "
-                             "curls")
+                        help="Run the page rectifier and deskew on pages loaded "
+                             "with --pages-from. Off by default: pages this "
+                             "script wrote have been rectified once and would "
+                             "drift if flattened again, and changing a scan's "
+                             "pixels invalidates its OCR cache. Opt in for a "
+                             "third-party scan that visibly leans or curls")
     parser.add_argument("--no-dewarp", action="store_true",
-                        help="Skip modelling the binding's curve out of the text "
-                             "lines (leptonica). A page the model declines already "
-                             "keeps the plain deskew alone")
+                        help="Kept for old command lines; the rectifier now "
+                             "handles perspective and curl together, so this "
+                             "is the same as --no-warp")
     parser.add_argument("--no-split-spreads", action="store_true",
                         help="Keep two-page spreads as a single page. By default a landscape "
                              "crop is split at the gutter into two pages")
