@@ -43,6 +43,10 @@ PAPER_LEVEL_RATIO = 0.6
 # boundary is close; a trim that wants more is reading a dark plate or a
 # dark page as surround, and a plate is content.
 PAPER_MAX_TRIM = 0.12
+# A bright gap this narrow (fraction of the side) between the cut and a
+# dark run is the facing page's sliver, not the page's margin; measured
+# gutter slivers run 1-2%, the narrowest real margin several times that.
+PAPER_SLIVER = 0.03
 # A rectified sheet that reads fewer than this fraction of the photograph's
 # words has lost text — a folded map, a boundary that excluded a page. The
 # build keeps the photograph for that page and says so.
@@ -176,18 +180,37 @@ def paper_crop(page: np.ndarray) -> np.ndarray:
     cols = np.median(small, axis=0)
     rows = np.median(small, axis=1)
 
-    def trim(prof, n):
+    def walk(p, chain):
+        """How far in from one edge the surround reaches: dark runs, and —
+        along columns only — dark runs separated by a bright gap no wider
+        than a sliver. The split leaves a sliver of the facing page
+        between the cut and the spine's shadow, and a walk that stopped
+        at the sliver left the shadow's line on 27 of 130 pages. A gap
+        wider than a sliver is the page's own margin, so a rule under a
+        running head is never reached; rows never chain at all."""
+        lim = len(p)
+        sliver = max(2, int(lim * PAPER_SLIVER / PAPER_MAX_TRIM))
+        i = 0
+        while i < lim:
+            k = i
+            while k < lim and p[k] >= level:
+                k += 1
+            if k >= lim or (k - i > sliver) or (k > i and not chain):
+                break
+            j = k
+            while j < lim and p[j] < level:
+                j += 1
+            i = j
+        return i
+
+    def trim(prof, n, chain):
         lim = int(n * PAPER_MAX_TRIM)
-        a = 0
-        while a < lim and prof[a] < level:
-            a += 1
-        b = n
-        while n - b < lim and prof[b - 1] < level:
-            b -= 1
+        a = walk(prof[:lim], chain)
+        b = n - walk(prof[n - lim:][::-1], chain)
         return a, b
 
-    x0, x1 = trim(cols, sw)
-    y0, y1 = trim(rows, sh)
+    x0, x1 = trim(cols, sw, chain=True)
+    y0, y1 = trim(rows, sh, chain=False)
     X0, X1 = int(x0 * w / sw), int(np.ceil(x1 * w / sw))
     Y0, Y1 = int(y0 * h / sh), int(np.ceil(y1 * h / sh))
     if X1 - X0 < w * 0.5 or Y1 - Y0 < h * 0.5:

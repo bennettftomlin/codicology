@@ -88,6 +88,26 @@ def test_paper_crop_trims_dark_surround_but_never_paper_or_a_plate():
     assert R.paper_crop(deep).shape[1] >= w - int(w * R.PAPER_MAX_TRIM) - 3
 
 
+def test_paper_crop_trims_through_a_sliver_to_the_spine_shadow():
+    """The split leaves a bright sliver of the facing page outside the
+    spine's shadow; a trim that stopped at the sliver kept the shadow's
+    dark line on a fifth of one book's pages."""
+    page = _page()
+    h, w = page.shape[:2]
+    cut = page.copy()
+    cut[:, :int(w * 0.02)] = 225                    # the facing page's sliver
+    cut[:, int(w * 0.02):int(w * 0.04)] = 35        # the spine shadow
+    out = R.paper_crop(cut)
+    assert abs(out.shape[1] - (w - int(w * 0.04))) <= 3, out.shape
+    g = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
+    assert np.median(g[:, :4]) > 150, "no dark line left at the edge"
+    # A rule under a running head sits behind a real margin, and rows never
+    # chain: the head above it stays.
+    ruled = page.copy()
+    ruled[int(h * 0.07):int(h * 0.07) + 4, :] = 30
+    assert R.paper_crop(ruled).shape == page.shape
+
+
 def _justified_page(w=1400, h=1900, n_lines=28):
     """Paper with full-measure lines of dark strokes: a justified block.
 
