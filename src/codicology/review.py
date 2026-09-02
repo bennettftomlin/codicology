@@ -476,8 +476,13 @@ details { margin: .3rem 0; } summary { cursor: pointer; color: #555; }
 @media (prefers-color-scheme: dark) {
   body, #bar { background: #191919; color: #ddd; }
   .row { border-color: #333; } .row.staged { background: #2c2717; }
-  .chip { background: #333; } .ink { border-color: #444; filter: invert(1)
-  hue-rotate(180deg); } }
+  .chip { background: #333; }
+  /* The crops stay UNINVERTED in dark mode, deliberately: this sheet's
+     whole job is judging ink — faint marks, bleed-through, paper tone —
+     and invert(1) hue-rotate(180deg), the usual dark-UI image trick,
+     destroys exactly that evidence. A white scan on a dark page is a
+     photograph, not a glare problem. */
+  .ink { border-color: #444; } }
 """
 
 
