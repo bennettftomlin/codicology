@@ -335,7 +335,14 @@ def square(page: np.ndarray) -> tuple[np.ndarray, float]:
         return page, 0.0
     (aL, bL), (aR, bR), _n = found
     conv = float(np.degrees(np.arctan(aR) - np.arctan(aL)))
-    if abs(conv) < SQUARE_MIN_DEG or abs(conv) > SQUARE_MAX_DEG:
+    lean = float(np.degrees((np.arctan(aR) + np.arctan(aL)) / 2.0))
+    # Convergence or lean: a block whose edges are parallel but tilted
+    # has no trapezoid to remove and still needs levelling — the
+    # row-variance deskew used to do that, and turned pages toward
+    # their insets; the block's own edges are the honest measure. The
+    # mapping below makes the edges vertical either way.
+    needed = max(abs(conv), abs(lean))
+    if needed < SQUARE_MIN_DEG or abs(conv) > SQUARE_MAX_DEG or abs(lean) > SQUARE_MAX_DEG:
         return page, conv
     h, w = page.shape[:2]
     yt, yb = 0.15 * h, 0.85 * h

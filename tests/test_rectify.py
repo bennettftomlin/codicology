@@ -191,6 +191,23 @@ def test_square_removes_a_trapezoid_and_leaves_a_square_page_alone():
     assert out.shape[1] < skewed.shape[1] * 1.1
 
 
+def test_square_levels_a_leaning_block_with_parallel_edges():
+    """A block whose edges are parallel but tilted has no trapezoid to
+    remove and still needs levelling: the deskew that used to do it
+    turned pages toward their insets. The edges are the measure."""
+    page = _justified_page()
+    h, w = page.shape[:2]
+    M = cv2.getRotationMatrix2D((w / 2, h / 2), 1.2, 1.0)
+    leaning = cv2.warpAffine(page, M, (w, h), borderValue=(236, 236, 236))
+    (aL, _), (aR, _), _n = R.text_edges(leaning)
+    lean = np.degrees((np.arctan(aR) + np.arctan(aL)) / 2)
+    assert abs(lean) > 0.8, lean
+    out, conv = R.square(leaning)
+    assert out is not leaning
+    (aL2, _), (aR2, _), _n2 = R.text_edges(out)
+    assert abs(np.degrees((np.arctan(aR2) + np.arctan(aL2)) / 2)) < 0.3
+
+
 def test_square_keeps_every_pixel_of_the_page():
     """Widening the block's narrow end pushes that end's margin outward;
     a canvas of the page's own size lost whatever sat there. The canvas

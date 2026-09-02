@@ -1103,10 +1103,12 @@ def capture_pages(image: np.ndarray, *, rectify: bool = True, enhance: bool = Tr
             # tesseract's reading of it from 120 words to 26.
             part = deskew_page(part)
         if info["rectified"]:
-            # The residual the rectifier leaves is a trapezoid, not a
-            # lean; squaring takes both.
-            part, conv = _rectify.square(part)
-            info["squared"] += abs(conv) >= _rectify.SQUARE_MIN_DEG and abs(conv) <= _rectify.SQUARE_MAX_DEG
+            # The residual the rectifier leaves is a trapezoid or a
+            # lean; squaring takes both, and levels the surround with
+            # the block so the second trim can see it.
+            before = part
+            part, _conv = _rectify.square(part)
+            info["squared"] += part is not before
             part = _rectify.paper_crop(part)
         out.append(part)
     return out, info
