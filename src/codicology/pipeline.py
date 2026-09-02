@@ -809,19 +809,43 @@ def _grow_quad(corners: np.ndarray, sides: "list[str]", frame_shape,
     return out
 
 
-def _adds_clip(before: np.ndarray, after: np.ndarray) -> bool:
-    """Whether a transform pressed text against an edge it was not touching.
+# A rung may not push ink to the canvas edge. Measured at the 800px probe
+# scale on a two-column page: the cubic sheet took a page whose text ended
+# 1.4% of the width from the right edge and returned one where it ended at
+# 0.0% — 351px of column gone, the confidence witness applauding because
+# straighter lines read better. Two shape-based edge tests missed it (their
+# stroke calibration belonged to another book's type); margins ask nothing
+# about shape. A side counts only if it HAD a margin to lose.
+CLIP_MARGIN_HAD = 0.010     # a side with at least this margin before…
+CLIP_MARGIN_LEFT = 0.005    # …that ends with less than this after is cut
 
-    The dewarp rungs remap content within (or into) a fresh canvas, and a
-    page that reached them with no margin to spare can come out with its
-    first column's letters cut — the cubic sheet did exactly this to a
-    chapter opening, eating 270px of width, and the confidence witness
-    accepted the result because a column of half-letters barely moves the
-    page's mean confidence. Clipping is judged the same way the warp guard
-    judges it; a side already pressed in the input cannot indict the
-    transform.
-    """
-    return bool(set(_clipped_sides(after)) - set(_clipped_sides(before)))
+
+def _ink_margins(image: np.ndarray) -> "tuple[float, float, float, float]":
+    """(left, right, top, bottom) distance from each canvas edge to the
+    outermost ink, as fractions of width/height, at probe scale."""
+    g = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+    h, w = g.shape[:2]
+    scale = 800.0 / max(w, 1)
+    small = cv2.resize(g, (800, max(8, int(h * scale)))) if w > 800 else g
+    k = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
+    st = cv2.morphologyEx(small, cv2.MORPH_BLACKHAT, k)
+    ink = (st > max(12.0, float(np.percentile(st, 99)) * 0.35))
+    ink[:2, :] = ink[-2:, :] = False
+    ink[:, :2] = ink[:, -2:] = False
+    sh, sw = ink.shape
+    cols = np.flatnonzero(ink.mean(axis=0) > 0.02)
+    rows = np.flatnonzero(ink.mean(axis=1) > 0.02)
+    if not cols.size or not rows.size:
+        return (1.0, 1.0, 1.0, 1.0)
+    return (cols[0] / sw, (sw - 1 - cols[-1]) / sw,
+            rows[0] / sh, (sh - 1 - rows[-1]) / sh)
+
+
+def _adds_clip(before: np.ndarray, after: np.ndarray) -> bool:
+    """Whether a transform pushed ink to a canvas edge it had margin from."""
+    mb, ma = _ink_margins(before), _ink_margins(after)
+    return any(b >= CLIP_MARGIN_HAD and a < CLIP_MARGIN_LEFT
+               for b, a in zip(mb, ma))
 
 
 def warp_page_guarded(image: np.ndarray, corners: np.ndarray) -> np.ndarray:
