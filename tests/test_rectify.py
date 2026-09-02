@@ -88,6 +88,72 @@ def test_paper_crop_trims_dark_surround_but_never_paper_or_a_plate():
     assert R.paper_crop(deep).shape[1] >= w - int(w * R.PAPER_MAX_TRIM) - 3
 
 
+def _justified_page(w=1400, h=1900, n_lines=28):
+    """Paper with full-measure lines of dark strokes: a justified block.
+
+    Strokes are 7px — under the 9px black-hat kernel the edge reader
+    uses, which cannot see a feature thicker than itself (real type at
+    the probe scale is thinner still)."""
+    img = np.full((h, w, 3), 236, np.uint8)
+    rng = np.random.default_rng(11)
+    for k in range(n_lines):
+        y = 220 + k * 50
+        x = 180
+        while x < w - 180:
+            run = int(rng.integers(30, 90))
+            img[y:y + 7, x:min(x + run, w - 180)] = 30
+            x += run + int(rng.integers(10, 24))
+        img[y:y + 7, w - 200:w - 180] = 30       # every line reaches the measure
+    return img
+
+
+def _keystoned(page, top_inset=45):
+    """The page seen with its top narrower than its bottom."""
+    h, w = page.shape[:2]
+    src = np.float32([[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]])
+    dst = np.float32([[top_inset, 0], [w - 1 - top_inset, 0], [w - 1, h - 1], [0, h - 1]])
+    return cv2.warpPerspective(page, cv2.getPerspectiveTransform(src, dst), (w, h),
+                               borderValue=(236, 236, 236))
+
+
+def _convergence(page):
+    found = R.text_edges(page)
+    assert found is not None
+    (aL, _), (aR, _), _n = found
+    return float(np.degrees(np.arctan(aR) - np.arctan(aL)))
+
+
+def test_text_edges_read_a_justified_block():
+    page = _justified_page()
+    (aL, bL), (aR, bR), n = R.text_edges(page)
+    assert n >= R.SQUARE_MIN_LINES
+    assert abs(aL) < 0.005 and abs(aR) < 0.005          # vertical edges
+    assert abs(bL - 180) < 12 and abs(bR - (1400 - 180)) < 12
+
+
+def test_square_removes_a_trapezoid_and_leaves_a_square_page_alone():
+    page = _justified_page()
+    same, conv = R.square(page)
+    assert same is page and abs(conv) < R.SQUARE_MIN_DEG
+    skewed = _keystoned(page)
+    before = _convergence(skewed)
+    assert before > 2.0, before
+    out, conv = R.square(skewed)
+    assert abs(conv - before) < 0.2
+    assert abs(_convergence(out)) < 0.3, _convergence(out)
+    assert out.shape == skewed.shape
+
+
+def test_square_refuses_what_it_cannot_measure():
+    sparse = np.full((1900, 1400, 3), 236, np.uint8)
+    sparse[300:316, 200:1200] = 30                    # one line is not a block
+    out, conv = R.square(sparse)
+    assert out is sparse and conv == 0.0
+    absurd = _keystoned(_justified_page(), top_inset=260)   # ~8° is a misread, not a page
+    out, conv = R.square(absurd)
+    assert out is absurd and abs(conv) > R.SQUARE_MAX_DEG
+
+
 def _flat_spread(w=2400, h=1300):
     """What a rectified spread looks like: two text blocks, a dark gutter,
     a sliver of desk left along one edge."""

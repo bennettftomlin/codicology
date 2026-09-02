@@ -195,6 +195,110 @@ def paper_crop(page: np.ndarray) -> np.ndarray:
     return page[Y0:Y1, X0:X1]
 
 
+# The text block's two edges must converge by at least this before the
+# page is squared — below it the fit's own noise is as large as the
+# correction — and a convergence above the cap is a misread of the block
+# (a figure taken for lines), not perspective, and is left alone.
+SQUARE_MIN_DEG = 0.4
+SQUARE_MAX_DEG = 4.0
+SQUARE_MIN_LINES = 10
+
+
+def text_edges(page: np.ndarray, probe_w: int = 1200):
+    """The text block's left and right edges as lines x = a*y + b, in the
+    page's own pixels, from the full-measure lines of justified text.
+
+    Returns (left, right, n_lines) with each edge as (a, b), or None when
+    fewer than SQUARE_MIN_LINES full lines can be read. Lines are taken
+    at the probe scale, an edge is the extent of each line's ink, and only
+    lines near the dominant extents count — a figure, a centred heading
+    or an indented last line would otherwise swing the fit.
+    """
+    gray = cv2.cvtColor(page, cv2.COLOR_BGR2GRAY) if page.ndim == 3 else page
+    h, w = gray.shape
+    s = probe_w / float(w)
+    g = cv2.resize(gray, (probe_w, max(8, int(h * s))))
+    ph, pw = g.shape
+    hat = cv2.morphologyEx(g, cv2.MORPH_BLACKHAT,
+                           cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9)))
+    ink = (hat > max(12, np.percentile(hat, 99) * 0.35)).astype(np.uint8)
+    m = int(0.02 * ph), int(0.02 * pw)
+    ink[:m[0]] = 0; ink[-m[0]:] = 0; ink[:, :m[1]] = 0; ink[:, -m[1]:] = 0
+    merged = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, np.ones((1, 15), np.uint8))
+    rows = merged.mean(axis=1) > 0.03
+    L, R, Y = [], [], []
+    y = 0
+    while y < ph:
+        if rows[y]:
+            j = y
+            while j < ph and rows[j]:
+                j += 1
+            if 4 <= j - y <= 0.05 * ph:
+                cols = np.where(merged[y:j].max(axis=0) > 0)[0]
+                if len(cols) and cols[-1] - cols[0] > 0.45 * pw:
+                    L.append(cols[0]); R.append(cols[-1]); Y.append((y + j) / 2.0)
+            y = j
+        else:
+            y += 1
+    if len(L) < SQUARE_MIN_LINES:
+        return None
+    L, R, Y = np.array(L, float), np.array(R, float), np.array(Y, float)
+    keepL = np.abs(L - np.median(L)) < 0.03 * pw
+    keepR = np.abs(R - np.median(R)) < 0.03 * pw
+
+    def fit(x, yy):
+        if len(x) < SQUARE_MIN_LINES:
+            return None
+        for _ in range(2):
+            a, b = np.polyfit(yy, x, 1)
+            res = x - (a * yy + b)
+            keep = np.abs(res) < 3 * (np.median(np.abs(res)) + 1e-6) + 2
+            if keep.sum() < SQUARE_MIN_LINES:
+                return None
+            x, yy = x[keep], yy[keep]
+        a, b = np.polyfit(yy, x, 1)
+        return float(a), float(b / s)  # slope is scale-free; intercept back to page pixels
+
+    left, right = fit(L[keepL], Y[keepL]), fit(R[keepR], Y[keepR])
+    if left is None or right is None:
+        return None
+    return left, right, int(min(keepL.sum(), keepR.sum()))
+
+
+def square(page: np.ndarray) -> tuple[np.ndarray, float]:
+    """The page with its text block's edges made parallel.
+
+    A learned rectifier leaves a small, consistent trapezoid — measured at
+    0.9° median across two books where a correct homography leaves 0.45°
+    — because its smooth grid cannot hold the crease at the spine
+    exactly. The block's own edges say how much: the trapezoid they span
+    is mapped to the rectangle of the same height and mean width, and the
+    whole page goes with it. Returns the page and the convergence found
+    (degrees); an unmeasurable or already-square page comes back as it
+    was, with 0.0.
+    """
+    found = text_edges(page)
+    if found is None:
+        return page, 0.0
+    (aL, bL), (aR, bR), _n = found
+    conv = float(np.degrees(np.arctan(aR) - np.arctan(aL)))
+    if abs(conv) < SQUARE_MIN_DEG or abs(conv) > SQUARE_MAX_DEG:
+        return page, conv
+    h, w = page.shape[:2]
+    yt, yb = 0.15 * h, 0.85 * h
+    xl = lambda y: aL * y + bL
+    xr = lambda y: aR * y + bR
+    src = np.float32([[xl(yt), yt], [xr(yt), yt], [xr(yb), yb], [xl(yb), yb]])
+    x0 = (xl(yt) + xl(yb)) / 2.0
+    wm = ((xr(yt) - xl(yt)) + (xr(yb) - xl(yb))) / 2.0
+    dst = np.float32([[x0, yt], [x0 + wm, yt], [x0 + wm, yb], [x0, yb]])
+    H = cv2.getPerspectiveTransform(src, dst)
+    paper = tuple(float(v) for v in np.median(page.reshape(-1, page.shape[-1]) if page.ndim == 3 else page.reshape(-1, 1), axis=0))
+    out = cv2.warpPerspective(page, H, (w, h), flags=cv2.INTER_CUBIC,
+                              borderMode=cv2.BORDER_CONSTANT, borderValue=paper)
+    return out, conv
+
+
 def witness(image: np.ndarray, workdir: str,
             scale: float = 0.6) -> tuple[int, float, float]:
     """(words, mean confidence, coverage) from tesseract.

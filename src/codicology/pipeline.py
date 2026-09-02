@@ -1073,6 +1073,7 @@ def capture_pages(image: np.ndarray, *, rectify: bool = True, enhance: bool = Tr
     parts = split_spread(sheet) if seen else [sheet]
     info["split"] = len(parts) > 1
     out = []
+    info["squared"] = 0
     for part in parts:
         if info["rectified"]:
             part = _rectify.paper_crop(part)
@@ -1080,6 +1081,12 @@ def capture_pages(image: np.ndarray, *, rectify: bool = True, enhance: bool = Tr
             part = enhance_page(part)
         if deskew:
             part = deskew_page(part)
+        if info["rectified"]:
+            # Level first, then square: the block's edges are read off
+            # level text, and the residual the rectifier leaves is a
+            # trapezoid, not a lean.
+            part, conv = _rectify.square(part)
+            info["squared"] += abs(conv) >= _rectify.SQUARE_MIN_DEG and abs(conv) <= _rectify.SQUARE_MAX_DEG
         out.append(part)
     return out, info
 
