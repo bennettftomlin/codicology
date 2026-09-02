@@ -39,6 +39,11 @@ MODEL_ID = "PaddlePaddle/UVDoc_safetensors"
 # the spine shadow the split left on a page's inner edge. Shared with the
 # gutter hunt's notion of "page rather than the surface behind it".
 PAPER_LEVEL_RATIO = 0.6
+# Along columns the mark is higher: a spine shadow's darkest column sat
+# at 0.59-0.60 of paper on three pages and slipped under a 0.6 cutoff. No
+# text column's median comes near 0.7 of paper; only a figure spanning
+# the full height could, and it would have to sit inside the outer 12%.
+PAPER_LEVEL_RATIO_COLS = 0.7
 # The trim never takes more than this fraction of a side. The model's
 # boundary is close; a trim that wants more is reading a dark plate or a
 # dark page as surround, and a plate is content.
@@ -181,12 +186,12 @@ def paper_crop(page: np.ndarray) -> np.ndarray:
     core = small[int(sh * 0.2):max(int(sh * 0.2) + 1, int(sh * 0.8)),
                  int(sw * 0.2):max(int(sw * 0.2) + 1, int(sw * 0.8))]
     paper = float(np.percentile(core, 75))
-    level = paper * PAPER_LEVEL_RATIO
     dim = paper * PAPER_DIM_RATIO
     cols = np.median(small, axis=0)
     rows = np.median(small, axis=1)
 
     def walk(p, chain):
+        level = paper * (PAPER_LEVEL_RATIO_COLS if chain else PAPER_LEVEL_RATIO)
         """How far in from one edge the surround reaches: dark runs, and —
         along columns only — dark runs behind a gap that is not paper.
         The split leaves the facing page's edge between the cut and the
