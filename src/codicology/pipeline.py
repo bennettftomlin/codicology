@@ -2435,6 +2435,27 @@ def demote_mislabelled_heads(items: "list[PageItem]",
     return out
 
 
+def route_form_blocks(items: "list[PageItem]") -> "tuple[list, int]":
+    """Items with the layout's Form blocks kept out of the body.
+
+    A Form is a document facsimile — a death certificate, a printed
+    blank — not narrative: its fields read as prose beside the figure of
+    the document ("1. PLACE OF DEATH STATE OF TEXAS Brooks COUNTY OF…").
+    The layout pass labels it, so the routing is a label, not a guess.
+    Its text is not lost: the PDF text layer collects items on its own
+    path and keeps every block, so the facsimile stays searchable where
+    the document actually is. A Form item carrying a figure keeps the
+    figure. Measured on the shelf: two books carry the class at all.
+    """
+    out, dropped = [], 0
+    for it in items:
+        if it.label == "Form" and it.figure is None and it.html:
+            dropped += 1
+            continue
+        out.append(it)
+    return out, dropped
+
+
 def strip_running_heads(items: list[PageItem]) -> list[PageItem]:
     """
     Drop the running head and folio from the ends of a page.
@@ -6780,6 +6801,7 @@ class ReadPages(NamedTuple):
     n_label_rules: int
     n_reattached: int
     n_phantoms: int
+    n_forms: int
     label_heads: list
     toc_label_pages: set
 
@@ -6802,6 +6824,7 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
     n_label_rules = 0
     n_reattached = 0
     n_phantoms = 0
+    n_forms = 0
     marker_seq_state: dict = {"last": None}
     label_heads: list = []      # (page, rank, text) from SectionHeader
     toc_label_pages: set = set()
@@ -6897,6 +6920,8 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
             nonlocal_page_i[0] = len(bodies)   # the page these figures sit on
             items = hit if hit is not None else fresh[path]
             items = demote_mislabelled_heads(items, os.path.basename(path))
+            items, _nf = route_form_blocks(items)
+            n_forms += _nf
             # Furniture is set aside, never merely deleted: its text is the
             # folio audit's evidence, already recognised at full resolution.
             page_furniture.append([_strip_tags(it.html) for it in items
@@ -6986,7 +7011,7 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
         cache.save()
     return ReadPages(bodies, page_figures, figure_data, page_furniture,
                      furniture_known, n_figures, n_blank_figures,
-                     n_label_rules, n_reattached, n_phantoms,
+                     n_label_rules, n_reattached, n_phantoms, n_forms,
                      label_heads, toc_label_pages)
 
 
@@ -7046,7 +7071,7 @@ def build_epub(
     rp = _read_pages(page_paths, backend, cache, book, strip_furniture)
     (bodies, page_figures, figure_data, page_furniture, furniture_known,
      n_figures, n_blank_figures, n_label_rules, n_reattached, n_phantoms,
-     label_heads, toc_label_pages) = rp
+     n_forms, label_heads, toc_label_pages) = rp
     if n_figures:
         print(f"    extracted {n_figures} figures")
     if n_blank_figures:
@@ -7060,6 +7085,10 @@ def build_epub(
     if n_phantoms:
         print(f"    suppressed {n_phantoms} phantom digit block(s) the "
               f"layout invented over prose — verified against the ink")
+    if n_forms:
+        print(f"    kept {n_forms} form block(s) out of the body — a "
+              f"document facsimile's fields are not prose; their text "
+              f"stays in the PDF layer")
 
     # Decoration that recurs down the book is furniture, not artwork, and is
     # dropped here — before anything downstream counts what a page holds, so

@@ -590,3 +590,26 @@ def test_wordy_furniture_is_reported_not_silently_lost(vtb, capsys):
     out = vtb.demote_mislabelled_heads(items, "p9")
     assert out[0].is_furniture
     assert "full line of text" in capsys.readouterr().out
+
+
+def test_form_blocks_stay_out_of_the_body(vtb):
+    """A death certificate's fields are a document facsimile, not prose.
+    The layout labels it Form; the routing is a label, not a guess."""
+    items = [
+        vtb.PageItem(html="<p>Real prose about the county.</p>", label="Text"),
+        vtb.PageItem(html="<p>1. PLACE OF DEATH STATE OF TEXAS Brooks</p>",
+                     label="Form"),
+        vtb.PageItem(html="<p>More prose.</p>", label="Text"),
+    ]
+    out, n = vtb.route_form_blocks(items)
+    assert n == 1
+    assert [it.html for it in out] == ["<p>Real prose about the county.</p>",
+                                       "<p>More prose.</p>"]
+
+
+def test_a_form_carrying_a_figure_keeps_the_figure(vtb):
+    from PIL import Image
+    fig = Image.new("RGB", (40, 40), "white")
+    items = [vtb.PageItem(figure=fig, label="Form")]
+    out, n = vtb.route_form_blocks(items)
+    assert n == 0 and out[0].figure is fig
