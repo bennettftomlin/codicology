@@ -44,6 +44,10 @@ PAPER_LEVEL_RATIO = 0.6
 # text column's median comes near 0.7 of paper; only a figure spanning
 # the full height could, and it would have to sit inside the outer 12%.
 PAPER_LEVEL_RATIO_COLS = 0.7
+# A column or row is judged by this percentile of its pixels: dark here
+# means dark along nine tenths of its length. Deskew's white wedges and a
+# squared page's paper fill touch an edge column for far less than that.
+PAPER_PROFILE_PCT = 90
 # The trim never takes more than this fraction of a side. The model's
 # boundary is close; a trim that wants more is reading a dark plate or a
 # dark page as surround, and a plate is content.
@@ -170,11 +174,11 @@ def paper_crop(page: np.ndarray) -> np.ndarray:
 
     The model's boundary is close to the sheet's but not on it: a strip
     of desk, the red of a cover, the spine's shadow left on a page's inner
-    edge by the split. Each side walks inward while the column (row)
-    median stays below PAPER_LEVEL_RATIO of the page's brightness — a
-    median, so a finger over one stretch of an otherwise bright column, or
-    a photograph in the middle of a page, cannot read as surround — and
-    never past PAPER_MAX_TRIM of the side.
+    edge by the split. Each side walks inward while the column (row) is
+    dark along nearly its whole length — its 90th percentile below the
+    page's brightness ratio, so a finger over one stretch of a column, or
+    a plate covering half of it, cannot read as surround — and never past
+    PAPER_MAX_TRIM of the side.
     """
     h, w = page.shape[:2]
     if h < 16 or w < 16:
@@ -187,8 +191,15 @@ def paper_crop(page: np.ndarray) -> np.ndarray:
                  int(sw * 0.2):max(int(sw * 0.2) + 1, int(sw * 0.8))]
     paper = float(np.percentile(core, 75))
     dim = paper * PAPER_DIM_RATIO
-    cols = np.median(small, axis=0)
-    rows = np.median(small, axis=1)
+    # The profile is each column's (row's) 90th percentile, not its
+    # median: surround — desk, cover, the spine's shadow — is dark along
+    # the WHOLE column, while a large dark plate is dark along only the
+    # part it covers. Judged by the median, a plate covering 55% of a
+    # column read as surround, the walk chained through the text beside
+    # it to reach it, and the text column at the page's inner edge was
+    # cut. A column must be dark in nine tenths of its length to count.
+    cols = np.percentile(small, PAPER_PROFILE_PCT, axis=0)
+    rows = np.percentile(small, PAPER_PROFILE_PCT, axis=1)
 
     def walk(p, chain):
         level = paper * (PAPER_LEVEL_RATIO_COLS if chain else PAPER_LEVEL_RATIO)

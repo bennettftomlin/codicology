@@ -118,6 +118,21 @@ def test_paper_crop_trims_through_a_sliver_to_the_spine_shadow():
     assert R.paper_crop(margined).shape == page.shape
 
 
+def test_paper_crop_never_walks_through_text_to_reach_a_plate():
+    """A plate covering the top 55% of the page, flush with the text
+    column's edge, once read as surround by the column median, and the
+    trim chained through the text beside it: a text column cut at the
+    page's inner edge. Surround is dark along the whole column; a plate
+    is not."""
+    page = _page(w=900, h=1200)
+    h, w = page.shape[:2]
+    plated = page.copy()
+    plated[:int(h * 0.55), int(w * 0.5):int(w * 0.95)] = 40    # the plate, nearly to the edge
+    plated[:, int(w * 0.97):] = 60                              # a thin shadow at the edge itself
+    out = R.paper_crop(plated)
+    assert out.shape[1] >= int(w * 0.97) - 3, out.shape           # only the shadow goes
+
+
 def _justified_page(w=1400, h=1900, n_lines=28):
     """Paper with full-measure lines of dark strokes: a justified block.
 
@@ -218,6 +233,20 @@ def test_a_missing_rectifier_keeps_the_photograph_and_says_so(vtb, monkeypatch, 
     assert info["kept_photo"] == "no rectifier" and not info["rectified"]
     # a page can be seen in this photograph, so the spread is still split
     assert len(parts) == 2 and info["split"]
+
+
+def test_a_kept_photograph_of_a_closed_book_is_not_halved(vtb, monkeypatch, make_page):
+    """The rectifier refused a cover shot (its sheet read no words) and
+    the photograph was kept — a landscape frame holding a portrait
+    cover. Halving the frame made two pages of half a cover."""
+    page = make_page()
+    ph, pw = page.shape[:2]
+    frame = np.full((ph + 200, int((ph + 200) * 1.4), 3), 30, np.uint8)
+    x0 = (frame.shape[1] - pw) // 2
+    frame[100:100 + ph, x0:x0 + pw] = page                 # portrait cover, ~40% of the frame
+    monkeypatch.setattr(vtb._rectify, "rectify", lambda img: (img, False))
+    parts, info = vtb.capture_pages(frame, enhance=False, deskew=False, workdir=None)
+    assert not info["rectified"] and len(parts) == 1 and not info["split"]
 
 
 def test_a_sheet_that_lost_its_words_is_refused(vtb, monkeypatch, tmp_path):

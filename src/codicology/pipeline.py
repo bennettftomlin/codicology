@@ -1070,6 +1070,14 @@ def capture_pages(image: np.ndarray, *, rectify: bool = True, enhance: bool = Tr
         outline = detect_page(image, min_area_ratio)
         seen = outline is not None and cv2.contourArea(
             outline.astype(np.float32)) >= 0.30 * image.shape[0] * image.shape[1]
+        if seen and not info["rectified"]:
+            # A photograph kept as shot is the whole frame, landscape
+            # whatever it holds. Whether it holds a spread is the
+            # OUTLINE's shape: a closed book's cover is a portrait
+            # outline in a landscape frame, and halving the frame made
+            # two pages of half a cover.
+            _x, _y, ow, oh = cv2.boundingRect(outline.astype(np.float32))
+            seen = oh > 0 and ow / float(oh) >= 1.15
     parts = split_spread(sheet) if seen else [sheet]
     info["split"] = len(parts) > 1
     out = []
