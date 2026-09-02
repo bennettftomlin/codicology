@@ -346,8 +346,18 @@ def square(page: np.ndarray) -> tuple[np.ndarray, float]:
     wm = ((xr(yt) - xl(yt)) + (xr(yb) - xl(yb))) / 2.0
     dst = np.float32([[x0, yt], [x0 + wm, yt], [x0 + wm, yb], [x0, yb]])
     H = cv2.getPerspectiveTransform(src, dst)
+    # The canvas holds the WHOLE warped page: widening the block's narrow
+    # end pushes that end's margin outward, and a canvas of the page's
+    # own size would lose whatever sat there — a line that reaches the
+    # edge, a folio. The page's corners are mapped, the canvas sized to
+    # their extent, and the warp shifted into it.
+    corners = np.float32([[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]]).reshape(-1, 1, 2)
+    moved = cv2.perspectiveTransform(corners, H).reshape(-1, 2)
+    x_min, y_min = np.floor(moved.min(axis=0)); x_max, y_max = np.ceil(moved.max(axis=0))
+    shift = np.array([[1, 0, -x_min], [0, 1, -y_min], [0, 0, 1]], dtype=np.float64)
+    out_w, out_h = int(x_max - x_min) + 1, int(y_max - y_min) + 1
     paper = tuple(float(v) for v in np.median(page.reshape(-1, page.shape[-1]) if page.ndim == 3 else page.reshape(-1, 1), axis=0))
-    out = cv2.warpPerspective(page, H, (w, h), flags=cv2.INTER_CUBIC,
+    out = cv2.warpPerspective(page, shift @ H, (out_w, out_h), flags=cv2.INTER_CUBIC,
                               borderMode=cv2.BORDER_CONSTANT, borderValue=paper)
     return out, conv
 

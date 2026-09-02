@@ -186,7 +186,27 @@ def test_square_removes_a_trapezoid_and_leaves_a_square_page_alone():
     out, conv = R.square(skewed)
     assert abs(conv - before) < 0.2
     assert abs(_convergence(out)) < 0.3, _convergence(out)
-    assert out.shape == skewed.shape
+    # the canvas grows to hold the warped page, never shrinks
+    assert out.shape[0] >= skewed.shape[0] and out.shape[1] >= skewed.shape[1]
+    assert out.shape[1] < skewed.shape[1] * 1.1
+
+
+def test_square_keeps_every_pixel_of_the_page():
+    """Widening the block's narrow end pushes that end's margin outward;
+    a canvas of the page's own size lost whatever sat there. The canvas
+    now holds the whole warped page: ink that touched the page's edge
+    is still there, on paper fill, after squaring."""
+    page = _justified_page()
+    h, w = page.shape[:2]
+    page[40:52, 20:w - 20] = 30                        # a rule along the very top edge
+    page[h - 52:h - 40, 20:w - 20] = 30                # and along the bottom
+    skewed = _keystoned(page)
+    out, conv = R.square(skewed)
+    assert abs(conv) > R.SQUARE_MIN_DEG
+    assert out.shape[0] >= skewed.shape[0] and out.shape[1] >= skewed.shape[1]
+    g = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
+    ink_rows = np.where((g < 100).mean(axis=1) > 0.5)[0]
+    assert len(ink_rows) >= 2 and ink_rows.min() < 0.1 * out.shape[0] and ink_rows.max() > 0.9 * out.shape[0]
 
 
 def test_square_refuses_what_it_cannot_measure():
