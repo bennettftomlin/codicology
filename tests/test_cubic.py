@@ -117,3 +117,27 @@ def test_the_sheet_keeps_every_margin(vtb, tmp_path):
     mb, ma = vtb._ink_margins(page), vtb._ink_margins(out)
     assert all(a >= 0.02 for a in ma), (mb, ma)
     assert not vtb._adds_clip(page, out)
+
+
+@needs_pd
+def test_the_overhang_is_paper_not_a_smeared_edge(vtb, tmp_path):
+    """A canvas that covers a tilted page's whole extent overhangs the
+    input, and the surround was once the edge pixel replicated outward. A
+    split page's gutter side is a dark strip; replicated, it streaked into
+    the overhang — one page's top band came back with eight times the
+    input's dark pixels and the margin witness refused a good correction
+    for ink that was never on the page. The overhang is painted paper."""
+    page = _thin_bowed()
+    page[:, :20] = 20                       # the gutter's shadow, hard against the edge
+    out, ok = C.cubic_dewarp(page, str(tmp_path))
+    assert ok
+    g_in = cv2.cvtColor(page, cv2.COLOR_BGR2GRAY)
+    g_out = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
+    band = max(2, int(0.005 * out.shape[1]))
+    dark_in = float((g_in[:, :band] < 80).mean())
+    dark_out = float((g_out[:, :band] < 80).mean())
+    assert dark_in > 0.95, "the strip must reach the input's edge or the test tests nothing"
+    # Replicated, the strip fills the whole overhang and the band stays dark;
+    # painted paper, only the part of the band the page itself reaches is.
+    assert dark_out < 0.6, (dark_in, dark_out)
+    assert not vtb._adds_clip(page, out)

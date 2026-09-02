@@ -160,8 +160,17 @@ def cubic_dewarp(image: np.ndarray, workdir: str) -> tuple[np.ndarray, bool]:
                     interpolation=cv2.INTER_CUBIC).astype(np.float32)
     my = cv2.resize(pts[:, 0, 1].reshape(yc.shape), (width, height),
                     interpolation=cv2.INTER_CUBIC).astype(np.float32)
+    # Where the canvas overhangs the input — inevitably, since it now covers
+    # a tilted page's whole extent — the surround is painted paper, not the
+    # edge pixel replicated outward. A split page's gutter side is a dark
+    # strip, and replicating it drew streaks into the overhang: on one page
+    # the top band came back with eight times the input's dark pixels, the
+    # margin witness read those streaks as ink at the edge and refused the
+    # correction the page had earned.
+    paper = tuple(float(v) for v in np.median(
+        image.reshape(-1, image.shape[2]), axis=0))
     out = cv2.remap(image, mx, my, cv2.INTER_CUBIC,
-                    borderMode=cv2.BORDER_REPLICATE)
+                    borderMode=cv2.BORDER_CONSTANT, borderValue=paper)
     return out, True
 
 
