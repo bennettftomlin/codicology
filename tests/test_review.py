@@ -365,3 +365,12 @@ def test_delete_run_tolerates_the_punctuation_tokens_dropped(vtb):
                                     "old": "MAP U S GEOGRAPHIC OFFICE",
                                     "new": ""})
     assert got2 == "<p>Caption stays.</p><ol></ol>"
+
+
+def test_delete_run_steps_over_the_numbers_the_tokens_dropped(vtb):
+    from codicology.review import apply_one_decision
+    x = "<p>SHREVE'S SNAG BOAT, PATENT No. 913, SEPTEMBER 12, 1838</p><p>Caption.</p>"
+    got = apply_one_decision(x, {"kind": "delete_run",
+                                 "old": "SHREVE'S SNAG BOAT PATENT No SEPTEMBER",
+                                 "new": ""})
+    assert got is not None and "SHREVE" not in got and "Caption." in got

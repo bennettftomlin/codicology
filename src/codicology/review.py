@@ -610,8 +610,12 @@ def _delete_from_xhtml(xhtml, old) -> "str | None":
     # "AA' twin hulls G main windlass". Anything non-word may stand
     # between consecutive words; six of nine deletions once went stale on
     # exactly this.
+    # …and whole NUMBERS: the tokenizer drops them, so "PATENT No SEPTEMBER"
+    # must match "PATENT No. 913, SEPTEMBER 12, 1838" — digits are word
+    # characters a punctuation-only gap cannot cross.
+    gap = r"(?:[^\w]|\b\d+\b)*?"
     pat = re.compile(r"(?<![\w])"
-                     + r"[^\w]*?".join(re.escape(w) for w in words)
+                     + gap.join(re.escape(w) for w in words)
                      + r"(?![\w])")
     m = pat.search(flat)
     if not m:
