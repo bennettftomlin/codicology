@@ -3480,7 +3480,10 @@ def parse_printed_toc(bodies: list[str], limit: int = 25,
         # printed contents page recognisable is the dot leader — a run of
         # dots carrying the eye to a folio — which no ordinary table has.
         leaders = len(re.findall(r"[.·…]\s*[.·…]\s*[.·…]", body))
-        looks_like_contents = rows_here >= 5 and leaders >= max(3, rows_here // 3)
+        # Rows or list items: the layout renders a block it has labelled a
+        # contents as <li> items rather than a table.
+        lines_here = rows_here + body.count("</li>")
+        looks_like_contents = lines_here >= 5 and leaders >= max(3, lines_here // 3)
         # A bare list of titles runs past its first page as bare paragraphs,
         # with no rows to recognise it by — the Saylor contents names its
         # first 23 chapters on one page and its last 11 on the next, and
@@ -3512,13 +3515,37 @@ def parse_printed_toc(bodies: list[str], limit: int = 25,
             # the paragraphs lost the first half of the book. They are not
             # part divisions here: nothing on a table-less page is ranked,
             # so everything arrives at one level, as before.
-            lines = []
-            for el in root.iter("p", "h1", "h2", "h3", "h4"):
-                t = re.sub(r"[\s.·…]+$", "", _line_text(el))
+            # List items as well as paragraphs: the layout renders a block
+            # it has labelled a contents as <li> items rather than a table
+            # — one book's seventeen chapters arrived that way and the nav
+            # was built from nothing. And a line that ends in a dot leader
+            # and a folio is a complete entry, folio and all; it is read
+            # here as the table branch reads a row, so the nav is not left
+            # to hunt titles it was handed the pages for.
+            pending: list = []
+
+            def flush():
+                for t in _fold_contents_lines(pending):
+                    entries.append(TocEntry(t, None, "", 2))
+                pending.clear()
+
+            for el in root.iter("p", "h1", "h2", "h3", "h4", "li"):
+                raw_t = " ".join(_line_text(el).split())
+                led = re.match(r"^(.*?\S)\s*[.·…]{2,}[\s.·…]*(\d{1,3}|[ivxlcdm]{1,7})$",
+                               raw_t, re.I)
+                t = re.sub(r"[\s.·…]+$", "", raw_t)
                 # A folio is carried this far, and no further: it is the only
                 # thing that can finish a title broken before its year range,
                 # and the fold drops it when it finishes nothing.
                 if not (t and len(t) <= 120):
+                    continue
+                if led and re.search(r"[A-Za-z]{3}", led.group(1)) \
+                        and "contents" not in led.group(1).lower():
+                    flush()
+                    title = re.sub(r"[\s.·…]+$", "", led.group(1))
+                    folio_text = led.group(2)
+                    folio = int(folio_text) if folio_text.isdigit() else None
+                    entries.append(TocEntry(title, folio, folio_text, 2, False, 0, page_i))
                     continue
                 if not _FOLIO_ONLY.match(t) and not (
                         3 <= len(t) and re.search(r"[A-Za-z]{3}", t)):
@@ -3527,9 +3554,8 @@ def parse_printed_toc(bodies: list[str], limit: int = 25,
                     continue
                 if book_title and _same_head(t, book_title):
                     continue
-                lines.append(t)
-            for t in _fold_contents_lines(lines):
-                entries.append(TocEntry(t, None, "", 2))
+                pending.append(t)
+            flush()
             continue
         for el in root.iter():
             if el.tag in ("h1", "h2", "h3", "h4"):

@@ -282,6 +282,30 @@ def test_a_bare_folio_on_a_table_less_page_is_not_a_title(vtb):
     assert titles == ["Acknowledgements", "Introduction"], titles
 
 
+def test_a_contents_rendered_as_a_list_is_read_with_its_folios(vtb):
+    """The layout renders a block it has labelled a contents as <li> items
+    rather than a table. One book's seventeen chapters arrived that way,
+    the table-less reader looked only at paragraphs and headings, and the
+    nav was built from nothing. A list line ending in a dot leader and a
+    folio is a complete entry."""
+    body = ("<h2><b>Citadel of Sin: The John Looney Story</b></h2>"
+            "<h3><b>Contents</b></h3><ul style=\"list-style-type: none;\">"
+            "<li>Forward .....1</li>"
+            "<li>Chapter 1: Home, home in Illinois.....5</li>"
+            "<li>Chapter 2: A mighty good line.....13</li>"
+            "<li>Chapter 3: Extra! Extra!.....25</li>"
+            "<li>Chapter 4: A good whippin’ .....35</li>"
+            "<li>Chapter 5: March madness.....41</li>"
+            "<li>Sources .....121</li></ul>")
+    entries, pages = vtb.parse_printed_toc([body], book_title="Citadel of Sin: The John Looney Story")
+    assert pages == {0}
+    assert [(e.title, e.folio) for e in entries] == [
+        ("Forward", 1), ("Chapter 1: Home, home in Illinois", 5),
+        ("Chapter 2: A mighty good line", 13), ("Chapter 3: Extra! Extra!", 25),
+        ("Chapter 4: A good whippin’", 35), ("Chapter 5: March madness", 41),
+        ("Sources", 121)], entries
+
+
 def test_a_designation_is_not_swallowed_by_the_one_before_it(vtb):
     """Two designations in a row must not merge into each other."""
     page = _plain_page("<p>CHAPTER ONE</p><p>CHAPTER TWO</p><p>A Real Title</p>")
