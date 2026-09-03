@@ -370,8 +370,9 @@ def square(page: np.ndarray) -> tuple[np.ndarray, float]:
 
 
 def witness(image: np.ndarray, workdir: str,
-            scale: float = 0.6) -> tuple[int, float, float]:
-    """(words, mean confidence, coverage) from tesseract.
+            scale: float = 0.6) -> "tuple[int, float, float] | None":
+    """(words, mean confidence, coverage) from tesseract, or None when it
+    gave no testimony at all.
 
     The third value is the fraction of ten horizontal bands that contain
     at least one word: testimony spread across the page, which a caption
@@ -379,15 +380,20 @@ def witness(image: np.ndarray, workdir: str,
     with its photograph — a sheet that reads far fewer words than the
     photograph has lost text — and offered to anything else that needs an
     independent reader.
+
+    None, not zero, when tesseract could not be run or ran out of time:
+    on a loaded machine one call timed out, its "0 words" was taken as a
+    verdict against a sheet the photograph had read 462 words from, and
+    two good pages shipped as raw photograph halves.
     """
     p = os.path.join(workdir, "_witness.png")
     h, w = image.shape[:2]
     cv2.imwrite(p, cv2.resize(image, (max(8, int(w * scale)), max(8, int(h * scale)))))
     try:
         r = subprocess.run(["tesseract", p, "stdout", "--psm", "3", "tsv"],
-                           capture_output=True, timeout=300)
+                           capture_output=True, timeout=600)
     except Exception:
-        return 0, 0.0, 0.0
+        return None
     finally:
         try:
             os.remove(p)

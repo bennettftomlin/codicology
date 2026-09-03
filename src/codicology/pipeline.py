@@ -1054,11 +1054,15 @@ def capture_pages(image: np.ndarray, *, rectify: bool = True, enhance: bool = Tr
             sheet = cand
             info["rectified"] = True
             if workdir and shutil.which("tesseract"):
-                before, _, _ = _rectify.witness(image, workdir)
-                after, _, _ = _rectify.witness(sheet, workdir)
-                if before >= WITNESS_MIN_WORDS and after < _rectify.WITNESS_KEEP_RATIO * before:
-                    info.update(rectified=False, kept_photo=(before, after))
-                    sheet = image
+                # No testimony (a timed-out or failed read) is not a
+                # verdict: the sheet stands unless both readings exist.
+                w_before = _rectify.witness(image, workdir)
+                w_after = _rectify.witness(sheet, workdir) if w_before else None
+                if w_before and w_after:
+                    before, after = w_before[0], w_after[0]
+                    if before >= WITNESS_MIN_WORDS and after < _rectify.WITNESS_KEEP_RATIO * before:
+                        info.update(rectified=False, kept_photo=(before, after))
+                        sheet = image
     # A flat sheet is a spread when it is landscape — but only a photograph
     # that shows a page, and more than a label's worth of one, is split at
     # all. The gutter hunt on a frame of bare desk finds whatever is darkest

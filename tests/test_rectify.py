@@ -299,6 +299,24 @@ def test_a_sheet_that_lost_its_words_is_refused(vtb, monkeypatch, tmp_path):
     assert parts[0] is photo or np.array_equal(parts[0], photo)
 
 
+def test_a_witness_that_gave_no_testimony_cannot_refuse_a_sheet(vtb, monkeypatch, tmp_path):
+    """A timed-out tesseract once counted as "0 words" and a sheet the
+    photograph had read 462 words from was refused. No reading, no
+    verdict."""
+    import subprocess
+    photo = _page(w=1400, h=1000)
+    sheet = np.full((900, 1300, 3), 230, np.uint8)
+    monkeypatch.setattr(vtb._rectify, "rectify", lambda img: (sheet, True))
+    def slow(*a, **k):
+        raise subprocess.TimeoutExpired(cmd="tesseract", timeout=1)
+    monkeypatch.setattr(vtb._rectify.subprocess, "run", slow)
+    assert R.witness(photo, str(tmp_path)) is None
+    monkeypatch.setattr(vtb.shutil, "which", lambda name: "/usr/bin/tesseract")
+    parts, info = vtb.capture_pages(photo, enhance=False, deskew=False,
+                                    split_spreads=False, workdir=str(tmp_path))
+    assert info["rectified"] and info["kept_photo"] is None
+
+
 def test_the_witness_is_not_asked_about_a_page_with_nothing_to_read(vtb, monkeypatch, tmp_path):
     photo = np.full((1000, 1400, 3), 200, np.uint8)
     sheet = np.full((900, 1300, 3), 230, np.uint8)
