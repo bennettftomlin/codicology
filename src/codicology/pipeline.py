@@ -1095,12 +1095,13 @@ def capture_pages(image: np.ndarray, *, rectify: bool = True, enhance: bool = Tr
             part = _rectify.paper_crop(part)
         if enhance:
             part = enhance_page(part)
-        if deskew and not info["rectified"]:
-            # Only a photograph kept as shot is deskewed. A rectified
-            # page is level to a fraction of a degree and squaring levels
-            # the block's edges besides; the row-variance deskew, fed a
-            # page with a tilted inset, turned a level page 1° and cut
-            # tesseract's reading of it from 120 words to 26.
+        if deskew:
+            # Deskew stays for rectified pages too. It was dropped once on
+            # the strength of tesseract's count on three inset pages, and
+            # the surviving-edge-line count went from 41 to 163 pages on
+            # one book: the pages squaring cannot measure — front matter,
+            # plates, insets — are exactly the ones nothing else levels,
+            # and a leaning surround band is invisible to the trim.
             part = deskew_page(part)
         if info["rectified"]:
             # The residual the rectifier leaves is a trapezoid or a
