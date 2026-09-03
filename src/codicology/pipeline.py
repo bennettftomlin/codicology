@@ -534,24 +534,39 @@ def _gutter_path(image: np.ndarray) -> np.ndarray:
     scale = probe_w / float(w)
     sh = max(8, int(h * scale))
     small = cv2.resize(gray, (probe_w, sh))
-    hat = cv2.morphologyEx(small, cv2.MORPH_BLACKHAT,
-                           cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9)))
-    content = hat > 40
+    # Ink is read at a finer scale and max-pooled onto the seam's grid: at
+    # a thousand pixels across a spread a stroke is under a pixel wide and
+    # letters become blobs, and a blob hugging the spine's shadow merges
+    # with it and vanishes from every test — which is exactly where the
+    # cut mattered. At the finer scale each stroke is its own thin dark
+    # feature, seen beside the shadow or not.
+    fine_w = min(w, 3000)
+    fine = cv2.resize(gray, (fine_w, max(8, int(h * fine_w / w))))
+    fhat = cv2.morphologyEx(fine, cv2.MORPH_BLACKHAT,
+                            cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9)))
+    ink = cv2.resize((fhat > 40).astype(np.float32), (probe_w, sh),
+                     interpolation=cv2.INTER_AREA) > 0
     core = small[int(sh * 0.2):max(int(sh * 0.2) + 1, int(sh * 0.8)),
                  int(probe_w * 0.2):int(probe_w * 0.8)]
     paper = float(np.percentile(core, 75))
-    dark = (small < paper * PAGE_LEVEL_RATIO).astype(np.uint8)
-    n, labels, stats, _ = cv2.connectedComponentsWithStats(dark, connectivity=8)
-    for i in range(1, n):
-        if stats[i, cv2.CC_STAT_HEIGHT] < GUTTER_SEAM_MAX_CONTENT_HEIGHT * sh:
-            content |= labels == i
+    dark = small < paper * PAGE_LEVEL_RATIO
+    # The spine's shadow is dark down most of a column; a plate, a figure
+    # or a letter is dark for only part of one. Graded costs, so the seam
+    # takes the shadow over a plate and a plate over a letter when it has
+    # no free path: a leaning shadow is dark for less of each column and
+    # reads as plate-like, and still beats the text beside it.
+    shadow_cols = dark.mean(axis=0) >= GUTTER_SEAM_MAX_CONTENT_HEIGHT
+    cost_map = np.zeros((sh, probe_w), dtype=np.float32)
+    cost_map[dark] = 3.0
+    cost_map[:, shadow_cols] = np.where(dark[:, shadow_cols], 0.5, 0.0)
+    cost_map[ink] = 10.0
     wx = whole * scale
     lo = max(0, int(wx - GUTTER_SEAM_REACH * probe_w))
     hi = min(probe_w, int(wx + GUTTER_SEAM_REACH * probe_w) + 1)
     if hi - lo < 8:
         return np.full(h, whole, dtype=np.float32)
     xs = np.arange(lo, hi)
-    cost = content[:, lo:hi].astype(np.float32) * 10.0 \
+    cost = cost_map[:, lo:hi] \
         + (np.abs(xs - wx) / probe_w).astype(np.float32)[None, :] * 0.01
     # scikit-image's minimum cost path does the seam; a free row above and
     # below lets it start and end in whichever column it likes.

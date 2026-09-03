@@ -424,3 +424,31 @@ def test_a_straight_gutter_cuts_as_one_column(vtb, make_spread):
     parts = vtb.split_spread(crop)
     assert len(parts) == 2
     assert np.array_equal(np.concatenate(parts, axis=1), crop)
+
+
+def test_text_hugging_the_spine_shadow_is_not_cut(vtb):
+    """Letters set hard against the spine's shadow merge with it at a coarse
+    scale and vanish from every ink test, so a seam ran through their first
+    strokes on two pages of one book. Ink is read fine and pooled; the
+    seam takes the shadow, never the letters."""
+    import cv2 as _cv2
+    h, w = 1200, 2400
+    sheet = np.full((h, w, 3), 235, np.uint8)
+    for y in range(h):
+        lean = int(30 * y / (h - 1))
+        sheet[y, 1170 + lean:1200 + lean] = 70                   # the spine's shadow, leaning
+    n_right = 0
+    for row in range(80, 1120, 28):
+        lean = int(30 * (row + 3) / (h - 1))
+        sheet[row:row + 6, 120:1140 + lean] = 20                 # left block, near the fold
+        sheet[row:row + 6, 1200 + lean:2280] = 20                # right block starts AT the shadow's edge
+        n_right += 1
+    left, right = vtb.split_spread(sheet)
+    g = _cv2.cvtColor(right, _cv2.COLOR_BGR2GRAY)
+    n, _, stats, _ = _cv2.connectedComponentsWithStats((g < 60).astype("uint8"))
+    x_off = w - right.shape[1]
+    starts = sorted((int(stats[i, _cv2.CC_STAT_TOP]), int(stats[i, _cv2.CC_STAT_LEFT]) + x_off) for i in range(1, n))
+    assert len(starts) == n_right, len(starts)
+    for top, x0 in starts:
+        lean = int(30 * (top + 3) / (h - 1))
+        assert abs(x0 - (1200 + lean)) <= 1, (top, x0, 1200 + lean)
