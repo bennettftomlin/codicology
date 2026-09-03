@@ -505,6 +505,15 @@ GUTTER_PATH_MIN_LEAN = 0.003
 # The seam may wander this far from the whole-sheet gutter column: a gap
 # it cannot find within a tenth of the width on either side is not there.
 GUTTER_SEAM_REACH = 0.10
+# Seam costs. A letter must outweigh any detour the grid allows: the grid
+# is at most 2000 cells wide and a few thousand tall, so a whole traverse
+# through shadow costs under 2000 * 0.001 — nothing beside one letter.
+GUTTER_SEAM_COST_LETTER = 1e4
+GUTTER_SEAM_COST_PLATE = 1e2
+GUTTER_SEAM_COST_SHADOW = 1e-3
+# An ink component at least this tall (fraction of the sheet) is a line,
+# not a letter: a crease, a rule, the edge of the spine's shadow.
+GUTTER_SEAM_LINE_HEIGHT = 0.30
 # Content a component may span of the sheet's height and still be content
 # (text, a figure, a plate); a dark band taller than that is the spine's
 # shadow, which the seam is free to run through.
@@ -530,22 +539,40 @@ def _gutter_path(image: np.ndarray) -> np.ndarray:
     h, w = image.shape[:2]
     whole = float(_gutter_x(image))
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
-    probe_w = 1000
+    # The seam's grid is two thousand pixels across: at a thousand, the
+    # gaps between lines of type closed up once ink was pooled onto the
+    # grid, and a seam that must slip sideways between two lines to get
+    # round a block that leans into the fold had no row to do it in.
+    probe_w = min(w, 2000)
     scale = probe_w / float(w)
     sh = max(8, int(h * scale))
     small = cv2.resize(gray, (probe_w, sh))
     # Ink is read at a finer scale and max-pooled onto the seam's grid: at
-    # a thousand pixels across a spread a stroke is under a pixel wide and
-    # letters become blobs, and a blob hugging the spine's shadow merges
-    # with it and vanishes from every test — which is exactly where the
-    # cut mattered. At the finer scale each stroke is its own thin dark
-    # feature, seen beside the shadow or not.
-    fine_w = min(w, 3000)
-    fine = cv2.resize(gray, (fine_w, max(8, int(h * fine_w / w))))
+    # the grid's own scale a stroke is under a pixel wide and letters become
+    # blobs, and a blob hugging the spine's shadow merges with it and
+    # vanishes from every test — which is exactly where the cut mattered.
+    # At the finer scale each stroke is its own thin dark feature, seen
+    # beside the shadow or not.
+    # Read at the sheet's own resolution (capped): at three thousand pixels
+    # across, the nine-pixel kernel was wider than the gap between lines of
+    # type, adjacent lines merged into one block of ink, and the seam had
+    # no clear row to slip sideways through. At full size the gap is wide
+    # and each line stands alone.
+    fine_w = min(w, 6000)
+    fine = gray if fine_w == w else cv2.resize(gray, (fine_w, max(8, int(h * fine_w / w))))
     fhat = cv2.morphologyEx(fine, cv2.MORPH_BLACKHAT,
                             cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9)))
     ink = cv2.resize((fhat > 40).astype(np.float32), (probe_w, sh),
                      interpolation=cv2.INTER_AREA) > 0
+    # Letters are short. A thin dark feature that runs down a third of the
+    # sheet is a crease at the spine's edge or a rule, and costing it as
+    # letters pushed the seam out of the gutter and through the edge of a
+    # plate that reached the fold. Tall ink components are not letters;
+    # what they are, the dark and shadow rules below decide.
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(ink.astype(np.uint8), connectivity=8)
+    tall = [i for i in range(1, n) if stats[i, cv2.CC_STAT_HEIGHT] >= GUTTER_SEAM_LINE_HEIGHT * sh]
+    if tall:
+        ink &= ~np.isin(labels, tall)
     core = small[int(sh * 0.2):max(int(sh * 0.2) + 1, int(sh * 0.8)),
                  int(probe_w * 0.2):int(probe_w * 0.8)]
     paper = float(np.percentile(core, 75))
@@ -554,12 +581,16 @@ def _gutter_path(image: np.ndarray) -> np.ndarray:
     # or a letter is dark for only part of one. Graded costs, so the seam
     # takes the shadow over a plate and a plate over a letter when it has
     # no free path: a leaning shadow is dark for less of each column and
-    # reads as plate-like, and still beats the text beside it.
+    # reads as plate-like, and still beats the text beside it. The grades
+    # are far apart on purpose: with letters at ten and shadow at a half,
+    # a twenty-cell detour through the shadow cost the same as cutting one
+    # letter, and the seam cut letters — eighteen on one page. No detour
+    # the grid allows may ever be dearer than a single letter.
     shadow_cols = dark.mean(axis=0) >= GUTTER_SEAM_MAX_CONTENT_HEIGHT
     cost_map = np.zeros((sh, probe_w), dtype=np.float32)
-    cost_map[dark] = 3.0
-    cost_map[:, shadow_cols] = np.where(dark[:, shadow_cols], 0.5, 0.0)
-    cost_map[ink] = 10.0
+    cost_map[dark] = GUTTER_SEAM_COST_PLATE
+    cost_map[:, shadow_cols] = np.where(dark[:, shadow_cols], GUTTER_SEAM_COST_SHADOW, 0.0)
+    cost_map[ink] = GUTTER_SEAM_COST_LETTER
     wx = whole * scale
     lo = max(0, int(wx - GUTTER_SEAM_REACH * probe_w))
     hi = min(probe_w, int(wx + GUTTER_SEAM_REACH * probe_w) + 1)
@@ -567,7 +598,7 @@ def _gutter_path(image: np.ndarray) -> np.ndarray:
         return np.full(h, whole, dtype=np.float32)
     xs = np.arange(lo, hi)
     cost = cost_map[:, lo:hi] \
-        + (np.abs(xs - wx) / probe_w).astype(np.float32)[None, :] * 0.01
+        + (np.abs(xs - wx) / probe_w).astype(np.float32)[None, :] * 1e-4
     # scikit-image's minimum cost path does the seam; a free row above and
     # below lets it start and end in whichever column it likes.
     from skimage.graph import route_through_array
