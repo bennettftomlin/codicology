@@ -377,3 +377,50 @@ def test_the_cut_never_amputates_text_that_hugs_the_spine(vtb, tmp_path):
     total = strokes(pages[0]) + strokes(pages[1])
     assert total == n_left + n_right, \
         f"{total} strokes across halves, expected {n_left + n_right}"
+
+
+def test_a_leaning_gutter_is_cut_along_its_path(vtb):
+    """On a flat sheet the two text blocks can lean toward each other, so no
+    single column is ink-free: a vertical cut through the least-ink column
+    took the first letters of a right-hand page's lower lines on two pages
+    of one book. The cut follows the gutter's path and every stroke lands
+    on its own side, exactly once."""
+    import cv2 as _cv2
+    h, w = 900, 1400
+    sheet = np.full((h, w, 3), 235, np.uint8)
+    n_left = n_right = 0
+    for y in range(h):                               # the spine's shadow, leaning with the fold
+        lean = int(40 * y / (h - 1))                  # 40px right, top to bottom
+        sheet[y, 655 + lean:675 + lean] = 90
+    for row in range(60, 840, 30):
+        lean = int(40 * (row + 2) / (h - 1))
+        sheet[row:row + 5, 60:640 + lean] = 20; n_left += 1      # left block reaches toward the fold
+        sheet[row:row + 5, 690 + lean:1340] = 20; n_right += 1   # right block starts just past it
+    parts = vtb.split_spread(sheet)
+    assert len(parts) == 2
+    left, right = parts
+
+    def strokes(img, x_offset):
+        g = _cv2.cvtColor(img, _cv2.COLOR_BGR2GRAY)
+        n, _, stats, _ = _cv2.connectedComponentsWithStats((g < 60).astype("uint8"))
+        return [(int(stats[i, _cv2.CC_STAT_TOP]), int(stats[i, _cv2.CC_STAT_LEFT]) + x_offset,
+                 int(stats[i, _cv2.CC_STAT_LEFT]) + x_offset + int(stats[i, _cv2.CC_STAT_WIDTH]))
+                for i in range(1, n)]
+    ls, rs = strokes(left, 0), strokes(right, w - right.shape[1])
+    assert len(ls) == n_left and len(rs) == n_right, (len(ls), len(rs))
+    # and no stroke was shortened: each spans exactly what was drawn at its row
+    for top, x0, x1 in ls:
+        lean = int(40 * (top + 2) / (h - 1))
+        assert abs(x0 - 60) <= 1 and abs(x1 - (640 + lean)) <= 1, (top, x0, x1)
+    for top, x0, x1 in rs:
+        lean = int(40 * (top + 2) / (h - 1))
+        assert abs(x0 - (690 + lean)) <= 1 and abs(x1 - 1340) <= 1, (top, x0, x1)
+
+
+def test_a_straight_gutter_cuts_as_one_column(vtb, make_spread):
+    """The path machinery must leave the ordinary case exactly as it was:
+    two rectangular halves that rejoin to the sheet."""
+    crop = crop_of(vtb, make_spread())
+    parts = vtb.split_spread(crop)
+    assert len(parts) == 2
+    assert np.array_equal(np.concatenate(parts, axis=1), crop)

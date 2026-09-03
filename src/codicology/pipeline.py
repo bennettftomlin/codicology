@@ -466,16 +466,111 @@ def split_spread(image: np.ndarray, min_aspect: float = 1.15) -> list[np.ndarray
     Split a two-page spread into left and right pages at the gutter.
 
     Only landscape crops are treated as spreads; a single book page is portrait.
-    The gutter is the darkest vertical band near the middle — the shadow where
+    The gutter is the darkest ink-free band near the middle — the shadow where
     the pages meet the spine — measured on a column profile smoothed enough that
     an inter-word gap in a text column cannot win.
+
+    The cut follows the gutter's PATH, not one column: on a flat sheet the two
+    text blocks can lean toward each other, and a single vertical cut through
+    the least-ink column took the first letters of a right-hand page's lower
+    lines on two pages of one book. The gutter is hunted in horizontal strips,
+    a line is fitted through the strips' finds, and each page keeps every
+    pixel on its side of that line with paper painted over the other side.
+    A gutter that stands straight cuts exactly as it always did.
     """
     h, w = image.shape[:2]
     if h == 0 or w / float(h) < min_aspect:
         return [image]
 
-    x = _gutter_x(image)
-    return [image[:, :x], image[:, x:]]
+    path = _gutter_path(image)
+    if path.max() - path.min() < GUTTER_PATH_MIN_LEAN * w:
+        x = int(round(float(path.mean())))
+        return [image[:, :x], image[:, x:]]
+    paper = np.median(image.reshape(-1, image.shape[-1]), axis=0) if image.ndim == 3 \
+        else np.median(image)
+    xs = np.arange(w)[None, :]
+    left_of = xs < path[:, None]
+    left = image.copy()
+    left[~left_of] = paper
+    right = image.copy()
+    right[left_of] = paper
+    x_hi = int(np.ceil(path.max())) + 1
+    x_lo = int(np.floor(path.min()))
+    return [left[:, :x_hi], right[:, x_lo:]]
+
+
+# A gutter path whose ends differ by less than this fraction of the width
+# is a straight gutter, cut as one column as before.
+GUTTER_PATH_MIN_LEAN = 0.003
+# The seam may wander this far from the whole-sheet gutter column: a gap
+# it cannot find within a tenth of the width on either side is not there.
+GUTTER_SEAM_REACH = 0.10
+# Content a component may span of the sheet's height and still be content
+# (text, a figure, a plate); a dark band taller than that is the spine's
+# shadow, which the seam is free to run through.
+GUTTER_SEAM_MAX_CONTENT_HEIGHT = 0.70
+
+
+def _gutter_path(image: np.ndarray) -> np.ndarray:
+    """The gutter's x for every row, as the minimum-cost seam through the
+    gap between the pages.
+
+    The classical page-splitting answer (ScanTailor finds candidate lines
+    and scores how well they separate the pages' content; seam carving
+    finds the least-cost top-to-bottom path) applied to a flat sheet:
+    every pixel of content — text ink, and any dark region that does not
+    span the sheet's height, a figure or a plate — costs; the spine's
+    shadow, which does span the height, is free; and a small pull toward
+    the whole-sheet gutter column keeps the seam in the shadow where the
+    gap is wide. The seam may move one probe pixel per row, so it follows
+    a gap that leans or curves and never crosses a letter while a clear
+    path exists. A seam that wanders less than a straight gutter would
+    hands back the whole-sheet column, and the cut is exactly as it was.
+    """
+    h, w = image.shape[:2]
+    whole = float(_gutter_x(image))
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+    probe_w = 1000
+    scale = probe_w / float(w)
+    sh = max(8, int(h * scale))
+    small = cv2.resize(gray, (probe_w, sh))
+    hat = cv2.morphologyEx(small, cv2.MORPH_BLACKHAT,
+                           cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9)))
+    content = hat > 40
+    core = small[int(sh * 0.2):max(int(sh * 0.2) + 1, int(sh * 0.8)),
+                 int(probe_w * 0.2):int(probe_w * 0.8)]
+    paper = float(np.percentile(core, 75))
+    dark = (small < paper * PAGE_LEVEL_RATIO).astype(np.uint8)
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(dark, connectivity=8)
+    for i in range(1, n):
+        if stats[i, cv2.CC_STAT_HEIGHT] < GUTTER_SEAM_MAX_CONTENT_HEIGHT * sh:
+            content |= labels == i
+    wx = whole * scale
+    lo = max(0, int(wx - GUTTER_SEAM_REACH * probe_w))
+    hi = min(probe_w, int(wx + GUTTER_SEAM_REACH * probe_w) + 1)
+    if hi - lo < 8:
+        return np.full(h, whole, dtype=np.float32)
+    xs = np.arange(lo, hi)
+    cost = content[:, lo:hi].astype(np.float32) * 10.0 \
+        + (np.abs(xs - wx) / probe_w).astype(np.float32)[None, :] * 0.01
+    # scikit-image's minimum cost path does the seam; a free row above and
+    # below lets it start and end in whichever column it likes.
+    from skimage.graph import route_through_array
+    free = np.full((1, hi - lo), 1e-6, dtype=np.float32)
+    grid = np.vstack([free, cost + 1e-6, free])
+    start_col = int(np.clip(round(wx) - lo, 0, hi - lo - 1))
+    route, _total = route_through_array(grid, (0, start_col), (sh + 1, start_col),
+                                        fully_connected=True, geometric=False)
+    seam = np.full(sh, float(start_col), dtype=np.float32)
+    for r, cidx in route:
+        if 1 <= r <= sh:
+            seam[r - 1] = cidx
+    seam = (seam + lo + 0.5) / scale
+    path = np.interp(np.arange(h), (np.arange(sh) + 0.5) / scale, seam,
+                     left=seam[0], right=seam[-1])
+    if path.max() - path.min() < GUTTER_PATH_MIN_LEAN * w:
+        return np.full(h, whole, dtype=np.float32)
+    return np.clip(path, 0, w - 1).astype(np.float32)
 
 
 def _gutter_x(image: np.ndarray) -> int:
