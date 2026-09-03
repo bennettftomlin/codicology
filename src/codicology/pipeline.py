@@ -511,6 +511,10 @@ GUTTER_SEAM_REACH = 0.10
 GUTTER_SEAM_COST_LETTER = 1e4
 GUTTER_SEAM_COST_PLATE = 1e2
 GUTTER_SEAM_COST_SHADOW = 1e-3
+# Cells within this fraction of the width of any content cost up to this
+# much more, so the seam keeps its distance where it can.
+GUTTER_SEAM_MARGIN = 0.01
+GUTTER_SEAM_COST_NEAR = 1e-2
 # An ink component at least this tall (fraction of the sheet) is a line,
 # not a letter: a crease, a rule, the edge of the spine's shadow.
 GUTTER_SEAM_LINE_HEIGHT = 0.30
@@ -591,6 +595,14 @@ def _gutter_path(image: np.ndarray) -> np.ndarray:
     cost_map[dark] = GUTTER_SEAM_COST_PLATE
     cost_map[:, shadow_cols] = np.where(dark[:, shadow_cols], GUTTER_SEAM_COST_SHADOW, 0.0)
     cost_map[ink] = GUTTER_SEAM_COST_LETTER
+    # Keep a margin: a seam that costs nothing anywhere in the gap hugged
+    # the edge of a plate that reached the fold, tracing its outline cell
+    # by cell, and the page came out with a ragged left border. Cells near
+    # content cost a little, rising toward it, so the seam runs down the
+    # middle of whatever gap there is and touches nothing it need not.
+    away = cv2.distanceTransform((~(ink | dark)).astype(np.uint8), cv2.DIST_L2, 3)
+    margin = max(2.0, GUTTER_SEAM_MARGIN * probe_w)
+    cost_map += GUTTER_SEAM_COST_NEAR * np.clip(1.0 - away / margin, 0.0, 1.0).astype(np.float32)
     wx = whole * scale
     lo = max(0, int(wx - GUTTER_SEAM_REACH * probe_w))
     hi = min(probe_w, int(wx + GUTTER_SEAM_REACH * probe_w) + 1)
