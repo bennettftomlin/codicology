@@ -4421,6 +4421,29 @@ def parse_notes_section(bodies: list[str]) -> tuple[int, list[list[tuple[int, in
                 groups.append(current)
                 group_nos.append(n)
             elif current is not None:
+                if n == 1 and current and current[-1][1] > 1:
+                    # The numbering came back to 1. A book restarts its
+                    # notes at 1 only where a new chapter's notes begin, so
+                    # the section's own sequence declares the boundary — a
+                    # structural fact no typographic pattern can supply, and
+                    # the only evidence available when a head is dressed in
+                    # a way the patterns miss. Gendzier's Development
+                    # Against Democracy heads all eight of its groups and
+                    # four are invisible here: three wrap the number in
+                    # <i>, and chapter four's is a centred paragraph with a
+                    # <br/> inside it. Eight groups parsed as four, too far
+                    # from the body's eight to pair, and all 705 markers
+                    # went unlinked.
+                    #
+                    # A RETURN TO 1 specifically, not any number that fails
+                    # to climb: a repeated or misread number is a damaged
+                    # entry, and splitting on one would invent a group and
+                    # shift every pairing after it. The numbering must also
+                    # have climbed above 1 first, so a group whose own
+                    # first entries read 1, 1 stays whole.
+                    current = []
+                    groups.append(current)
+                    group_nos.append(None)
                 current.append((i, n, pos))
     keep = [(no, g) for no, g in zip(group_nos, groups) if g]
     if not keep:

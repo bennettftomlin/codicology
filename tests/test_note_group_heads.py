@@ -234,3 +234,91 @@ def test_the_numbered_head_still_parses_with_its_period(vtb):
               "<p><sup>1</sup> First.</p><p><sup>2</sup> Second.</p>"]
     start, groups = vtb.parse_notes_section(bodies)
     assert [len(g) for g in groups] == [2]
+
+
+# ── the boundary the section's own numbering declares ────────────────────────
+#
+# Gendzier's Development Against Democracy heads all eight of its note groups
+# and four of them are invisible to the patterns above: chapters one, two and
+# three wrap the number in <i>, and chapter four's head is a centred paragraph
+# carrying a <br/>. Eight groups parsed as four, four is too far from the
+# body's eight to pair, and all 705 markers went unlinked. Teaching the
+# numbered pattern about <i> alone is the trap this file already warns of: it
+# finds three of the four, leaves chapter four merged into chapter three, and
+# shifts every pairing after it. The numbering itself is the evidence that
+# does not depend on how a head is dressed.
+
+
+def _run(start, count):
+    return "".join(f"<li>{n}. Source {n}.</li>"
+                   for n in range(start, start + count))
+
+
+def test_a_return_to_one_opens_a_group(vtb):
+    bodies = ["<p>a<sup>1</sup>b<sup>2</sup>c<sup>3</sup></p>",
+              "<p>d<sup>1</sup>e<sup>2</sup></p>",
+              "<h1>NOTES</h1><h2>Introduction</h2><ol>" + _run(1, 3)
+              + '</ol><p style="text-align:center"><i>2. Dressed As Prose</i></p>'
+                "<ol>" + _run(1, 2) + "</ol>"]
+    _, groups = vtb.parse_notes_section(bodies)
+    assert [len(g) for g in groups] == [3, 2]
+    assert [n for _, n, _ in groups[1]] == [1, 2]
+
+
+def test_the_head_the_patterns_miss_needs_no_head_at_all(vtb):
+    """The same section with the second head removed entirely parses the
+    same way: the boundary is the numbering, not the markup."""
+    bodies = ["<p>a<sup>1</sup>b<sup>2</sup>c<sup>3</sup></p>",
+              "<p>d<sup>1</sup>e<sup>2</sup></p>",
+              "<h1>NOTES</h1><h2>Introduction</h2><ol>" + _run(1, 3)
+              + "</ol><ol>" + _run(1, 2) + "</ol>"]
+    _, groups = vtb.parse_notes_section(bodies)
+    assert [len(g) for g in groups] == [3, 2]
+
+
+def test_a_repeated_number_is_damage_not_a_boundary(vtb):
+    """Splitting on any number that fails to climb would invent a group out
+    of one misread entry and shift every pairing after it. Only a return to
+    1 is a restart."""
+    bodies = ["<p>a<sup>1</sup>b<sup>2</sup>c<sup>3</sup>d<sup>4</sup></p>",
+              "<h1>NOTES</h1><h2>Introduction</h2>"
+              "<ol><li>1. One.</li><li>2. Two.</li>"
+              "<li>2. Two again.</li><li>4. Four.</li></ol>"]
+    _, groups = vtb.parse_notes_section(bodies)
+    assert len(groups) == 1 and len(groups[0]) == 4
+
+
+def test_a_group_whose_own_notes_open_one_one_stays_whole(vtb):
+    """The numbering must climb above 1 before a return to it means
+    anything; two 1s at the head of a group are a damaged entry."""
+    bodies = ["<p>a<sup>1</sup>b<sup>2</sup></p>",
+              "<h1>NOTES</h1><h2>Introduction</h2>"
+              "<ol><li>1. One.</li><li>1. One again.</li>"
+              "<li>2. Two.</li></ol>"]
+    _, groups = vtb.parse_notes_section(bodies)
+    assert len(groups) == 1 and len(groups[0]) == 3
+
+
+def test_a_restart_at_a_head_does_not_open_two_groups(vtb):
+    """The ordinary case — a recognised head followed by note 1 — must open
+    exactly one group, or every well-formed book gains an empty group and
+    the pairing shifts."""
+    bodies = ["<p>a<sup>1</sup>b<sup>2</sup></p>", "<p>c<sup>1</sup></p>",
+              "<h1>NOTES</h1><h2>CHAPTER ONE</h2><ol>" + _run(1, 2)
+              + "</ol><h2>CHAPTER TWO</h2><ol>" + _run(1, 1) + "</ol>"]
+    _, groups = vtb.parse_notes_section(bodies)
+    assert [len(g) for g in groups] == [2, 1]
+
+
+def test_restart_split_groups_link_to_their_own_chapter(vtb):
+    """The whole point: chapter two's marker must reach chapter two's note,
+    not the note of the chapter its head was merged into."""
+    bodies = ["<p>a<sup>1</sup>b<sup>2</sup>c<sup>3</sup></p>",
+              "<p>d<sup>1</sup>e<sup>2</sup></p>",
+              "<h1>NOTES</h1><h2>Introduction</h2><ol>" + _run(1, 3)
+              + "</ol><ol>" + _run(1, 2) + "</ol>"]
+    stats = vtb.link_notes(bodies, set())
+    assert stats["groups"] == 2 and not stats["misaligned"]
+    assert stats["linked"] == 5
+    assert 'href="page_0002.xhtml#note-g1-1"' in bodies[1]
+    assert 'href="page_0002.xhtml#note-g0-1"' in bodies[0]
