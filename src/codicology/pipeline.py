@@ -4394,7 +4394,7 @@ def parse_notes_section(bodies: list[str]) -> tuple[int, list[list[tuple[int, in
         plain_notes = [] if sup_notes else \
             [(m.start(), "note", int(m.group(1)))
              for pat in (NOTE_ENTRY_PLAIN, NOTE_ENTRY_LI)
-             for m in pat.finditer(b)]
+             for m in pat.finditer(b)] + _br_run_notes(b)
         heads = []
         for m in GROUP_HEAD.finditer(b):
             heads.append((m.start(), "group", None))
@@ -4487,7 +4487,8 @@ def _ungrouped_notes(bodies: list[str], start: int) -> list:
         sup = [(m.start(), int(m.group(1))) for m in NOTE_ENTRY.finditer(bodies[i])]
         plain = [] if sup else [(m.start(), int(m.group(1)))
                                 for pat in (NOTE_ENTRY_PLAIN, NOTE_ENTRY_LI)
-                                for m in pat.finditer(bodies[i])]
+                                for m in pat.finditer(bodies[i])] \
+            + [(pos, n) for pos, _kind, n in _br_run_notes(bodies[i])]
         entries += [(i, n, pos) for pos, n in sorted(sup + plain)]
     if len(entries) < 3:
         return []
@@ -4513,6 +4514,14 @@ def _entry_anchor(entry: str, note_id: str, back_href: str, n: int):
     if pm is not None:
         return pm.end(), (f'<{pm.group(1)} id="{note_id}">'
                           f'<a href="{back_href}">{n}.</a>')
+    # An entry inside a <br/>-divided run has no block of its own to carry
+    # the id, so the number itself becomes the anchor. The break and the
+    # space after it are reproduced exactly: they are the run's typesetting,
+    # and swallowing them would run two notes together on one line.
+    bm = re.match(r"(<br\s*/?>)(\s*)(\d{1,3})\.", entry)
+    if bm is not None:
+        return bm.end(), (f'{bm.group(1)}{bm.group(2)}'
+                          f'<a id="{note_id}" href="{back_href}">{n}.</a>')
     return None
 
 
@@ -4672,6 +4681,46 @@ NOTE_ENTRY_PLAIN = re.compile(r"<p>\s*(\d{1,3})\.\s+\S")
 # convention, two renderings — both must parse or every group after the odd
 # page is silently lost.
 NOTE_ENTRY_LI = re.compile(r"<li[^>]*>\s*(\d{1,3})\.\s+\S")
+# A run of notes may be set as ONE paragraph, its entries divided by <br/>
+# rather than by blocks. Every pattern above anchors the number to a block's
+# opening, so only the run's first line is seen and the group's highest note
+# stops there — every marker past it has nothing to point at. Two such runs,
+# both at a chapter's tail, cost one book 34 links.
+NOTE_ENTRY_BR = re.compile(r"<br\s*/?>\s*(\d{1,3})\.\s+\S")
+
+
+def _br_run_notes(body: str) -> list:
+    """The note entries a paragraph hides behind its <br/>s.
+
+    Returned as (position, "note", number), the position being the <br/>
+    that opens each — which is where the anchor step rewrites.
+
+    The guard against reading an ordinary line break this way is the
+    numbering. The paragraph must already BE a note entry, so a block of
+    running prose is never examined, and the numbers must climb from the
+    one the paragraph opens with. A note that merely carries a <br/> before
+    a numeral — a date, an address, a line of verse, a table of figures —
+    does not climb, and then none of its lines are taken. Refusing the
+    whole paragraph rather than its first few lines is deliberate: a run
+    read half-way would end its group early, which is the very failure
+    this exists to repair.
+    """
+    out = []
+    for block in re.finditer(r"<p\b[^>]*>.*?</p>", body, re.S):
+        opening = NOTE_ENTRY_PLAIN.match(block.group(0))
+        if opening is None:
+            continue
+        run = [(block.start() + m.start(), int(m.group(1)))
+               for m in NOTE_ENTRY_BR.finditer(block.group(0))]
+        if not run:
+            continue
+        nums = [int(opening.group(1))] + [n for _, n in run]
+        if any(b <= a for a, b in zip(nums, nums[1:])):
+            continue
+        out += [(pos, "note", n) for pos, n in run]
+    return out
+
+
 # The period is optional: Beyond Money heads its note groups "1 capital and
 # crises" where another book writes "1. Capital and crises", and requiring
 # the dot cost it every one of its 410 links — no head parsed, so no group

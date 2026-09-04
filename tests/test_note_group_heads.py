@@ -322,3 +322,91 @@ def test_restart_split_groups_link_to_their_own_chapter(vtb):
     assert stats["linked"] == 5
     assert 'href="page_0002.xhtml#note-g1-1"' in bodies[1]
     assert 'href="page_0002.xhtml#note-g0-1"' in bodies[0]
+
+
+# ── a run of notes divided by <br/> rather than by blocks ────────────────────
+#
+# One book sets the tail of two chapters' notes as a single paragraph, the
+# entries separated by <br/>. Every entry pattern anchors the number to a
+# block's opening, so only the run's first line was seen: each group's highest
+# note stopped there and the 34 markers past it had nothing to point at.
+
+
+def _br_run(first, count):
+    return ("<p>" + f"{first}. Ibid., p. {first}."
+            + "".join(f"<br/>\n  {n}. Ibid., p. {n}."
+                      for n in range(first + 1, first + count))
+            + "</p>")
+
+
+def test_a_br_divided_run_yields_every_entry(vtb):
+    bodies = ["<p>" + "".join(f"x<sup>{n}</sup>" for n in range(1, 6)) + "</p>",
+              "<h1>NOTES</h1><h2>Introduction</h2><ol>" + _run(1, 2) + "</ol>"
+              + _br_run(3, 3)]
+    _, groups = vtb.parse_notes_section(bodies)
+    assert [n for _, n, _ in groups[0]] == [1, 2, 3, 4, 5]
+
+
+def test_a_br_run_links_and_anchors_each_entry(vtb):
+    bodies = ["<p>" + "".join(f"x<sup>{n}</sup>" for n in range(1, 6)) + "</p>",
+              "<h1>NOTES</h1><h2>Introduction</h2><ol>" + _run(1, 2) + "</ol>"
+              + _br_run(3, 3)]
+    stats = vtb.link_notes(bodies, set())
+    assert stats["linked"] == 5 and stats["unlinked"] == 0
+    # the run's first entry opens the paragraph, so it anchors on the block
+    # as any other paragraph entry does; only the <br/> lines need the
+    # number itself to carry the id
+    assert '<p id="note-g0-3"><a href="page_0000.xhtml#ref-g0-3">3.</a>' in bodies[1]
+    for n in (4, 5):
+        assert f'<a id="note-g0-{n}" href="page_0000.xhtml#ref-g0-{n}">{n}.</a>' \
+            in bodies[1]
+    for n in (3, 4, 5):
+        assert f'href="page_0001.xhtml#note-g0-{n}"' in bodies[0]
+    # the break and its space are the run's typesetting: without them the
+    # anchored notes run together on one line
+    assert "<br/>\n  <a id=\"note-g0-4\"" in bodies[1]
+
+
+def test_numbers_that_do_not_climb_are_not_a_run(vtb):
+    """A note may carry a <br/> before a numeral of its own — a date, an
+    address, a line of verse. Only an ascending sequence is a run."""
+    bodies = ["<p>a<sup>1</sup>b<sup>2</sup>c<sup>3</sup></p>",
+              "<h1>NOTES</h1><h2>Introduction</h2>"
+              "<ol><li>1. One.</li><li>2. Two.</li></ol>"
+              "<p>3. Written at:<br/>14. Rue de la Paix<br/>2. Floor</p>"]
+    _, groups = vtb.parse_notes_section(bodies)
+    assert [n for _, n, _ in groups[0]] == [1, 2, 3]
+
+
+def test_a_run_is_taken_whole_or_not_at_all(vtb):
+    """Half a run ends its group early, which is the failure this repairs."""
+    bodies = ["<p>a<sup>1</sup></p>",
+              "<h1>NOTES</h1><h2>Introduction</h2>"
+              "<p>1. One.<br/>2. Two.<br/>2. Two again.<br/>4. Four.</p>"]
+    _, groups = vtb.parse_notes_section(bodies)
+    assert [n for _, n, _ in groups[0]] == [1]
+
+
+def test_a_br_run_inside_running_prose_is_never_examined(vtb):
+    """The paragraph must already be a note entry, so prose that happens to
+    break before a numeral is not a run."""
+    bodies = ["<p>a<sup>1</sup>b<sup>2</sup></p>",
+              "<h1>NOTES</h1><h2>Introduction</h2>"
+              "<ol><li>1. One.</li><li>2. Two.</li></ol>"
+              "<p>The vote stood as follows:<br/>3. For<br/>4. Against</p>"]
+    _, groups = vtb.parse_notes_section(bodies)
+    assert [n for _, n, _ in groups[0]] == [1, 2]
+
+
+def test_a_br_run_at_a_chapter_tail_keeps_its_own_group(vtb):
+    """The shape that lost the links: a chapter's notes end in a <br/> run,
+    the next chapter's head follows in the same page, and its notes restart."""
+    bodies = ["<p>" + "".join(f"x<sup>{n}</sup>" for n in range(1, 5)) + "</p>",
+              "<p>y<sup>1</sup>y<sup>2</sup></p>",
+              "<h1>NOTES</h1><h2>Introduction</h2><ol>" + _run(1, 1) + "</ol>"
+              + _br_run(2, 3)
+              + "<h2>CHAPTER ONE</h2><ol>" + _run(1, 2) + "</ol>"]
+    _, groups = vtb.parse_notes_section(bodies)
+    assert [[n for _, n, _ in g] for g in groups] == [[1, 2, 3, 4], [1, 2]]
+    stats = vtb.link_notes(bodies, set())
+    assert stats["linked"] == 6 and not stats["misaligned"]
