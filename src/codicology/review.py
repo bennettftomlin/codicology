@@ -38,7 +38,7 @@ import re
 import subprocess
 import tempfile
 
-from .adjudicate import _is_word, fold_word
+from .adjudicate import _is_word, epub_page_texts, fold_text, fold_word
 
 # battery v2, 2,591 truth-scored disputes — shown on the rung chips so the
 # reviewer knows how much each verdict is worth
@@ -156,12 +156,8 @@ def crop_data_uris(report, dpi=200, ctx_px=240, base_dir=None) -> dict:
     occs = assign_occurrences(report["disputes"])
     for idx, d in enumerate(report["disputes"]):
         by_page[d.get("pdf_page", d["page"])].append((idx, d, occs[idx]))
-    pdf = report.get("pdf") or ""
-    for cand in ([pdf] + ([os.path.join(base_dir, pdf)] if base_dir else [])):
-        if cand and os.path.exists(cand):
-            pdf = cand
-            break
-    else:
+    pdf = _beside(report.get("pdf"), base_dir)
+    if not pdf:
         print(f"  [!] source PDF not found ({report.get('pdf')!r}) — "
               f"sheet renders without ink crops")
         return {}
@@ -201,18 +197,29 @@ def crop_data_uris(report, dpi=200, ctx_px=240, base_dir=None) -> dict:
     return uris
 
 
+def _beside(path, base_dir=None) -> "str | None":
+    """A book file the report names, as recorded or beside the report.
+
+    Reports record the book's path relative to where the build ran; the
+    sheet renders from wherever the report now sits. Files only: an empty
+    name joined to the base directory IS the directory, and that once
+    reached pypdfium2 as a document."""
+    if not path:
+        return None
+    for cand in ([path] + ([os.path.join(base_dir, path)] if base_dir else [])):
+        if os.path.isfile(cand):
+            return cand
+    return None
+
+
 def _run_crops(report, dpi=200, ctx_px=120, base_dir=None) -> dict:
     """Ink crops for the surya-only runs, keyed (page, run-index)."""
     import pypdfium2 as pdfium
     rows = report.get("surya_only") or []
     if not rows:
         return {}
-    pdf = report.get("pdf") or ""
-    for cand in ([pdf] + ([os.path.join(base_dir, pdf)] if base_dir else [])):
-        if cand and os.path.exists(cand):
-            pdf = cand
-            break
-    else:
+    pdf = _beside(report.get("pdf"), base_dir)
+    if not pdf:
         return {}
     doc = pdfium.PdfDocument(pdf)
     uris = {}
@@ -246,11 +253,12 @@ def _run_crops(report, dpi=200, ctx_px=120, base_dir=None) -> dict:
     return uris
 
 
-def _surya_only_html(report, run_crops) -> list:
+def _surya_only_html(report, run_crops, contexts=None) -> list:
     """The advisory tier: runs ranked no-ink first, then implausibly dense,
     then long. Not stageable — there is no old→new here; a fake run means
     the PAGE needs a human's ruling, not a word swap."""
     rows = report.get("surya_only") or []
+    contexts = contexts or {}
     allr = [(p["page"], ri, r) for p in rows
             for ri, r in enumerate(p["runs"])]
     if not allr:
@@ -311,7 +319,7 @@ def _surya_only_html(report, run_crops) -> list:
             f"p{pno} · {r['n']} words · {' · '.join(chips) or 'no geometry'}"
             f" · <button data-sact='delete'>delete run</button>"
             "<span class='state'></span>"
-            f"<br><i>{html.escape(shown)}</i></div>"
+            f"<br>{_context_html(contexts.get((pno, ri)), shown)}</div>"
             + (f"<img class='ink' src='{crop}'>" if crop else "")
             + "</div>")
     if confirmed:
@@ -321,7 +329,7 @@ def _surya_only_html(report, run_crops) -> list:
             crop = run_crops.get((pno, ri))
             parts.append("<div class='row'><div>"
                          f"p{pno} · {r['n']} words"
-                         f"<br><i>{html.escape(r['text'][:240])}</i></div>"
+                         f"<br>{_context_html(contexts.get((pno, ri)), r['text'][:240])}</div>"
                          + (f"<img class='ink' src='{crop}'>" if crop else "")
                          + "</div>")
         parts.append("</details>")
@@ -477,6 +485,8 @@ h1 { font-size: 1.25rem; } h2 { font-size: 1rem; margin: 1.4rem 0 .4rem; }
 button { font: inherit; font-size: .85em; cursor: pointer; }
 input.own { font-family: Georgia, serif; width: 11rem; margin-left: .5em; }
 .state { color: #7a6a3a; margin-left: .5em; font-size: .85em; }
+.ctx { font-family: Georgia, serif; color: #555; }
+.ctx mark { background: #ffe9a8; color: #222; padding: 0 .1em; }
 details { margin: .3rem 0; } summary { cursor: pointer; color: #555; }
 #bar { position: sticky; top: 0; background: #fafaf7; padding: .5rem 0;
        border-bottom: 2px solid #d8d4c6; display: flex; gap: 1rem;
@@ -485,6 +495,7 @@ details { margin: .3rem 0; } summary { cursor: pointer; color: #555; }
   body, #bar { background: #191919; color: #ddd; }
   .row { border-color: #333; } .row.staged { background: #2c2717; }
   .chip { background: #333; }
+  .ctx { color: #aaa; } .ctx mark { background: #5a4a14; color: #eee; }
   /* The crops stay UNINVERTED in dark mode, deliberately: this sheet's
      whole job is judging ink — faint marks, bleed-through, paper tone —
      and invert(1) hue-rotate(180deg), the usual dark-UI image trick,
@@ -524,8 +535,9 @@ def render_sheet(report, crops=None) -> str:
         "position. When the box seems to mark nothing, read the whole "
         "crop before ruling.</p>",
     ]
-    parts += _surya_only_html(report, _run_crops(
-        report, base_dir=report.get("_base_dir")))
+    parts += _surya_only_html(
+        report, _run_crops(report, base_dir=report.get("_base_dir")),
+        _run_contexts(report, base_dir=report.get("_base_dir")))
     for key in ("catches", "broken", "open"):
         rows = tiers[key]
         if not rows:
@@ -576,6 +588,102 @@ def _apply_to_xhtml(xhtml, old, new, occurrence) -> "str | None":
     return None
 
 
+def _run_pattern(words: list) -> "re.Pattern":
+    """The words of a run, in order, as they may stand in the body.
+
+    A run was recorded as TOKENS — punctuation stripped — while the
+    body keeps its colons, commas and the periods in "U.S.": a legend
+    reading "AA': twin hulls G: main windlass" must match the run
+    "AA' twin hulls G main windlass". Anything non-word may stand
+    between consecutive words; six of nine deletions once went stale on
+    exactly this.
+    …and whole NUMBERS: the tokenizer drops them, so "PATENT No SEPTEMBER"
+    must match "PATENT No. 913, SEPTEMBER 12, 1838" — digits are word
+    characters a punctuation-only gap cannot cross."""
+    gap = r"(?:[^\w]|\b\d+\b)*?"
+    return re.compile(r"(?<![\w])"
+                      + gap.join(re.escape(w) for w in words)
+                      + r"(?![\w])")
+
+
+CONTEXT_WORDS = 20      # words of the shipped text framed on each side
+
+
+def run_context(text: str, run: str, words: int = CONTEXT_WORDS) -> "tuple | None":
+    """(before, run, after): the run as it stands in its own sentence.
+
+    The advisory tier shows words tesseract never saw, and shown bare
+    they all look alike — "never developed a comprehensive" reads as
+    plausible invention, and a reviewer deleted it. Framed in the
+    sentence the book prints it in, it is unmistakably prose. The frame
+    is up to `words` words each side, cut back to the nearest sentence
+    boundary where one falls inside the window and marked with an
+    ellipsis where none does. Located on the tokenizer's own fold of
+    the text, so the recorded words match as recorded; whitespace is
+    flattened for the eye. None when the run is not in the text — the
+    row then shows the bare words, as before.
+    """
+    ws = run.split()
+    if not ws:
+        return None
+    folded = fold_text(text)
+    m = _run_pattern(ws).search(folded)
+    if not m:
+        return None
+    end_of = re.compile(r"[.!?][\"')\]]*\s")
+    pre = folded[:m.start()].split()
+    before = " ".join(pre[-words:])
+    cuts = list(end_of.finditer(before + " "))
+    if cuts:
+        before = before[cuts[-1].end():]
+    elif before and len(pre) > words:
+        before = "…" + before
+    post = folded[m.end():].split()
+    after = " ".join(post[:words])
+    cut = end_of.search(after + " ")
+    if cut:
+        after = after[:cut.end()].rstrip()
+    elif after and len(post) > words:
+        after += "…"
+    hit = " ".join(m.group(0).split())
+    lead = " " if before and folded[m.start() - 1].isspace() else ""
+    trail = " " if after and folded[m.end():m.end() + 1].isspace() else ""
+    return (before + lead if before else "", hit,
+            trail + after if after else "")
+
+
+def _run_contexts(report, base_dir=None) -> dict:
+    """The sentence around each surya-only run, keyed (page, run-index),
+    read from the shipped EPUB the way crops are read from the PDF."""
+    rows = report.get("surya_only") or []
+    epub = _beside(report.get("epub"), base_dir)
+    if not rows or not epub:
+        return {}
+    try:
+        pages = epub_page_texts(epub)
+    except Exception:
+        return {}
+    out = {}
+    for prow in rows:
+        text = pages.get(prow["page"])
+        if not text:
+            continue
+        for ri, r in enumerate(prow["runs"]):
+            ctx = run_context(text, r.get("text") or "")
+            if ctx:
+                out[(prow["page"], ri)] = ctx
+    return out
+
+
+def _context_html(ctx, fallback: str) -> str:
+    """The run marked inside its sentence, or the bare run words."""
+    if not ctx:
+        return f"<i>{html.escape(fallback)}</i>"
+    before, hit, after = ctx
+    return (f"<span class='ctx'>{html.escape(before)}<mark>"
+            f"{html.escape(hit)}</mark>{html.escape(after)}</span>")
+
+
 def _delete_from_xhtml(xhtml, old) -> "str | None":
     """Remove one run of words from a page's text nodes, tags untouched.
 
@@ -604,20 +712,7 @@ def _delete_from_xhtml(xhtml, old) -> "str | None":
         text_parts.append(seg)
         owner.extend((k, off) for off in range(len(seg)))
     flat = "".join(text_parts)
-    # The run was recorded as TOKENS — punctuation stripped — while the
-    # body keeps its colons, commas and the periods in "U.S.": a legend
-    # reading "AA': twin hulls G: main windlass" must match the run
-    # "AA' twin hulls G main windlass". Anything non-word may stand
-    # between consecutive words; six of nine deletions once went stale on
-    # exactly this.
-    # …and whole NUMBERS: the tokenizer drops them, so "PATENT No SEPTEMBER"
-    # must match "PATENT No. 913, SEPTEMBER 12, 1838" — digits are word
-    # characters a punctuation-only gap cannot cross.
-    gap = r"(?:[^\w]|\b\d+\b)*?"
-    pat = re.compile(r"(?<![\w])"
-                     + gap.join(re.escape(w) for w in words)
-                     + r"(?![\w])")
-    m = pat.search(flat)
+    m = _run_pattern(words).search(flat)
     if not m:
         return None
     cuts: dict = {}

@@ -374,3 +374,108 @@ def test_delete_run_steps_over_the_numbers_the_tokens_dropped(vtb):
                                  "old": "SHREVE'S SNAG BOAT PATENT No SEPTEMBER",
                                  "new": ""})
     assert got is not None and "SHREVE" not in got and "Caption." in got
+
+
+# ── the surya-only rows frame each run in the sentence the book prints ──────
+
+_P104 = ("year on the 9-foot project as they had spent altogether on the "
+         "4½-foot channel. \n     Another significant difference between "
+         "this and previous projects was the coordinated planning it "
+         "involved. The 4½-foot channel project never developed a "
+         "comprehensive plan. District personnel took so seriously the "
+         "role of the Corps as “servant of the people” that they habitually "
+         "waited for Congressional direction and appropriations to act.")
+
+
+def test_run_context_frames_the_run_in_its_own_sentence(vtb):
+    """Bare, 'never developed a comprehensive' reads as invention and a
+    reviewer deleted it; in its sentence it is plainly prose. The frame
+    starts at the sentence's start and stops at its end."""
+    from codicology.review import run_context
+    before, hit, after = run_context(_P104, "never developed a comprehensive")
+    assert before == "The 4½-foot channel project "
+    assert hit == "never developed a comprehensive"
+    assert after == " plan."
+
+
+def test_run_context_ellipsis_only_where_the_sentence_runs_on(vtb):
+    from codicology.review import run_context
+    long = " ".join(f"w{k}" for k in range(60))
+    text = f"{long} alpha beta gamma {long}"
+    before, hit, after = run_context(text, "alpha beta gamma", words=5)
+    assert before == "…w55 w56 w57 w58 w59 "
+    assert after == " w0 w1 w2 w3 w4…"
+    # a page that starts inside the window is not clipped
+    before, _, _ = run_context("one two alpha beta gamma end.",
+                               "alpha beta gamma")
+    assert before == "one two "
+
+
+def test_run_context_steps_over_the_punctuation_the_tokens_dropped(vtb):
+    """Runs are tokens; the body keeps 'No. 913,' between them and the
+    marked span must be the body's own characters."""
+    from codicology.review import run_context
+    text = ("Fig. 3 shows it. SHREVE'S SNAG BOAT, PATENT No. 913, "
+            "SEPTEMBER 12, 1838, was granted. The rest follows.")
+    before, hit, after = run_context(text, "PATENT No SEPTEMBER")
+    assert hit == "PATENT No. 913, SEPTEMBER"
+    assert before == "SHREVE'S SNAG BOAT, "
+    assert after == " 12, 1838, was granted."
+
+
+def test_run_context_matches_through_curly_quotes_and_hyphenation(vtb):
+    """The run was recorded from the tokenizer's fold — straight quotes,
+    line-break hyphens joined — while the page keeps its typography."""
+    from codicology.review import run_context
+    text = "He said the district’s com-\nprehensive plan was never adopted."
+    got = run_context(text, "district's comprehensive plan")
+    assert got is not None
+    assert got[1] == "district's comprehensive plan"
+
+
+def test_run_context_is_none_when_the_run_is_not_there(vtb):
+    from codicology.review import run_context
+    assert run_context("some other page entirely", "never developed") is None
+    assert run_context(_P104, "") is None
+
+
+def _so_report(epub, text="never developed a comprehensive", verdict="advisory"):
+    return {"pdf": "", "epub": epub, "name": "book", "disputes": [],
+            "surya_only": [{"page": 104, "pdf_page": 104, "fraction": 0.1,
+                            "words": 3,
+                            "runs": [{"page": 104, "pdf_page": 104, "n": 3,
+                                      "text": text, "verdict": verdict,
+                                      "why": "unlocated", "approx": True,
+                                      "box": None, "ink": None,
+                                      "density": None}]}]}
+
+
+def test_sheet_shows_the_run_marked_inside_its_sentence(vtb, tmp_path):
+    epub = _epub(tmp_path, {104: f"<p>{_P104}</p>"})
+    sheet = review.render_sheet(_so_report(epub))
+    assert ("<span class='ctx'>The 4½-foot channel project <mark>never "
+            "developed a comprehensive</mark> plan.</span>") in sheet
+    # the deletion still targets the run's own words, not the frame
+    assert "data-old='never developed a comprehensive'" in sheet
+
+
+def test_sheet_frames_the_collapsed_confirmed_runs_too(vtb, tmp_path):
+    epub = _epub(tmp_path, {104: f"<p>{_P104}</p>"})
+    sheet = review.render_sheet(_so_report(epub, verdict="confirmed"))
+    assert "<mark>never developed a comprehensive</mark> plan." in sheet
+
+
+def test_sheet_falls_back_to_the_bare_run_without_the_epub(vtb, tmp_path):
+    sheet = review.render_sheet(_so_report(str(tmp_path / "missing.epub")))
+    assert "<i>never developed a comprehensive</i>" in sheet
+    assert "<mark>" not in sheet
+
+
+def test_sheet_finds_the_epub_beside_the_report(vtb, tmp_path):
+    """Reports record the book's path relative to where the build ran;
+    the sheet is rendered from wherever the report sits."""
+    _epub(tmp_path, {104: f"<p>{_P104}</p>"})
+    report = _so_report("book.epub")
+    report["_base_dir"] = str(tmp_path)
+    sheet = review.render_sheet(report)
+    assert "<mark>never developed a comprehensive</mark>" in sheet
