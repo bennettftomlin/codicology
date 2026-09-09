@@ -30,6 +30,7 @@ import queue
 import subprocess
 import sys
 import threading
+import time
 
 # Variables that point into Calibre's own bundle. A foreign process that
 # inherits these looks for libraries, certificates and fonts inside
@@ -186,6 +187,48 @@ def _terminate(proc, grace=15.0):
                 proc.kill()
         except Exception:
             proc.kill()
+
+
+def run_captured(argv, abort=None, timeout=None, env=None, cwd=None,
+                 poll=0.5):
+    """
+    Run a short stage to completion and return (returncode, output).
+
+    Like subprocess.run with capture_output, except that it can be
+    stopped. subprocess.run cannot: a stage already under way when the
+    user pressed Stop went on to its own timeout — up to an hour for the
+    adjudicator — holding the plugin's one-book-at-a-time guard the whole
+    while, which the user experiences as a Calibre that must be restarted
+    before it will read anything again.
+
+    A stop is reported as a returncode of -1 and a line saying so, never
+    as an exception: the conversion has already succeeded by the time
+    these stages run, and a stage must degrade into its own report line
+    rather than into a failed job that throws away a finished EPUB.
+    TimeoutExpired still raises, because the caller already words that
+    case for itself.
+    """
+    proc = subprocess.Popen(
+        [str(a) for a in argv], stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, env=env, cwd=cwd, text=True,
+        errors="replace", **_spawn_kwargs())
+    deadline = None if timeout is None else time.monotonic() + timeout
+    while True:
+        try:
+            # Retrying communicate() after a timeout is explicitly
+            # supported, and it is what keeps both pipes drained: a stage
+            # that fills one while we poll the other would deadlock.
+            out, err = proc.communicate(timeout=poll)
+            return proc.returncode, ((out or "") + (err or "")).strip()
+        except subprocess.TimeoutExpired:
+            pass
+        if abort is not None and abort.is_set():
+            _terminate(proc)
+            return -1, ("stopped with the job; the EPUB itself is "
+                        "already built and unaffected")
+        if deadline is not None and time.monotonic() > deadline:
+            _terminate(proc)
+            raise subprocess.TimeoutExpired(argv, timeout)
 
 
 def _pump(stream, name, q):

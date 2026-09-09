@@ -25,18 +25,24 @@ LABELS = {
 }
 
 
-def _stage(out, key, argv, put, log, progress_at, label, timeout):
+def _stage(out, key, argv, put, log, progress_at, label, timeout,
+           abort=None):
     """One post-conversion stage, contained: the conversion has already
     succeeded by the time these run, and a stage that times out or dies
     must degrade into its own report line — never into a failed job that
-    throws away a finished EPUB."""
+    throws away a finished EPUB. A stop is one more way for a stage not
+    to finish, and is reported the same way.
+
+    Stoppable while it runs, not merely before it starts: these stages are
+    the long ones — an hour's ceiling on the adjudicator — and one already
+    under way when the user pressed Stop used to hold the plugin's
+    one-book-at-a-time guard until its own timeout expired."""
+    if abort is not None and abort.is_set():
+        return
     put(progress_at, label)
     try:
-        r = subprocess.run([str(a) for a in argv],
-                           capture_output=True, text=True,
-                           env=runner.child_env(), timeout=timeout)
-        text = ((r.stdout or "") + (r.stderr or "")).strip()
-        rc = r.returncode
+        rc, text = runner.run_captured(argv, abort=abort, timeout=timeout,
+                                       env=runner.child_env())
     except subprocess.TimeoutExpired as exc:
         text = (f"did not finish within {timeout}s and was stopped; "
                 f"the book itself is unaffected")
@@ -114,24 +120,23 @@ def convert_worker(argv, verify_argv, adjudicate_argv, review_argv,
         # 1 is "LOOK AT THIS", 2 is verify itself crashing. Anything else
         # means it could not run.
         _stage(out, "verify", verify_argv, put, log,
-               0.97, "Checking the EPUB for holes", 600)
+               0.97, "Checking the EPUB for holes", 600, abort)
 
-    if adjudicate_argv and not (abort is not None and abort.is_set()):
+    if adjudicate_argv:
         # Slow on purpose: it re-reads the whole book with the witness
         # engines. The record is why — every word the readers disagreed on,
         # and which rule settled it — and it never changes the book.
         _stage(out, "adjudicate", adjudicate_argv, put, log,
                0.98, "Adjudicating: re-reading with the witness engines",
-               3600)
+               3600, abort)
 
     if (review_argv and out["adjudicate"] is not None
-            and out["adjudicate"]["rc"] == 0
-            and not (abort is not None and abort.is_set())):
+            and out["adjudicate"]["rc"] == 0):
         # The record, rendered for a human's eyes: ink crops beside every
         # disputed word. Geometry was recorded during adjudication, so
         # this is mostly page rendering — minutes, not a re-read.
         _stage(out, "review", review_argv, put, log,
-               0.99, "Rendering the review sheet", 1800)
+               0.99, "Rendering the review sheet", 1800, abort)
 
     put(1.0, "Done")
     return out

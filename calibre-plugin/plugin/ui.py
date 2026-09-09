@@ -145,11 +145,23 @@ class CodicologyOCRAction(InterfaceAction):
         # — which is indistinguishable from a blank leaf until a whole
         # book has been read wrong.
         if getattr(self, '_running', None):
+            # A stopped job holds the guard until its child tree is down,
+            # which is seconds, not forever — but "still being read" would
+            # be a lie about a job the user has already stopped, and the
+            # last thing they need is to doubt that Stop worked.
+            job = getattr(self, '_job', None)
+            stopping = job is not None and job.killed
             return error_dialog(
-                self.gui, 'A conversion is already running',
-                f'"{self._running}" is still being read. Reading a book '
-                'uses the whole inference server, so they go one at a '
-                'time — wait for it to finish, then start this one.',
+                self.gui,
+                'Still stopping' if stopping
+                else 'A conversion is already running',
+                (f'"{self._running}" is still winding down — the pages it '
+                 'had open are being closed and the inference server '
+                 'released. Give it a few seconds and start this one.')
+                if stopping else
+                (f'"{self._running}" is still being read. Reading a book '
+                 'uses the whole inference server, so they go one at a '
+                 'time — wait for it to finish, then start this one.'),
                 show=True)
 
         exe = env.resolve_codicology()
@@ -235,14 +247,39 @@ class CodicologyOCRAction(InterfaceAction):
         job = ThreadedJob(
             'codicology_ocr',
             f'OCR PDF — {title}',
-            convert_worker,
+            self._work,
             [argv, verify_argv, adjudicate_argv, review_argv,
              book_id, out.name, title], {},
             self.Dispatcher(self.finished))
+        self._job = job
         self.gui.job_manager.run_threaded_job(job)
         self.gui.status_bar.show_message(
             f'Codicology: reading "{title}". Progress is in the jobs '
             'list, bottom right.', 5000)
+
+    def _work(self, *args, **kwargs):
+        """convert_worker, with the guard released when the work stops.
+
+        Calibre does not call a ThreadedJob's completion callback when the
+        user stops the job — its own docstring says so — and since kill()
+        also drops the job's log, the worker thread dies on an assertion
+        inside start_work before it could reach the callback anyway. So
+        finished() never ran after a Stop, self._running kept the title of
+        a job that was already dead, and every later conversion was
+        refused with "a conversion is already running" for the life of the
+        session: the user had to quit Calibre and reopen it.
+
+        Releasing it here instead, in the worker thread, is what makes the
+        release honest as well as certain. The guard exists to keep two
+        conversions off one inference server, and this runs only once the
+        work has actually stopped — runner.run does not return until the
+        child process tree is gone, and a stopped stage takes its own
+        child down before returning too.
+        """
+        try:
+            return convert_worker(*args, **kwargs)
+        finally:
+            self._running = None
 
     def _selected_book(self):
         rows = self.gui.library_view.selectionModel().selectedRows()

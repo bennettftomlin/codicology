@@ -8,12 +8,13 @@ python3 calibre-plugin/build.py --install
 /Applications/calibre.app/Contents/MacOS/calibre-debug -e calibre-plugin/spike/check_plugin.py
 ```
 
-`check_runner.py` — 16 checks, no plugin needed: environment scrubbing, a
+`check_runner.py` — 25 checks, no plugin needed: environment scrubbing, a
 foreign interpreter running under Calibre's 3.14, progress streaming during
 the run, cancellation killing the whole process tree, failure surfacing the
-child's message.
+child's message, and a post-conversion stage stopping on demand instead of
+running to its own timeout.
 
-`check_plugin.py` — 21 checks against the installed ZIP: registration,
+`check_plugin.py` — checks against the installed ZIP: registration,
 imports, resources, the worker driven with Calibre's own Queue/Event/Log
 against the protocol stub — and, when this machine has a codicology
 environment, **a real conversion end to end through the plugin's worker**:
@@ -44,6 +45,12 @@ and the bar. Once:
    look.
 6. Cancel test: start another conversion and kill the job. Status bar says
    cancelled; `pgrep -fl llama-server` finds nothing left behind.
+7. Stop-then-start test: kill a running conversion, then immediately start
+   another one. Within a few seconds it must start. A dialog headed
+   **Still stopping** is correct while the child tree is coming down; a
+   dialog headed **A conversion is already running** naming the book you
+   just stopped is the wedge returning, and it used to persist until
+   Calibre was quit and reopened.
 
 A first read of a real book on CPU is genuinely long — hours for hundreds
 of pages. The spike book (2 pages, cached) finishes in under a minute and
@@ -80,3 +87,22 @@ seconds (the SIGKILL grace) — the UI should not promise instant.
 **A plugin cannot execute files inside its ZIP**, and `get_icons` is a
 name injected by Calibre's loader, not an import — the reason runner.py
 imports nothing from calibre and stays testable alone.
+
+**Stopping a job does not call the completion callback.** `ThreadedJob`
+says so in its own docstring — "it is not called if the user kills the
+job" — and `kill()` compounds it: `_cleanup()` sets `self.log = None`, so
+when the worker thread finally raises `Aborted`, `start_work`'s handler
+runs `assert log is not None` and the thread dies there, before the
+callback on any path. Anything the plugin releases only in `finished()` is
+therefore held for the life of the session. The one-book-at-a-time guard
+was released there, so one Stop made every later conversion impossible
+until Calibre restarted. It is released in the worker thread's `finally`
+now, which is also the honest moment: `runner.run` has by then taken the
+whole child tree down, so the inference server really is free.
+
+**`subprocess.run` cannot be stopped.** The post-conversion stages —
+verify, adjudicate, review — used it, so a stage already under way when
+Stop was pressed ran on to its own ceiling, an hour for the adjudicator,
+holding the guard the whole time. `runner.run_captured` polls the abort
+while it waits and kills the stage's process group, and a stopped stage
+degrades to its own report line rather than failing the job.

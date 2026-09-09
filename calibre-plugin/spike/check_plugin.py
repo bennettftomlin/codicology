@@ -14,6 +14,7 @@ import queue
 import subprocess
 import sys
 import threading
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STUB = os.path.join(HERE, "stub_codicology.py")
@@ -108,7 +109,7 @@ def main():
     out = convert_worker(
         [py, STUB, "convert", "--progress-json", "--epub",
          "/tmp/check-plugin.epub", "--pages", "12", "--delay", "0.03"],
-        None, 42, "/tmp/check-plugin.epub", "Stub Book",
+        None, None, None, 42, "/tmp/check-plugin.epub", "Stub Book",
         abort=threading.Event(), log=log, notifications=notes)
     sent = []
     while not notes.empty():
@@ -129,7 +130,7 @@ def main():
     try:
         convert_worker([py, STUB, "convert", "--progress-json",
                         "--pages", "400", "--delay", "0.4"],
-                       None, 1, "/tmp/x.epub", "t",
+                       None, None, None, 1, "/tmp/x.epub", "t",
                        abort=abort, log=Log(), notifications=queue.Queue())
         check("cancelling raises Aborted", False, "returned normally")
     except Exception as exc:
@@ -186,7 +187,7 @@ def main():
                 [exe, "convert", "--pages-from", pdf, "--epub", epub,
                  "--ocr-cache", cache, "--title", "Spike Book",
                  "--progress-json"],
-                [exe, "verify", epub, pdf],
+                [exe, "verify", epub, pdf], None, None,
                 7, epub, "Spike Book",
                 abort=threading.Event(), log=log, notifications=notes)
             check("a real conversion ran through the plugin's worker",
@@ -207,6 +208,43 @@ def main():
                   "OCR backend" in log.plain_text
                   and "VERDICT" in log.plain_text,
                   f"{len(log.plain_text)} chars")
+
+    # ── stopping a job must not wedge the plugin ───────────────────────
+    #
+    # Calibre never calls a ThreadedJob's completion callback when the user
+    # stops the job — its own docstring says so, and kill() also drops the
+    # job's log, so the worker thread dies on an assertion inside
+    # start_work before the callback could be reached either way. The
+    # plugin cleared its one-book-at-a-time guard only in that callback,
+    # so a stopped job held the guard for the rest of the session and
+    # every later conversion was refused until Calibre was restarted.
+    #
+    # Driven here against the real ThreadedJob and its real kill(), with a
+    # bare action object: no GUI, no library, no toolbar.
+    print("\nStopping a job releases the guard")
+    from calibre.gui2.threaded_jobs import ThreadedJob
+
+    action = A.__new__(A)
+    action._running = "Stub Book"
+    job = ThreadedJob(
+        "codicology_ocr", "OCR PDF — Stub Book", action._work,
+        [[py, STUB, "convert", "--progress-json", "--pages", "400",
+          "--delay", "0.4"], None, None, None, 5, "/tmp/x.epub",
+         "Stub Book"], {}, lambda j: None)
+    action._job = job
+    worker = threading.Thread(target=job.start_work, daemon=True)
+    worker.start()
+    time.sleep(1.0)
+    check("the guard is held while the job runs",
+          action._running == "Stub Book", repr(action._running))
+
+    job.kill()
+    worker.join(timeout=45)
+    check("the stopped job's worker thread ended", not worker.is_alive())
+    check("stopping releases the guard, so the next book can start",
+          action._running is None,
+          repr(action._running) + " — this is the wedge that needed a restart")
+    check("and the job is marked stopped, not merely failed", job.killed)
 
     bad = [n for n, ok, _ in results if not ok]
     print(f"\n{len(results) - len(bad)}/{len(results)} passed")

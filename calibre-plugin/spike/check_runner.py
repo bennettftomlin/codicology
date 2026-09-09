@@ -10,7 +10,9 @@ It needs no GUI and no library. Risk 2 — ThreadedJob progress plumbing —
 needs a click, and check_plugin.md says where to click.
 """
 import os
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -169,6 +171,61 @@ def main():
         check("a non-zero exit raises Failed", True)
         check("the child's own message survives",
               "on purpose" in exc.message, repr(exc.message))
+
+    # ── 6. the post-conversion stages can be stopped ───────────────────
+    #
+    # These run after the conversion has succeeded, and the longest of them
+    # gives the adjudicator an hour. subprocess.run cannot be interrupted,
+    # so a stage under way when the user pressed Stop went on to its own
+    # timeout while the plugin still counted the book as being read — a
+    # Calibre that refuses every later conversion until it is restarted.
+    print("\n6. Stopping a post-conversion stage")
+    rc, text = runner.run_captured([py, "-c", "print('out');"
+                                    " import sys; sys.stderr.write('err')"])
+    check("a stage returns its code and both streams",
+          rc == 0 and "out" in text and "err" in text, repr(text))
+
+    rc, _ = runner.run_captured([py, "-c", "import sys; sys.exit(3)"])
+    check("a stage's own exit status is reported", rc == 3, str(rc))
+
+    pidfile = os.path.join(tempfile.gettempdir(), f"stage-{os.getpid()}.pid")
+    grandchild = (
+        "import subprocess, sys, time\n"
+        "p = subprocess.Popen([sys.executable, '-c',"
+        " 'import time; time.sleep(300)'])\n"
+        f"open({pidfile!r}, 'w').write(str(p.pid))\n"
+        "time.sleep(300)\n")
+    abort = threading.Event()
+    threading.Timer(1.0, abort.set).start()
+    t0 = time.time()
+    rc, text = runner.run_captured([py, "-c", grandchild],
+                                   abort=abort, timeout=300)
+    took = time.time() - t0
+    check("stopping a stage returns -1 rather than raising", rc == -1, str(rc))
+    check("it says so in words the completion dialog can show",
+          "stopped with the job" in text, repr(text))
+    check("it returns at the stop, not at the stage's timeout",
+          took < 25, f"{took:.1f}s of a 300s ceiling")
+    time.sleep(0.6)
+    try:
+        gpid = int(open(pidfile).read())
+        check("a stopped stage takes its whole tree with it", not alive(gpid),
+              f"pid {gpid}")
+        if alive(gpid):
+            os.kill(gpid, 9)
+        os.remove(pidfile)
+    except OSError as exc:
+        check("a stopped stage takes its whole tree with it", False, str(exc))
+
+    t0 = time.time()
+    try:
+        runner.run_captured([py, "-c", "import time; time.sleep(60)"],
+                            timeout=1)
+        check("a stage that overruns still raises TimeoutExpired", False,
+              "it returned normally")
+    except subprocess.TimeoutExpired:
+        check("a stage that overruns still raises TimeoutExpired", True,
+              f"{time.time() - t0:.1f}s")
 
     bad = [n for n, ok, _ in results if not ok]
     print(f"\n{len(results) - len(bad)}/{len(results)} passed")
