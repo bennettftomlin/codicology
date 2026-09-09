@@ -4346,7 +4346,31 @@ BODY_MARKER = re.compile(r"<sup>\s*(\d{1,3})\s*</sup>")
 # section "FOOTNOTES", and the bare word blocked all of them — the linker,
 # the group walk, and the rank probe all gate on this one pattern. The word
 # must still be the whole heading.
+#
 NOTES_HEAD = re.compile(r"<h\d[^>]*>\s*(?:FOOT|END)?NOTES?\s*</h\d>", re.I)
+# A publisher may call the same thing by the other name: one book heads its
+# endnotes "References" and then groups them PREFACE, INTRODUCTION, CHAPTER
+# 1…, numbered from 1 in each — a notes section in every respect but the
+# word. Nothing was found, so nothing was grouped, and all 810 of its
+# markers stayed plain.
+#
+# It is a SEPARATE pattern because the word carries different weight in the
+# two questions asked of it. "Where does the back-of-book section start?"
+# may read References; "how many notes sections does this book have?" may
+# not, because a repeated NOTES head means chapter endnotes while a
+# repeated REFERENCES head is nearly always the running head over one
+# back-of-book section. Answering the second with this pattern sent that
+# same book down the chapter-endnotes path, where position alone scopes
+# the markers: 190 links, and chapters five, six and eight all pointed at
+# the preface's only citation.
+#
+# The word decides nothing beyond the start, which is what makes it safe
+# there: an author-date bibliography under the same heading opens no group,
+# because a group needs a chapter head, and its entries carry no numbers,
+# so the ungrouped fallback refuses it for want of an ascending run. A
+# section has to be shaped like notes to be read as notes.
+NOTES_SECTION_HEAD = re.compile(
+    r"<h\d[^>]*>\s*(?:(?:FOOT|END)?NOTES?|REFERENCES?)\s*</h\d>", re.I)
 # The names a notes section gives its groups. Chapter forms, spelled out or
 # numbered — and the sections a book's front and back matter use, because a
 # book that annotates its introduction gives those notes a group of their
@@ -4378,7 +4402,7 @@ def parse_notes_section(bodies: list[str]) -> tuple[int, list[list[tuple[int, in
     tells a citation apart from a marker in running prose, which never leads
     its paragraph.
     """
-    start = next((i for i, b in enumerate(bodies) if NOTES_HEAD.search(b)), None)
+    start = next((i for i, b in enumerate(bodies) if NOTES_SECTION_HEAD.search(b)), None)
     if start is None:
         return -1, []
     groups: list[list[tuple[int, int, int]]] = []
@@ -5413,7 +5437,7 @@ def normalize_note_heads(bodies: list[str]) -> int:
     Only pages inside the notes section that carry note entries are touched,
     and only standalone bold blocks; bold inside a sentence stays emphasis.
     """
-    start = next((i for i, b in enumerate(bodies) if NOTES_HEAD.search(b)), None)
+    start = next((i for i, b in enumerate(bodies) if NOTES_SECTION_HEAD.search(b)), None)
     if start is None:
         return 0
     changed = 0
@@ -5602,6 +5626,75 @@ def link_footnotes(bodies: list[str], allow_numbered: bool = False) -> dict:
 
         bodies[pi] = above + rule + below
     return stats
+
+
+def _fit_groups(body_groups, note_groups):
+    """The one way these two lists of groups line up, or None.
+
+    The counts differ when one side sees a chapter boundary the other
+    cannot. A chapter whose notes are a single citation is the case that
+    surfaced it: the notes side has an explicit head to open the group,
+    while the body side has only the numbers, and it needs an ascending
+    run before a return to 1 counts as a new chapter — otherwise an
+    author re-citing note 2 would open one. So that chapter's lone marker
+    is absorbed by its neighbour and the body comes up one group short.
+
+    Trimming the tail, which is all this used to do, assumes the missing
+    group is at the END. Here it was at the FRONT — a preface with one
+    note — and trimming shifted all nine pairs, which the agreement test
+    then caught and refused: 810 markers left plain on a book whose notes
+    were fully parsed and sitting right there.
+
+    Every contiguous fit is offered to that same test instead. The one
+    the code already tried is offered FIRST and kept if it passes, so no
+    book that pairs today can stop pairing; the others are consulted only
+    after it fails, and one is taken only if it is the only one that
+    passes. Two candidates agreeing means the numbers cannot separate
+    them, and a confident link into the wrong chapter's citations is the
+    one outcome worse than no link at all.
+    """
+    k = min(len(body_groups), len(note_groups))
+    body_longer = len(body_groups) > len(note_groups)
+    longer = body_groups if body_longer else note_groups
+
+    def paired(off):
+        win = longer[off:off + k]
+        if body_longer:
+            return win, note_groups
+        # The notes side keeps a group this side lost, and the markers it
+        # lost sit at the front of the first group that remains — as a
+        # repeated 1, since the absorbed chapter's numbering started over
+        # there too. Pairing them anyway pointed a preface's only
+        # citation at the introduction's first source. They are left
+        # plain instead: those notes have no marker this code can name.
+        bg = list(body_groups)
+        if off and bg:
+            bg[0] = bg[0][_leading_repeats(bg[0]):]
+        return bg, win
+
+    if _paired_groups_agree(*paired(0), min_judged=2):
+        return paired(0)
+    rest = [paired(off) for off in range(1, len(longer) - k + 1)
+            if _paired_groups_agree(*paired(off), min_judged=2)]
+    return rest[0] if len(rest) == 1 else None
+
+
+def _leading_repeats(group) -> int:
+    """Where a body group's own numbering starts, past any absorbed one.
+
+    A chapter whose notes are a single citation gives the body splitter
+    nothing to split on — it needs an ascending run before a return to 1
+    counts as a new chapter, or an author re-citing note 2 would open one
+    — so that marker is absorbed by the next chapter and shows up as a
+    repeated 1 at the front.
+
+    Only a LEADING run of 1s counts. A 1 further along is the author
+    citing note 1 again, and that marker does belong to this chapter.
+    """
+    k = 0
+    while k + 1 < len(group) and group[k][1] == 1 and group[k + 1][1] == 1:
+        k += 1
+    return k
 
 
 def _paired_groups_agree(body_groups, note_groups, min_judged: int = 4) -> bool:
@@ -6399,14 +6492,14 @@ def link_notes(bodies: list[str], dropped: set[int],
         body_groups = [g for g in find_body_marker_groups(bodies, notes_start)
                        if len(g) >= 2]
     if len(body_groups) != len(note_groups):
-        # order-based pairing has no anchor if the counts disagree; pair the
-        # longest matching prefix only when the tail is what differs
-        k = min(len(body_groups), len(note_groups))
         if abs(len(body_groups) - len(note_groups)) > 2:
             stats["misaligned"] = True
             return stats
-        body_groups, note_groups = body_groups[:k], note_groups[:k]
         stats["misaligned"] = True
+        fit = _fit_groups(body_groups, note_groups)
+        if fit is None:
+            return stats
+        body_groups, note_groups = fit
 
     # Pairing by position assumes any group missing from one side is missing
     # from the END. When it is missing from the FRONT — a notes section whose
@@ -7455,7 +7548,12 @@ def build_epub(
         # footnotes with numbered endnotes, gets both linkers each taking
         # only what is theirs.
         n_note_heads = sum(1 for b in bodies if NOTES_HEAD.search(b))
-        fstats = link_footnotes(bodies, allow_numbered=(n_note_heads == 0))
+        # The gate is "does this book have a notes section", which a
+        # References-headed one does; the count above is "does it have one
+        # per chapter", which the same heading must not be allowed to say.
+        has_notes = bool(n_note_heads) or any(NOTES_SECTION_HEAD.search(b)
+                                              for b in bodies)
+        fstats = link_footnotes(bodies, allow_numbered=not has_notes)
         if fstats["linked"] or fstats["skipped"]:
             print(f"    footnotes: {fstats['linked']} same-page notes linked"
                   + (f" ({fstats['numbered']} numbered)"

@@ -123,9 +123,17 @@ def test_too_few_groups_to_judge_defers(vtb):
     assert vtb._paired_groups_agree(body, notes, min_judged=2) is False
 
 
-def test_a_shifted_book_links_nothing_rather_than_everything_wrongly(vtb):
+def test_a_shifted_book_is_never_bound_across_the_shift(vtb):
     """End to end: three chapters of prose, and a notes section whose first
-    group head the parser cannot see. Refusing is the only right answer."""
+    group head the parser cannot see.
+
+    Pairing from the front — the only fit this used to try — would bind
+    chapter one's markers to chapter two's citations and report a full set
+    of links. That must never happen. Pairing from the second body group
+    is the true alignment, and the numbers say so: it is the only fit whose
+    chapter tops meet. The chapter whose notes were never parsed keeps its
+    markers plain, which is the honest report of what was lost.
+    """
     bodies = [
         "<p>Intro.<sup>1</sup> More.<sup>2</sup> Again.<sup>3</sup></p>",
         "<p>Ch1.<sup>1</sup> b.<sup>2</sup> c.<sup>3</sup> d.<sup>4</sup> "
@@ -139,8 +147,65 @@ def test_a_shifted_book_links_nothing_rather_than_everything_wrongly(vtb):
         "<h2>Chapter Two</h2><ol><li>1. x</li><li>2. y</li><li>3. z</li></ol>",
     ]
     stats = vtb.link_notes(bodies, dropped=set())
-    assert stats["linked"] == 0, "markers were bound across a shifted pairing"
     assert stats["misaligned"] is True
+    assert "noteref" not in bodies[0], "a chapter with no parsed notes was bound"
+    # chapter one's eight markers reach chapter one's notes, a…h
+    assert bodies[1].count("noteref") == 8
+    assert 'href="page_0003.xhtml#note-g0-8"' in bodies[1]
+    assert '<li id="note-g0-8"><a href="page_0001.xhtml#ref-g0-8">8.</a> h</li>' \
+        in bodies[3]
+    # and chapter two's three reach x…z, not chapter one's
+    assert 'href="page_0003.xhtml#note-g1-3"' in bodies[2]
+    assert '<li id="note-g1-3"><a href="page_0002.xhtml#ref-g1-3">3.</a> z</li>' \
+        in bodies[3]
+
+
+def test_two_alignments_that_both_fit_are_refused(vtb):
+    """A fit is taken only when it is the ONLY one. Chapters of the same
+    length give the numbers nothing to choose by, and a confident link into
+    the wrong chapter's citations is worse than no link at all."""
+    def chap(name, letter, count):
+        return (f"<h2>{name}</h2><ol>"
+                + "".join(f"<li>{k}. {letter}{k}</li>"
+                          for k in range(1, count + 1)) + "</ol>")
+    prose = "<p>c." + "".join(f"<sup>{k}</sup>" for k in range(1, 6)) + "</p>"
+    bodies = [prose, prose,
+              "<h1>NOTES</h1>" + chap("Chapter One", "a", 9)
+              + chap("Chapter Two", "b", 5) + chap("Chapter Three", "c", 5)
+              + chap("Chapter Four", "d", 5)]
+    stats = vtb.link_notes(bodies, dropped=set())
+    assert stats["linked"] == 0 and stats["misaligned"] is True
+    assert "noteref" not in bodies[0] and "noteref" not in bodies[1]
+
+
+def test_a_chapter_whose_notes_are_one_citation_keeps_its_neighbour_honest(vtb):
+    """A preface with a single note gives the body splitter nothing to split
+    on — it needs an ascending run before a return to 1 is a new chapter, or
+    an author re-citing note 2 would open one — so its marker is absorbed
+    into the next chapter and shows up there as a repeated 1. Bound anyway,
+    it pointed at the next chapter's first source. It is left plain now, and
+    the chapter that absorbed it still links from its own note 1."""
+    def run(letter, count):
+        return "<ol>" + "".join(f"<li>{k}. {letter}{k}</li>"
+                                for k in range(1, count + 1)) + "</ol>"
+    def prose(count):
+        return "<p>x" + "".join(f"<sup>{k}</sup>" for k in range(1, count + 1)) + "</p>"
+    bodies = [
+        prose(1), prose(4), prose(6), prose(5),
+        "<h1>NOTES</h1><h2>Preface</h2><ol><li>1. only</li></ol>"
+        + "<h2>Introduction</h2>" + run("a", 4)
+        + "<h2>Chapter One</h2>" + run("c", 6)
+        + "<h2>Chapter Two</h2>" + run("d", 5),
+    ]
+    stats = vtb.link_notes(bodies, dropped=set())
+    assert "noteref" not in bodies[0], "the preface marker took its neighbour's note"
+    assert stats["linked"] == 15
+    # the introduction's four reach a1…a4, not the preface's only note
+    assert bodies[1].count("noteref") == 4
+    assert '<li id="note-g0-1"><a href="page_0001.xhtml#ref-g0-1">1.</a> a1</li>' \
+        in bodies[4]
+    assert '<li id="note-g2-5"><a href="page_0003.xhtml#ref-g2-5">5.</a> d5</li>' \
+        in bodies[4]
 
 
 # ── books that do not group their notes at all ───────────────────────────────
