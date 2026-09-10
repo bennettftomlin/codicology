@@ -7599,12 +7599,15 @@ def build_epub(
         # footnotes with numbered endnotes, gets both linkers each taking
         # only what is theirs.
         n_note_heads = sum(1 for b in bodies if NOTES_HEAD.search(b))
-        # The gate is "does this book have a notes section", which a
-        # References-headed one does; the count above is "does it have one
-        # per chapter", which the same heading must not be allowed to say.
-        has_notes = bool(n_note_heads) or any(NOTES_SECTION_HEAD.search(b)
-                                              for b in bodies)
-        fstats = link_footnotes(bodies, allow_numbered=not has_notes)
+        # Only the strict heads gate the numbered footnote pass. Widening it
+        # to READ References as well cost three books every same-page link
+        # they had — 35, 14 and 4 — because a book can print numbered notes
+        # at the foot of the page AND close with a References bibliography,
+        # and the wider word calls that a notes section. The measurement
+        # that let it through was taken against already-linked copies, where
+        # the pass had nothing left to claim and returned zero either way;
+        # the shelf rebuild is what caught it.
+        fstats = link_footnotes(bodies, allow_numbered=(n_note_heads == 0))
         if fstats["linked"] or fstats["skipped"]:
             print(f"    footnotes: {fstats['linked']} same-page notes linked"
                   + (f" ({fstats['numbered']} numbered)"
