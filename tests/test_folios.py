@@ -497,3 +497,91 @@ def test_a_value_repeated_across_many_pages_is_a_designation_not_a_folio(vtb):
     got = vtb.folios_from_furniture(furniture)
     assert all(not f.confident for f in got[:9]), "the constant must fall"
     assert [f.number for f in got[9:] if f.confident] == [7, 8, 8, 9]
+
+
+# ── front matter, which paginates in Roman ──────────────────────────────────
+#
+# Nothing read them, so 768 front-matter pages across the shelf sat outside
+# their books' page-lists: no anchor on the page a book prints "vii", so a
+# reading system cannot go there and a citation to it cannot land. The nav
+# was never affected — it places entries by title — so this is a page-list
+# gap, not broken navigation.
+#
+# They are carried as i - 1000, which keeps them integers, keeps them in
+# order, and puts them below Arabic 1 where the audit, the gap filler and
+# the resolver all still work by comparison and subtraction.
+
+
+def test_a_roman_folio_is_read_off_a_furniture_line(vtb):
+    """A bare Roman numeral is exactly the shape front matter prints, and the
+    layout pass has already vouched the line is furniture."""
+    assert vtb.folios_from_furniture([["vi"]])[0].number == 6 - 1000
+    assert vtb.folios_from_furniture([["xxiii"]])[0].number == 23 - 1000
+
+
+def test_roman_folios_sort_below_arabic_ones(vtb):
+    """The order the whole book reads in: front matter, then page 1."""
+    assert vtb.folios_from_furniture([["xxiii"]])[0].number < 1
+
+
+def test_words_spelled_from_roman_letters_are_not_folios(vtb):
+    """Roman numerals are letters, so the refusals are the whole defence.
+    Each of these uses only I V X L C and none is a numeral."""
+    for word in ("mix", "dim", "mid", "civic", "dill", "ill", "mill", "did",
+                 "lid", "cd", "md", "iiii", "vx", "ic"):
+        assert vtb.folios_from_furniture([[word]])[0].number is None, word
+
+
+def test_a_designation_is_not_a_folio(vtb):
+    """"Chapter IV" names a chapter; the page it opens is numbered
+    separately, and often not printed at all."""
+    for line in ("Chapter IV", "PART II", "Book XIV", "Volume III"):
+        assert vtb.folios_from_furniture([[line]])[0].number is None, line
+
+
+def test_roman_stops_past_any_front_matter_a_book_has(vtb):
+    """Front matter runs to xcix at the very outside. Beyond that the reader
+    keeps quiet rather than guessing, which costs a page its anchor and
+    never invents one."""
+    assert vtb.folios_from_furniture([["MMXX"]])[0].number is None
+
+
+def test_a_stray_roman_among_arabic_pages_is_distrusted(vtb):
+    """A chapter numbered I, set as furniture, reads as folio i. It cannot
+    join a strictly increasing run of Arabic folios, so it is thrown out and
+    the page it sat on interpolates to the number the printer bound there."""
+    F = vtb.Folio
+    folios = ([F(i, i, "", True) for i in range(40, 44)]
+              + [F(44, 1 - 1000, "I", True)]
+              + [F(i, i, "", True) for i in range(45, 49)])
+    numbers, _refused, distrusted = vtb.fill_folio_gaps(folios)
+    assert distrusted == [44]
+    assert numbers[44] == 44
+
+
+def test_the_turn_to_arabic_one_is_a_restart_not_a_gap(vtb):
+    """Front matter ending at xviii and the body opening at 1 are two
+    numbering series meeting. Subtracting across them says 979 pages are
+    missing; the run is simply not one, and neither filled nor reported."""
+    F = vtb.Folio
+    folios = ([F(i, (i - 4) - 1000, "", True) for i in range(5, 23)]
+              + [F(23, None, "", False)]
+              + [F(i, i - 23, "", True) for i in range(24, 30)])
+    numbers, refused, distrusted = vtb.fill_folio_gaps(folios)
+    assert refused == [] and distrusted == []
+    assert 23 not in numbers, "the blank between the series was invented"
+    assert numbers[22] == 18 - 1000 and numbers[24] == 1
+
+
+def test_a_folio_is_labelled_as_the_page_prints_it(vtb):
+    """The encodings exist so the machinery keeps working on integers, and
+    were never meant to be read. Three manuals shipped a page-list labelled
+    1001 and 2001 for pages printed 1-1 and 2-1."""
+    assert vtb.folio_label(6 - 1000) == "vi"
+    assert vtb.folio_label(23 - 1000) == "xxiii"
+    assert vtb.folio_label(49 - 1000) == "xlix"
+    assert vtb.folio_label(1) == "1"
+    assert vtb.folio_label(255) == "255"
+    assert vtb.folio_label(1001) == "1-1"
+    assert vtb.folio_label(4009) == "4-9"
+    assert vtb.folio_label(100002) == "A-2"

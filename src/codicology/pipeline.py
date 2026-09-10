@@ -2627,6 +2627,39 @@ class Folio(NamedTuple):
     confident: bool
 
 
+# Front matter paginates in Roman, and those pages must sort before Arabic 1
+# while staying integers, because the audit, the gap filler and the resolver
+# all compare and subtract folios. Roman i…xcix is carried as i - 1000, so
+# the whole numbering space reads in order: Roman below zero, then plain
+# Arabic 1…999, then the manual compound forms above.
+ROMAN_FOLIO_BASE = 1000
+_ROMAN_TENS = ["", "x", "xx", "xxx", "xl", "l", "lx", "lxx", "lxxx", "xc"]
+_ROMAN_ONES = ["", "i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix"]
+
+
+def folio_label(n: int) -> str:
+    """A folio as the page prints it, from the integer it is carried as.
+
+    The encodings exist so that every mechanism built on plain folios keeps
+    working, and they were never meant to be read by anyone. They were:
+    three manuals shipped a page-list labelled 1001, 1002, 2001 for pages
+    printed 1-1, 1-2, 2-1, so "go to page 2-1" could not find them and the
+    numbers a reader saw belonged to no page in the book.
+
+    Roman comes back lowercase, which is what front matter prints; a book
+    that sets its front matter in capitals is rendered against its own
+    house style, and nothing but the label is affected.
+    """
+    if n < 0:                                  # front matter, Roman
+        k = n + ROMAN_FOLIO_BASE
+        return _ROMAN_TENS[k // 10] + _ROMAN_ONES[k % 10] if 1 <= k <= 99 else str(n)
+    if n >= 100 * 1000:                        # appendix, "B-14"
+        return f"{chr(ord('A') + n // 1000 - 100)}-{n % 1000}"
+    if n >= 1000:                              # chapter-page, "4-9"
+        return f"{n // 1000}-{n % 1000}"
+    return str(n)
+
+
 def parse_folio(text: str) -> int | None:
     """
     The page number out of a running head, or None if the line is not one.
@@ -3037,6 +3070,18 @@ def folios_from_furniture(page_furniture: list[list[str]]) -> list[Folio]:
                 # opening's foot is often nothing but the number. The context
                 # that makes bare numbers dangerous is exactly what is absent.
                 n, rank = int(t), 0
+            if n is None and _roman_to_int(bare) is not None:
+                # Front matter's own pagination, on the same terms: the whole
+                # furniture line and nothing else. Roman numerals are letters,
+                # so the guards are what keep prose out — _roman_to_int
+                # re-renders what it read and refuses anything that does not
+                # come back identical, which turns away every English word
+                # spelled from the same letters, and it stops at xcix, past
+                # any front matter a book actually has. A stray reading that
+                # survives all that still has to join the strictly increasing
+                # run in fill_folio_gaps, where a Roman numeral sitting among
+                # Arabic pages cannot.
+                n, rank = _roman_to_int(bare) - ROMAN_FOLIO_BASE, 0
             if n is not None and rank < best_rank:
                 number, shown, best_rank = n, t, rank
                 if rank == 0:
@@ -3317,6 +3362,12 @@ def fill_folio_gaps(folios: list[Folio]) -> tuple[dict[int, int], list[tuple]]:
     for lo, hi in zip(sorted(known), sorted(known)[1:]):
         if hi - lo < 2:
             continue                       # adjacent anchors leave no gap
+        if known[hi] // 1000 != known[lo] // 1000:
+            # Front matter giving way to Arabic 1, or a manual's chapter
+            # turning over: the count restarts, so the arithmetic between
+            # these two anchors means nothing and there is no gap to report.
+            # The same test the audit uses to tell a restart from a gap.
+            continue
         if hi - lo != known[hi] - known[lo]:
             refused.append((lo, hi, known[lo], known[hi]))
             continue
@@ -7641,7 +7692,8 @@ def build_epub(
             if i in dropped or i >= len(bodies):
                 continue
             bodies[i] = (f'<span epub:type="pagebreak" role="doc-pagebreak" '
-                         f'id="pgb-{i:04d}" aria-label="{numbers[i]}"></span>'
+                         f'id="pgb-{i:04d}" '
+                         f'aria-label="{folio_label(numbers[i])}"></span>'
                          + bodies[i])
             anchored += 1
             restored += i not in read_at
