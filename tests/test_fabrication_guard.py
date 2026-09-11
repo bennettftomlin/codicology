@@ -613,3 +613,90 @@ def test_a_form_carrying_a_figure_keeps_the_figure(vtb):
     items = [vtb.PageItem(figure=fig, label="Form")]
     out, n = vtb.route_form_blocks(items)
     assert n == 0 and out[0].figure is fig
+
+
+# ── a restore is shipped, never kept ────────────────────────────────────────
+#
+# The reader's server stopped answering partway through two books on one
+# day — at page 12 of one and page 92 of the other — and every page after
+# it was restored from the publisher's own text layer. A layer restore is
+# one paragraph of running text: no headings, no note markers, no
+# reference or index entries, and the running heads left in the body. The
+# empty-read guard already refused to cache a failed page, but a restore
+# is not empty, so it walked past and was stored as though it were a
+# reading. No rebuild could recover, because the rebuild replayed it.
+
+
+class _DeadServer:
+    """A backend whose inference stopped answering: blocks come back
+    flagged, so every page reads empty, exactly as surya reports it."""
+    name = "surya"
+
+    def run_items(self, images):
+        return [[] for _ in images]
+
+
+def _native_page(tmp_path, name, text):
+    """A born-digital page: an image, its layer, and the native marker."""
+    import numpy as np
+    from PIL import Image
+    path = str(tmp_path / name)
+    # inked paper: the restore only applies to a page that HAS something on
+    # it, so a flat grey rectangle would skip the branch under test
+    page = np.full((300, 220, 3), 240, np.uint8)
+    for row in range(20, 280, 18):
+        page[row:row + 7, 20:200] = 30
+    Image.fromarray(page).save(path)
+    open(path + ".native", "w").close()
+    with open(path + ".layer.txt", "w", encoding="utf-8") as fh:
+        fh.write(text)
+    return path
+
+
+def test_a_restored_page_is_never_cached(vtb, tmp_path):
+    """It ships in this build so the reader gets a book, and it is left out
+    of the cache so the next build reads the page again."""
+    from PIL import Image
+    text = ("The question of racial classification in the colonial period "
+            "has occupied historians since the archives were opened, and "
+            "the categories themselves shifted with every census taken "
+            "between eighteen forty and nineteen twelve, which makes any "
+            "single figure a statement about its compilers as much as "
+            "about the population they were counting.")
+    path = _native_page(tmp_path, "page_0000.png", text)
+
+    class Cache:
+        def __init__(self): self.kept = []
+        def put(self, p, items): self.kept.append(p)
+
+    cache = Cache()
+    vtb._read_pages_resiliently.restored = []
+    out = vtb._read_pages_resiliently(
+        [path], [Image.open(path)], _DeadServer(), cache)
+    assert out[path], "the page must still ship, restored"
+    assert "<p>" in out[path][0].html
+    assert cache.kept == [], "a restore was written to the cache"
+    assert vtb._read_pages_resiliently.restored == [path]
+
+
+def test_a_real_reading_is_still_cached(vtb, tmp_path):
+    """The guard must not starve the cache on healthy pages."""
+    from PIL import Image
+    path = _native_page(tmp_path, "page_0001.png", "Some layer text here now.")
+
+    class Reader:
+        name = "surya"
+        def run_items(self, images):
+            return [[vtb.PageItem(html="<h1>A Chapter</h1>"),
+                     vtb.PageItem(html="<p>Real prose the reader found.</p>")]
+                    for _ in images]
+
+    class Cache:
+        def __init__(self): self.kept = []
+        def put(self, p, items): self.kept.append(p)
+
+    cache = Cache()
+    vtb._read_pages_resiliently.restored = []
+    vtb._read_pages_resiliently([path], [Image.open(path)], Reader(), cache)
+    assert cache.kept == [path]
+    assert vtb._read_pages_resiliently.restored == []

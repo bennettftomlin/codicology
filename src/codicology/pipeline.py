@@ -8006,6 +8006,22 @@ def build_epub(
               f"check unexamined, {UNWITNESSED['blank']} page(s) were "
               f"deleted as blank on this pipeline's word alone. Install "
               f"tesseract and rebuild to have either checked.")
+    restored = len(_read_pages_resiliently.restored)
+    if restored:
+        # One page the reader could not manage is a page; a hundred of them
+        # is a failed run wearing a finished run's clothes. The restores are
+        # a publisher's text layer laid down as one paragraph each — no
+        # headings, no note markers, no reference or index entries — so a
+        # book mostly made of them has lost its structure whatever its word
+        # count says. None of them was cached, so a rebuild will read those
+        # pages again; what this line exists to say is that it MUST.
+        share = restored / max(1, len(page_paths))
+        print(f"  [!] {restored} page(s) could not be read and were restored "
+              f"from their own text layer — flat text, no structure."
+              + (f" That is {share:.0%} of the book: the recognition server "
+                 f"was failing, not the pages. Nothing was cached for them; "
+                 f"rebuild once it is healthy." if share >= 0.1 else
+                 " Nothing was cached for them; a rebuild will retry."))
 
 
 # ── Main pipeline ─────────────────────────────────────────────────────────────
@@ -8904,6 +8920,10 @@ def _read_pages_resiliently(paths: list[str], images: list,
 
     out: dict[str, list[PageItem]] = {}
     for path, img, items in zip(paths, images, backend.run_items(images)):
+        # Whether what we end up with came from the READER, or from the
+        # page's own layer because the reader failed. A restore is the right
+        # thing to ship and the wrong thing to keep: see the cache write.
+        provisional = False
         if not has_text(items) and figure_has_content(img):
             retry = backend.run_items([img])[0]
             if has_text(retry):
@@ -8917,7 +8937,7 @@ def _read_pages_resiliently(paths: list[str], images: list,
                 # nothing to restore. A page that had real words gets them.
                 restored = _native_layer_body(path)
                 if restored:
-                    items = restored
+                    items, provisional = restored, True
                     print(f"    [!] {os.path.basename(path)}: read empty "
                           f"twice — restored from the page's own "
                           f"born-digital text")
@@ -8953,6 +8973,7 @@ def _read_pages_resiliently(paths: list[str], images: list,
                                "nothing, and told a different story twice")
                         restored = _native_layer_body(path)
                         items = restored or []
+                        provisional = bool(restored)
                         print(f"    [!] {os.path.basename(path)}: {why} — "
                               + ("restored from the page's own born-digital "
                                  "text" if restored else
@@ -8973,6 +8994,7 @@ def _read_pages_resiliently(paths: list[str], images: list,
                 why = (why if why == why2 else
                        f"{why}, and again on a second look ({why2})")
                 items = _native_layer_body(path) or []
+                provisional = bool(items)
             if why is not None:
                 restored = bool(items)
                 print(f"    [!] {os.path.basename(path)}: {why} — "
@@ -8983,13 +9005,28 @@ def _read_pages_resiliently(paths: list[str], images: list,
                     _read_pages_resiliently.refused.append(path)
 
         out[path] = items
-        if cache is not None:
+        if provisional:
+            # The guard above already refuses to cache an EMPTY read, for
+            # exactly this reason — but a page restored from its own layer
+            # is not empty, so it walked past that guard into the cache.
+            # Two books were built that way on one day: the server behind
+            # recognition stopped answering at page 12 of one and page 92
+            # of the other, every page after it was restored, and the
+            # restores were kept as though they were readings. A layer
+            # restore is one paragraph of running text, so those books lost
+            # their headings, their note markers, their reference and index
+            # entries, and kept their running heads in the body — and no
+            # rebuild could recover, because the rebuild replayed the cache.
+            # A restore ships in THIS build and is never kept.
+            _read_pages_resiliently.restored.append(path)
+        elif cache is not None:
             if has_text(items) or not figure_has_content(img):
                 cache.put(path, items)
     return out
 
 
 _read_pages_resiliently.refused = []
+_read_pages_resiliently.restored = []
 
 
 def reconcile_native_text(bodies: list[str], page_paths: list[str]) -> int:
