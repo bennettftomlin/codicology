@@ -7614,31 +7614,61 @@ def build_epub(
                      if fstats["numbered"] else "")
                   + f", {fstats['skipped']} left unsure")
         if n_note_heads >= 2:
-            # several "Notes" heads mean chapter-endnotes: each section
-            # closes the chapter it follows, and position alone scopes them
+            # Several "Notes" heads SUGGEST chapter-endnotes, where each
+            # section closes the chapter it follows and position alone
+            # scopes them. It is a guess at the layout and not a reading of
+            # it: a back-of-book section whose title happens to appear twice
+            # looks exactly the same from here.
+            #
+            # So both layouts are read and the book decides between them, by
+            # how many of its own markers each one can account for. Asking
+            # only whether the chapter layout found ANY section was the
+            # narrow version of this test, and a book that prints "NOTES"
+            # twice at the back of one continuous section answered yes with
+            # two sections and 41 links, which silently vetoed the 875 the
+            # other layout binds — 36 chapters' worth, aligned and agreeing.
+            #
+            # Counting links alone will not do it. Read as chapter-endnotes,
+            # a back-of-book section binds every marker in the book to its
+            # FIRST group — every chapter's note 1 to chapter one's note 1 —
+            # so it can tie on links while most of them are wrong. What
+            # separates the two readings is how many scopes each can offer:
+            # one section swallowing the whole book against a group per
+            # chapter, each of which link_notes refused to pair until its
+            # numbers agreed with the body's.
+            #
+            # So the section reading is adopted only when it parsed groups,
+            # did not refuse for misalignment, accounts for at least as many
+            # markers, and tells more scopes apart than the chapter reading.
+            # Anything less and the chapter reading stands, which assumes
+            # least: position scopes it, and nothing is inferred.
+            before = list(bodies)
             cstats = link_chapter_notes(bodies, dropped)
-            if cstats["sections"]:
+            chapter_result = list(bodies)
+            trial = list(before)
+            nstats = link_notes(trial, dropped=dropped,
+                                chapter_starts=chapter_starts or None)
+            if (nstats["groups"] and not nstats["misaligned"]
+                    and nstats["linked"] >= cstats["linked"]
+                    and nstats["groups"] > cstats["sections"]):
+                bodies[:] = trial
+                print(f"    notes: {nstats['linked']} markers linked across "
+                      f"{nstats['groups']} chapters, {nstats['unlinked']} "
+                      f"left plain"
+                      + (f" (the {n_note_heads} Notes heads are one section, "
+                         f"not {cstats['sections']})" if cstats["sections"]
+                         else " (chapter-section layout did not apply)"))
+            elif cstats["sections"]:
+                bodies[:] = chapter_result
                 print(f"    notes: {cstats['linked']} markers linked across "
                       f"{cstats['sections']} chapter sections, "
                       f"{cstats['unlinked']} left plain")
+            elif nstats["misaligned"]:
+                print("    notes: body and endnote chapters would not "
+                      "align — nothing linked rather than linked wrongly")
             else:
-                # Counting "Notes" headings is a guess at the layout, not a
-                # reading of it: a back-of-book section whose title happens to
-                # appear twice looks like chapter endnotes and parses to
-                # nothing. Falling back costs one more pass; not falling back
-                # cost one book all 893 of its links, silently.
-                nstats = link_notes(bodies, dropped=dropped,
-                                    chapter_starts=chapter_starts or None)
-                if nstats["groups"]:
-                    print(f"    notes: {nstats['linked']} markers linked across "
-                          f"{nstats['groups']} chapters, {nstats['unlinked']} "
-                          f"left plain (chapter-section layout did not apply)")
-                elif nstats["misaligned"]:
-                    print("    notes: body and endnote chapters would not "
-                          "align — nothing linked rather than linked wrongly")
-                else:
-                    print(f"    notes: {n_note_heads} Notes heads found but "
-                          f"neither layout parsed — nothing linked")
+                print(f"    notes: {n_note_heads} Notes heads found but "
+                      f"neither layout parsed — nothing linked")
         else:
             nstats = link_notes(bodies, dropped=dropped,
                                 chapter_starts=chapter_starts or None)

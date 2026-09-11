@@ -6,6 +6,7 @@ entries that continue onto the next page are accepted only while their
 numbers keep ascending, numbers reused across chapters bind locally, and a
 marker with no entry stays plain rather than pointing at nothing.
 """
+import re
 
 
 def _book():
@@ -112,3 +113,61 @@ def test_entries_whose_forms_alternate_all_link(vtb):
     stats = vtb.link_chapter_notes(bodies, dropped=set())
     assert stats["linked"] == 3, "the alternating-form entry must link"
     assert 'href="page_0001.xhtml#note-c0-3"' in bodies[0]
+
+
+# ── which layout a book actually uses is settled by the book ────────────────
+
+def _chapter_layout(n_chapters=2, notes_each=3):
+    """Prose chapters each followed by their own Notes section."""
+    bodies = []
+    for c in range(n_chapters):
+        bodies.append("<p>text" + "".join(f"<sup>{k}</sup>"
+                      for k in range(1, notes_each + 1)) + "</p>")
+        bodies.append("<h2>NOTES</h2><ol>" + "".join(
+            f"<li>{k}. c{c} source {k}</li>"
+            for k in range(1, notes_each + 1)) + "</ol>")
+    return bodies
+
+
+def test_a_true_chapter_layout_still_wins(vtb):
+    """Both layouts are read now, so the ordinary case must not change."""
+    bodies = _chapter_layout()
+    stats = vtb.link_chapter_notes(list(bodies), set())
+    assert stats["sections"] == 2 and stats["linked"] == 6
+    # and through the real dispatch the same links come out
+    out = list(bodies)
+    vtb.link_chapter_notes(out, set())
+    assert out[0].count("noteref") == 3 and out[2].count("noteref") == 3
+
+
+def test_a_back_of_book_section_that_says_notes_twice_is_not_two_chapters(vtb):
+    """One continuous back-of-book section, its title set again on the page
+    where the entries begin. Read as chapter-endnotes it scopes by position
+    and accounts for almost nothing; read as one grouped section it binds
+    every marker. The book decides, by how many of its own markers each
+    layout can account for."""
+    prose = [f"<p>ch{c}." + "".join(f"<sup>{k}</sup>" for k in range(1, 6))
+             + "</p>" for c in range(4)]
+    notes = ["<h1>NOTES</h1>",
+             "<h1>NOTES</h1>" + "".join(
+                 f"<h2>Chapter {w}</h2><ol>" + "".join(
+                     f"<li>{k}. c{c} src {k}</li>" for k in range(1, 6))
+                 + "</ol>"
+                 for c, w in enumerate(("One", "Two", "Three", "Four")))]
+    bodies = prose + notes
+    chapter = vtb.link_chapter_notes(list(bodies), set())
+    section = vtb.link_notes(list(bodies), set())
+    # The narrow test — did the chapter layout find ANY section — says yes,
+    # and it binds every marker, so a link count alone cannot separate them.
+    assert chapter["sections"] == 1 and chapter["linked"] == 20
+    # but all four chapters were sent to chapter one's notes
+    bound = list(bodies)
+    vtb.link_chapter_notes(bound, set())
+    assert all("note-c0-1" in bound[c] for c in range(4)), "not the shape meant"
+    # the section layout tells the four apart, and pairs them with the body
+    assert section["groups"] == 4 and not section["misaligned"]
+    assert section["linked"] == 20
+    read = list(bodies)
+    vtb.link_notes(read, set())
+    assert [re.search(r"#note-g(\d+)-1", read[c]).group(1) for c in range(4)] \
+        == ["0", "1", "2", "3"], "each chapter must reach its own notes"
