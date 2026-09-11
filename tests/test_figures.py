@@ -214,17 +214,50 @@ def test_an_already_encodable_image_is_passed_through_untouched(vtb):
     assert vtb._encodable(grey) is grey
 
 
+def _flesh(h=120, w=60, seed=3):
+    """A crop of smooth skin, the way a thumb on a blank verso reads."""
+    import numpy as np
+    skin = np.zeros((h, w, 3), np.uint8)
+    skin[:, :, 0] = 205; skin[:, :, 1] = 150; skin[:, :, 2] = 125   # RGB flesh
+    rng = np.random.default_rng(seed)
+    return np.clip(skin + rng.integers(-12, 12, skin.shape), 0, 255).astype(np.uint8)
+
+
 def test_a_thumb_is_not_a_figure(vtb):
     """The layout pass boxed a thumb resting on a blank verso as a Picture
-    and the detail test passed it — skin has texture. Mostly-skin crops
-    are the reader's hand, not the book's."""
-    import numpy as np
+    and the detail test passed it — skin has texture."""
     from PIL import Image
-    skin = np.zeros((120, 60, 3), np.uint8)
-    skin[:, :, 0] = 205; skin[:, :, 1] = 150; skin[:, :, 2] = 125   # RGB flesh
-    rng = np.random.default_rng(3)
-    skin = np.clip(skin + rng.integers(-12, 12, skin.shape), 0, 255).astype(np.uint8)
-    assert vtb.figure_is_a_hand(Image.fromarray(skin))
+    import numpy as np
+    assert vtb.figure_is_a_hand(Image.fromarray(_flesh()))
     paper = np.full((120, 60, 3), 235, np.uint8)
     paper[40:80, 10:50] = 20                                          # an inked plate
     assert not vtb.figure_is_a_hand(Image.fromarray(paper))
+
+
+def test_skin_colour_alone_does_not_condemn_a_picture(vtb):
+    """Skin is where this test began and it is not enough on its own. Aged
+    paper sits in the same colour band and a photograph OF PEOPLE is mostly
+    skin by definition: the colour rule alone condemned 488 of the shelf's
+    10,881 figures, including 67 of one book's 71 plates. What a hand lacks
+    is ink — the fine dark structure a map's lines, a halftone's dots and a
+    photograph's detail all leave and smooth flesh does not."""
+    import numpy as np
+    from PIL import Image
+    # a plate printed on tanned stock: skin-coloured ground, fine dark lines
+    plate = _flesh(160, 160, seed=5)
+    plate[::6, :] = 40                       # ruled lines, thinner than the kernel
+    assert not vtb.figure_is_a_hand(Image.fromarray(plate))
+    # and a halftone's dots do it too
+    dotted = _flesh(160, 160, seed=7)
+    dotted[::5, ::5] = 30
+    assert not vtb.figure_is_a_hand(Image.fromarray(dotted))
+
+
+def test_a_blank_leaf_is_not_called_a_hand(vtb):
+    """An absence of ink alone would condemn every blank leaf. That is
+    figure_has_content's business, and it keeps the page rather than
+    discarding it, so the colour condition has to stand too."""
+    import numpy as np
+    from PIL import Image
+    blank = np.full((120, 60, 3), 238, np.uint8)
+    assert not vtb.figure_is_a_hand(Image.fromarray(blank))

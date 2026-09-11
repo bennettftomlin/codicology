@@ -3393,8 +3393,27 @@ FIGURE_MIN_DETAIL = 0.01
 FIGURE_MAX_SKIN = 0.5
 
 
+# A hand carries no printed line-work. Skin alone cannot say what a crop
+# is: aged paper sits in the same band, and a photograph OF PEOPLE is
+# mostly skin by definition, so the colour test on its own condemned 488
+# of the shelf's 10,881 figures — among them 67 of one book's 71 plates,
+# a faint survey map, and a portrait. What separates them is ink: black-hat
+# keeps dark features narrower than its kernel, which is what a map's
+# lines, a halftone's dots and a photograph's detail all leave behind, and
+# what smooth flesh does not. Measured over every mostly-skin figure on the
+# shelf, the one real hand scores 0.00001 and the faintest real figure
+# 0.0022 — two orders of magnitude of daylight, and this sits in it.
+FIGURE_HAND_INK = 0.001
+
+
 def figure_is_a_hand(img: Image.Image) -> bool:
-    """Whether the crop is mostly skin — a hand, not a picture."""
+    """Whether the crop is the reader's hand rather than the book's picture.
+
+    Mostly skin AND carrying no fine dark structure. Both conditions, because
+    either alone is wrong: skin colour catches every portrait and every tan
+    page, and an absence of ink catches every blank leaf — which is
+    figure_has_content's business, and is kept rather than discarded.
+    """
     try:
         rgb = np.asarray(img.convert("RGB"))
     except (OSError, ValueError):
@@ -3402,7 +3421,12 @@ def figure_is_a_hand(img: Image.Image) -> bool:
     if rgb.shape[0] < 8 or rgb.shape[1] < 8:
         return False
     bgr = np.ascontiguousarray(rgb[:, :, ::-1])
-    return float((_skin_mask(bgr) > 0).mean()) > FIGURE_MAX_SKIN
+    if float((_skin_mask(bgr) > 0).mean()) <= FIGURE_MAX_SKIN:
+        return False
+    grey = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
+    ink = cv2.morphologyEx(grey, cv2.MORPH_BLACKHAT, kernel)
+    return float((ink > 30).mean()) < FIGURE_HAND_INK
 
 
 def figure_has_content(img: Image.Image) -> bool:
