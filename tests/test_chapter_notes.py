@@ -93,14 +93,16 @@ def test_a_back_of_book_layout_falls_back_when_chapter_sections_find_nothing(vtb
     chapter = vtb.link_chapter_notes([b for b in bodies], dropped=set())
     assert chapter["sections"] == 0, "fixture must defeat the chapter path"
     stats = vtb.link_notes(bodies, dropped=set())
-    # Chapter one's two markers bind. Chapter two's single marker does not:
-    # one marker is too few to stand as a group, so the body has nothing to
-    # pair with chapter two's notes and it stays plain. That is the honest
-    # outcome — this assertion used to read 3, and the third link it counted
-    # sent chapter two's marker to chapter one's Alpha.
-    assert stats["linked"] == 2, stats
+    # All three bind, each to its own chapter. Chapter two has a single
+    # note and therefore a single marker, and a one-marker group stands
+    # because the notes section says that chapter exists — without that it
+    # was either dropped (the marker left plain) or folded into chapter one
+    # (the marker sent to Alpha, which is worse).
+    assert stats["linked"] == 3 and not stats["misaligned"], stats
+    assert stats["groups"] == 2, stats
     assert 'epub:type="noteref"' in bodies[1]
-    assert "noteref" not in bodies[2], "chapter two's marker took Alpha"
+    assert 'href="page_0003.xhtml#note-g1-1"' in bodies[2], "must reach Gamma"
+    assert '<p id="note-g1-1">' in bodies[3]
 
 
 def test_entries_whose_forms_alternate_all_link(vtb):

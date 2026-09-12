@@ -198,13 +198,19 @@ def test_a_chapter_whose_notes_are_one_citation_keeps_its_neighbour_honest(vtb):
         + "<h2>Chapter Two</h2>" + run("d", 5),
     ]
     stats = vtb.link_notes(bodies, dropped=set())
-    assert "noteref" not in bodies[0], "the preface marker took its neighbour's note"
-    assert stats["linked"] == 15
-    # the introduction's four reach a1…a4, not the preface's only note
-    assert bodies[1].count("noteref") == 4
-    assert '<li id="note-g0-1"><a href="page_0001.xhtml#ref-g0-1">1.</a> a1</li>' \
+    # Every chapter pairs with its own notes, the preface included: a
+    # one-marker group stands because the notes section has a group for it.
+    # Read the other way the preface's citation was either left plain or,
+    # worse, bound to the introduction's first source.
+    assert stats["linked"] == 16 and not stats["misaligned"], stats
+    assert stats["groups"] == 4, stats
+    assert 'href="page_0004.xhtml#note-g0-1"' in bodies[0], "preface's own note"
+    assert '<li id="note-g0-1"><a href="page_0000.xhtml#ref-g0-1">1.</a> only</li>' \
         in bodies[4]
-    assert '<li id="note-g2-5"><a href="page_0003.xhtml#ref-g2-5">5.</a> d5</li>' \
+    assert bodies[1].count("noteref") == 4
+    assert '<li id="note-g1-1"><a href="page_0001.xhtml#ref-g1-1">1.</a> a1</li>' \
+        in bodies[4]
+    assert '<li id="note-g3-5"><a href="page_0003.xhtml#ref-g3-5">5.</a> d5</li>' \
         in bodies[4]
 
 

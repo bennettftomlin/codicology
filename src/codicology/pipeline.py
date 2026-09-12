@@ -4736,7 +4736,8 @@ def link_chapter_notes(bodies: list[str], dropped: set) -> dict:
     return stats
 
 
-def find_body_marker_groups(bodies: list[str], stop: int) -> list[list[tuple[int, int, int]]]:
+def find_body_marker_groups(bodies: list[str], stop: int,
+                            climbed: int = 1) -> list[list[tuple[int, int, int]]]:
     """
     Superscript markers in the prose, split into chapters by their own resets.
 
@@ -4744,6 +4745,14 @@ def find_body_marker_groups(bodies: list[str], stop: int) -> list[list[tuple[int
     the chapter boundaries: a marker at or below its predecessor after an
     ascending run means a new chapter has begun. No table of contents is
     consulted — the markers carry their own structure.
+
+    `climbed` is how far the run before a 1 must have got for that 1 to open
+    a chapter, and no single value of it is right for every book. Two 1s in
+    a row are a chapter with one note followed by the next chapter, or one
+    chapter citing its first note twice, and nothing in the body tells them
+    apart — the marker after both readings is 2. So the caller tries both
+    and lets the notes section, which knows how many chapters it has,
+    decide; see `_best_body_groups`.
     """
     # flatten first: the reset test needs one-marker lookahead
     stream: list[tuple[int, int, int]] = []
@@ -4772,7 +4781,7 @@ def find_body_marker_groups(bodies: list[str], stop: int) -> list[list[tuple[int
         # over every built book, dropping it links 365 markers that went
         # plain — one book from none to 296 — puts not one link in the
         # wrong chapter, and costs a single marker in a single book.
-        if n == 1 and prev and (nxt is None or nxt <= 3):
+        if n == 1 and prev >= climbed and (nxt is None or nxt <= 3):
             if current:
                 groups.append(current)
             current = []
@@ -5713,6 +5722,39 @@ def link_footnotes(bodies: list[str], allow_numbered: bool = False) -> dict:
     return stats
 
 
+def _best_body_groups(bodies, notes_start, n_notes):
+    """The body's chapters, read the way the notes section says there are.
+
+    Splitting eagerly finds chapters whose notes are one or two citations,
+    which a cautious rule folds into their neighbour — one book presented
+    four groups against seven and was refused outright, losing all
+    thirty-nine of its links. Splitting eagerly also cuts a chapter in two
+    where it merely cites its first note twice, and the marker stranded on
+    the near side of that cut is then linked to nothing.
+
+    Neither reading is right in general, so both are offered and the notes
+    section arbitrates: it knows how many chapters it has. The reading
+    whose group count is closest wins, and where they tie — as they do when
+    an eager split strands a marker into a group too small to stand — the
+    one that leaves fewest markers behind does, because a marker outside
+    every group is a marker that cannot link.
+    """
+    best = None
+    for climbed in (1, 3):
+        raw = find_body_marker_groups(bodies, notes_start, climbed)
+        for smallest in (1, 2):
+            # A chapter may cite a single note, and then its body group is
+            # one marker long. Discarding every such group by default
+            # stranded those markers; keeping them by default invents a
+            # chapter out of any stray numeral. It is another thing the
+            # notes section can settle, so it is offered as a reading too.
+            groups = [g for g in raw if len(g) >= smallest]
+            rank = (abs(len(groups) - n_notes), -sum(len(g) for g in groups))
+            if best is None or rank < best[0]:
+                best = (rank, groups)
+    return best[1]
+
+
 def _fit_groups(body_groups, note_groups):
     """The one way these two lists of groups line up, or None.
 
@@ -6574,8 +6616,7 @@ def link_notes(bodies: list[str], dropped: set[int],
                 by_no[c].append((pi, n, pos))
         body_groups = [by_no[no] for no in group_numbers]
     else:
-        body_groups = [g for g in find_body_marker_groups(bodies, notes_start)
-                       if len(g) >= 2]
+        body_groups = _best_body_groups(bodies, notes_start, len(note_groups))
     if len(body_groups) != len(note_groups):
         if abs(len(body_groups) - len(note_groups)) > 2:
             stats["misaligned"] = True
