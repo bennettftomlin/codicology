@@ -4762,7 +4762,17 @@ def find_body_marker_groups(bodies: list[str], stop: int) -> list[list[tuple[int
         # marker to the NEXT chapter's note 2 — a wrong link found by this
         # module's own regression test before any reader could find it.
         nxt = stream[k + 1][1] if k + 1 < len(stream) else None
-        if n == 1 and prev >= 3 and (nxt is None or nxt <= 3):
+        # What tells a chapter boundary from an author citing note 1 again
+        # is the marker AFTER it: a new chapter goes on to 2, a re-citation
+        # returns to wherever the chapter had got to. Requiring the run
+        # before it to have reached 3 as well was a second guard on the
+        # same thing, and it cost more than it caught — a chapter with one
+        # or two notes never reaches 3, so its markers were absorbed by the
+        # next chapter and the body came up short of the notes. Measured
+        # over every built book, dropping it links 365 markers that went
+        # plain — one book from none to 296 — puts not one link in the
+        # wrong chapter, and costs a single marker in a single book.
+        if n == 1 and prev and (nxt is None or nxt <= 3):
             if current:
                 groups.append(current)
             current = []
