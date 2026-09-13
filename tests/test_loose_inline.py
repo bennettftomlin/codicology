@@ -21,6 +21,24 @@ those are running heads that never reach the body anyway.
 import pytest
 
 
+# ── it has to reach a warm rebuild, or it reaches no book at all ────────────
+
+def test_the_repair_reaches_a_fragment_that_came_from_the_cache(vtb):
+    """The cache stores fragments already converted, so a warm rebuild never
+    passes back through _to_xhtml. The first version of this fix lived only
+    there; eleven books were rebuilt and every one came back identical."""
+    item = vtb.PageItem(html='<p>53.</p><i>Ibid.</i>, p. 51.')
+    assert vtb.refold_cached_fragments([item])[0].html \
+        == '<p>53. <i>Ibid.</i>, p. 51.</p>'
+
+
+def test_a_fragment_that_needs_nothing_is_not_reparsed(vtb):
+    # the cheap test is what keeps this off 123,240 sound fragments
+    for html in ("<p>one</p><p>two</p>", "<p>x</p><hr/>",
+                 "<figure><img src=\"f.jpg\"/></figure>"):
+        assert not vtb._CLOSED_EARLY.search(html), html
+
+
 def test_a_note_whose_number_closed_without_it_is_made_whole(vtb):
     out = vtb._to_xhtml('<p>53.</p><i>Ibid.</i>, p. 51.')
     assert out == '<p>53. <i>Ibid.</i>, p. 51.</p>'

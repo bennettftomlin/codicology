@@ -2447,6 +2447,35 @@ def demote_mislabelled_heads(items: "list[PageItem]",
     return out
 
 
+# A block closed, and then content that is not a block. Cheap enough to run
+# over every cached fragment in a book; true for 137 of 123,377.
+_CLOSED_EARLY = re.compile(
+    r"</(?:p|h[1-6]|li|blockquote|figcaption)>\s*"
+    r"(?!<(?:p|h[1-6]|li|ul|ol|table|div|figure|blockquote|pre|hr)\b)(?=\S)")
+
+
+def refold_cached_fragments(items: "list[PageItem]") -> "list[PageItem]":
+    """Fold loose inline content in fragments that predate the repair.
+
+    The cache stores each fragment ALREADY converted, so a warm rebuild
+    never passes back through _to_xhtml — and a repair made there alone
+    would reach only freshly OCR'd books, which is no book anyone rebuilds.
+    This was not a guess: the first attempt shipped the fold in _to_xhtml,
+    eleven books were rebuilt from warm caches, and every one came back
+    byte-identical.
+
+    Re-running the conversion is what repairs it, so the fragment takes
+    exactly the path a fresh reading would, and the cheap test above keeps
+    that to the handful of fragments that need it.
+    """
+    out = []
+    for it in items:
+        if it.html and _CLOSED_EARLY.search(it.html):
+            it = it._replace(html=_to_xhtml(it.html))
+        out.append(it)
+    return out
+
+
 def route_form_blocks(items: "list[PageItem]") -> "tuple[list, int]":
     """Items with the layout's Form blocks kept out of the body.
 
@@ -7453,6 +7482,7 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
         for path, hit in zip(chunk_paths, remembered):
             nonlocal_page_i[0] = len(bodies)   # the page these figures sit on
             items = hit if hit is not None else fresh[path]
+            items = refold_cached_fragments(items)
             items = demote_mislabelled_heads(items, os.path.basename(path))
             items, _nf = route_form_blocks(items)
             n_forms += _nf
