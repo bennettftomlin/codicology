@@ -1946,6 +1946,77 @@ def _strip_tags(fragment: str) -> str:
     return html.unescape(re.sub(r"<[^>]+>", "", spaced)).strip()
 
 
+# Elements that end a block. Anything else between two of them is inline
+# content that belongs to the block before it, however the model punctuated it.
+_BLOCK_TAGS = frozenset({"p", "div", "ul", "ol", "li", "table", "thead", "tbody",
+                         "tr", "td", "th", "figure", "figcaption", "blockquote",
+                         "pre", "hr", "h1", "h2", "h3", "h4", "h5", "h6"})
+# and the ones worth folding INTO. A rule or a table has no running text.
+_FOLD_INTO = frozenset({"p", "li", "blockquote", "figcaption",
+                        "h1", "h2", "h3", "h4", "h5", "h6"})
+
+
+# Punctuation that already binds to what follows it: no book writes
+# "strategic ( continued)", and the fold should not be the first to.
+_NO_SEAM_AFTER = "([{“‘'\"/-–—"
+
+
+def _needs_seam_space(text: str) -> bool:
+    return bool(text) and not text[-1].isspace() and text[-1] not in _NO_SEAM_AFTER
+
+
+def _fold_loose_inline(div) -> None:
+    """Put inline content the model left outside its block back inside it.
+
+    One book's notes section arrives from the layout pass as
+
+        <p>53.</p><i>Ibid.</i>, p. 51.<p>54.</p><i>Ibid.</i>, p. 53.
+
+    — each entry's NUMBER closed as a paragraph of its own and the entry's
+    text left loose beside it. The text is not lost, but it belongs to no
+    block, which is not valid XHTML and is invisible to every pattern that
+    reads a note entry: they all anchor the number to a block's opening, so
+    nine entries were unreadable and the markers pointing at them stayed
+    plain.
+
+    The repair is structural and says nothing about notes: inline content
+    between two blocks belongs to the block before it. A rule, a table or
+    another paragraph ends the run, so nothing is ever pulled across a
+    boundary the model actually drew.
+    """
+    # A snapshot, because folding MOVES elements out of div: iterating the
+    # live tree skips the element after every fold, and a fragment holding
+    # two entries had only its first one repaired.
+    for el in list(div):
+        if el.tag not in _FOLD_INTO or el.getparent() is not div:
+            continue
+        while True:
+            nxt = el.getnext()
+            tail = el.tail or ""
+            if not tail.strip() and (nxt is None or nxt.tag in _BLOCK_TAGS):
+                break
+            # A closed block leaves a word boundary behind, not nothing —
+            # the same reasoning _strip_tags is built on. Without it the
+            # number runs into its own note ("53.Ibid.") and the entry
+            # patterns, which want whitespace after the period, still miss it.
+            if len(el):
+                seam = (el[-1].tail or "")
+                if seam and _needs_seam_space(seam):
+                    el[-1].tail = seam + " "
+                elif not seam and not (el[-1].text or "").endswith(" "):
+                    el[-1].tail = " "
+            elif _needs_seam_space(el.text or ""):
+                el.text += " "
+            if tail:
+                if len(el):
+                    el[-1].tail = (el[-1].tail or "") + tail
+                else:
+                    el.text = (el.text or "") + tail
+                el.tail = None
+            if nxt is not None and nxt.tag not in _BLOCK_TAGS:
+                el.append(nxt)          # its own tail travels with it
+
+
 def _to_xhtml(fragment: str) -> str:
     """Reparse model-generated HTML into well-formed XHTML for the EPUB."""
     try:
@@ -1956,6 +2027,7 @@ def _to_xhtml(fragment: str) -> str:
     except Exception:
         return f"<p>{html.escape(_strip_tags(fragment))}</p>"
 
+    _fold_loose_inline(div)
     # Loose text needs a block wrapper; a bare text node in <body> isn't valid XHTML.
     parts = [f"<p>{html.escape(div.text.strip())}</p>"] if (div.text or "").strip() else []
     parts += [etree.tostring(child, method="xml", encoding="unicode") for child in div]
