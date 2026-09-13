@@ -4574,6 +4574,8 @@ def parse_notes_section(bodies: list[str]) -> tuple[int, list[list[tuple[int, in
     for i in range(start, len(bodies)):
         b = bodies[i]
         sup_notes = [(m.start(), "note", int(m.group(1))) for m in NOTE_ENTRY.finditer(b)]
+        if sup_notes:
+            sup_notes += _br_run_notes(b, sup=True)
         # a section that sets its notes as "1. Source…" rather than with a
         # superscript; only consulted where the superscript form is absent,
         # since "1. " also opens ordinary numbered lists in prose
@@ -4671,6 +4673,9 @@ def _ungrouped_notes(bodies: list[str], start: int) -> list:
         if i > start and re.search(stop, bodies[i], re.I):
             break
         sup = [(m.start(), int(m.group(1))) for m in NOTE_ENTRY.finditer(bodies[i])]
+        if sup:
+            sup += [(pos, n) for pos, _kind, n in
+                    _br_run_notes(bodies[i], sup=True)]
         plain = [] if sup else [(m.start(), int(m.group(1)))
                                 for pat in (NOTE_ENTRY_PLAIN, NOTE_ENTRY_LI)
                                 for m in pat.finditer(bodies[i])] \
@@ -4708,6 +4713,12 @@ def _entry_anchor(entry: str, note_id: str, back_href: str, n: int):
     if bm is not None:
         return bm.end(), (f'{bm.group(1)}{bm.group(2)}'
                           f'<a id="{note_id}" href="{back_href}">{n}.</a>')
+    sm = re.match(r"(<br\s*/?>)(\s*)<sup>\s*(\d{1,3})\s*</sup>", entry)
+    if sm is not None:
+        # the superscript is the book's own typesetting and stays; only the
+        # number inside it becomes the anchor, exactly as a first entry's does
+        return sm.end(), (f'{sm.group(1)}{sm.group(2)}<sup>'
+                          f'<a id="{note_id}" href="{back_href}">{n}</a></sup>')
     return None
 
 
@@ -4892,13 +4903,25 @@ NOTE_ENTRY_LI = re.compile(r"<li[^>]*>\s*(\d{1,3})\.\s+\S")
 # stops there — every marker past it has nothing to point at. Two such runs,
 # both at a chapter's tail, cost one book 34 links.
 NOTE_ENTRY_BR = re.compile(r"<br\s*/?>\s*(\d{1,3})\.\s+\S")
+# The same run set the other way: the number in a superscript and no period
+# after it, which is how a book that superscripts its entry numbers renders a
+# column the layout pass failed to split. Eagle Forgotten hides 67 entries in
+# four such paragraphs, and 69 of its markers went plain for want of them.
+NOTE_ENTRY_BR_SUP = re.compile(r"<br\s*/?>\s*<sup>\s*(\d{1,3})\s*</sup>")
 
 
-def _br_run_notes(body: str) -> list:
+def _br_run_notes(body: str, sup: bool = False) -> list:
     """The note entries a paragraph hides behind its <br/>s.
 
     Returned as (position, "note", number), the position being the <br/>
     that opens each — which is where the anchor step rewrites.
+
+    `sup` picks the rendering. A book that numbers its entries "1. Source…"
+    continues a run as "<br/>2. Source…"; a book that superscripts them
+    writes "<sup>2</sup>Source…" with no period. Both are the same column of
+    notes with the same break between them, and the opening of the paragraph
+    says which one this book uses — so the two are never mixed, and a run is
+    only ever read in the dress its own first entry wears.
 
     The guard against reading an ordinary line break this way is the
     numbering. The paragraph must already BE a note entry, so a block of
@@ -4910,13 +4933,15 @@ def _br_run_notes(body: str) -> list:
     read half-way would end its group early, which is the very failure
     this exists to repair.
     """
+    head, tail = ((NOTE_ENTRY, NOTE_ENTRY_BR_SUP) if sup
+                  else (NOTE_ENTRY_PLAIN, NOTE_ENTRY_BR))
     out = []
     for block in re.finditer(r"<p\b[^>]*>.*?</p>", body, re.S):
-        opening = NOTE_ENTRY_PLAIN.match(block.group(0))
+        opening = head.match(block.group(0))
         if opening is None:
             continue
         run = [(block.start() + m.start(), int(m.group(1)))
-               for m in NOTE_ENTRY_BR.finditer(block.group(0))]
+               for m in tail.finditer(block.group(0))]
         if not run:
             continue
         nums = [int(opening.group(1))] + [n for _, n in run]

@@ -438,6 +438,79 @@ def test_a_br_run_links_and_anchors_each_entry(vtb):
     assert "<br/>\n  <a id=\"note-g0-4\"" in bodies[1]
 
 
+# ── the same run, dressed in superscripts ────────────────────────────────────
+#
+# Eagle Forgotten superscripts its entry numbers and writes no period after
+# them, so a column the layout pass failed to split reads as one entry and the
+# rest of the run is lost. Four such paragraphs swallow 67 entries; 69 of the
+# book's markers went plain for want of them, every link it did have correct.
+
+
+def _br_sup_run(first, count):
+    return ("<p><sup>" + str(first) + "</sup>Ibid., p. " + str(first) + "."
+            + "".join(f"<br/> <sup>{n}</sup>Ibid., p. {n}."
+                      for n in range(first + 1, first + count))
+            + "</p>")
+
+
+def test_a_superscript_run_yields_every_entry(vtb):
+    bodies = ["<p>" + "".join(f"x<sup>{n}</sup>" for n in range(1, 6)) + "</p>",
+              "<h1>NOTES</h1><h2>Introduction</h2>"
+              "<p><sup>1</sup>One.</p><p><sup>2</sup>Two.</p>" + _br_sup_run(3, 3)]
+    _, groups = vtb.parse_notes_section(bodies)
+    assert [n for _, n, _ in groups[0]] == [1, 2, 3, 4, 5]
+
+
+def test_a_superscript_run_keeps_its_superscripts_when_anchored(vtb):
+    bodies = ["<p>" + "".join(f"x<sup>{n}</sup>" for n in range(1, 6)) + "</p>",
+              "<h1>NOTES</h1><h2>Introduction</h2>"
+              "<p><sup>1</sup>One.</p><p><sup>2</sup>Two.</p>" + _br_sup_run(3, 3)]
+    stats = vtb.link_notes(bodies, set())
+    assert stats["linked"] == 5 and stats["unlinked"] == 0
+    for n in (4, 5):
+        assert (f'<sup><a id="note-g0-{n}" href="page_0000.xhtml#ref-g0-{n}">'
+                f'{n}</a></sup>') in bodies[1]
+    for n in (3, 4, 5):
+        assert f'href="page_0001.xhtml#note-g0-{n}"' in bodies[0]
+    # the break and its space are the run's typesetting here too
+    assert "<br/> <sup><a id=\"note-g0-4\"" in bodies[1]
+
+
+def test_superscript_numbers_that_do_not_climb_are_not_a_run(vtb):
+    bodies = ["<p>a<sup>1</sup>b<sup>2</sup>c<sup>3</sup></p>",
+              "<h1>NOTES</h1><h2>Introduction</h2>"
+              "<p><sup>1</sup>One.</p><p><sup>2</sup>Two.</p>"
+              "<p><sup>3</sup>Written at:<br/> <sup>14</sup>Rue de la Paix"
+              "<br/> <sup>2</sup>Floor</p>"]
+    _, groups = vtb.parse_notes_section(bodies)
+    assert [n for _, n, _ in groups[0]] == [1, 2, 3]
+
+
+def test_a_run_is_only_read_in_the_dress_its_own_first_entry_wears(vtb):
+    """The two renderings are never mixed.
+
+    A paragraph opening "3. Ibid." is a plain entry, so superscripts inside
+    it are markers in its prose, not further entries; a paragraph opening
+    with a superscript is the other way about. Reading either run in the
+    other's dress would invent entries out of ordinary citation numerals.
+    """
+    plain_open_sup_run = "<p>3. Ibid., p. 3.<br/> <sup>4</sup>Ibid., p. 4.</p>"
+    sup_open_plain_run = "<p><sup>3</sup>Ibid., p. 3.<br/> 4. Ibid., p. 4.</p>"
+    assert vtb._br_run_notes(plain_open_sup_run, sup=True) == []
+    assert vtb._br_run_notes(plain_open_sup_run) == []
+    assert vtb._br_run_notes(sup_open_plain_run, sup=True) == []
+    assert vtb._br_run_notes(sup_open_plain_run) == []
+
+
+def test_the_shape_eagle_forgotten_actually_prints(vtb):
+    """Verbatim from the book: superscript, no period, <i> inside the text."""
+    run = ('<p><sup>17</sup>Chicago <i>Tribune</i>, June 27, 1893.'
+           '<br/> <sup>18</sup><i>Ibid.</i>, June 28, 1893.'
+           '<br/> <sup>19</sup><i>Ibid.</i>, June 28, 1893.'
+           '<br/> <sup>20</sup><i>Ibid.</i></p>')
+    assert [n for _, _, n in vtb._br_run_notes(run, sup=True)] == [18, 19, 20]
+
+
 def test_numbers_that_do_not_climb_are_not_a_run(vtb):
     """A note may carry a <br/> before a numeral of its own — a date, an
     address, a line of verse. Only an ascending sequence is a run."""
