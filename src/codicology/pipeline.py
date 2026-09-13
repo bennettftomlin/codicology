@@ -6024,6 +6024,49 @@ def normalize_typography(bodies: list[str],
     return stats
 
 
+def _c1_repair_table() -> dict:
+    """Where each C1 control character came from, read back through cp1252."""
+    table = {}
+    for c in range(0x80, 0xA0):
+        try:
+            table[chr(c)] = bytes([c]).decode("cp1252")
+        except UnicodeDecodeError:
+            pass          # 0x81 0x8D 0x8F 0x90 0x9D are unassigned there
+    return table
+
+
+C1_REPAIR = _c1_repair_table()
+
+
+def repair_c1_controls(bodies: list[str]) -> int:
+    """Put back the punctuation a mis-decoded text layer turned into controls.
+
+    A PDF writes its punctuation in WinAnsi, where 0x97 is an em dash and
+    0x95 a bullet; decoded as Latin-1 instead they become C1 control
+    characters, which are not punctuation and not anything — they render as
+    nothing, match no search, and read as nothing aloud. One field manual
+    carried 608 of them, every bullet in every list it prints.
+
+    This is the one character repair the pipeline makes on its own, and it
+    makes it because the mapping is not a guess: cp1252 is what the bytes
+    meant, and reading them back through it is the inverse of the fault
+    rather than a correction of the text. The five bytes cp1252 leaves
+    unassigned are left exactly as they are — see [unusual_characters],
+    which reports them for a human instead.
+    """
+    n = 0
+    for i, body in enumerate(bodies):
+        if not any(0x80 <= ord(ch) <= 0x9F for ch in body):
+            continue
+        out = []
+        for ch in body:
+            rep = C1_REPAIR.get(ch)
+            out.append(rep if rep is not None else ch)
+            n += rep is not None
+        bodies[i] = "".join(out)
+    return n
+
+
 def unusual_characters(bodies: list[str]) -> "list[tuple[str, int]]":
     """Characters that usually mean the recogniser stumbled, with counts —
     the broken-ligature ¬, box-drawing strays, replacement characters.
@@ -7520,6 +7563,12 @@ def build_epub(
     if n_reconciled:
         print(f"    reconciled {n_reconciled} word(s) against the book's "
               f"own born-digital text")
+    # Straight after reconciliation, because that is where they come in, and
+    # before typography, because two of them ARE quote marks.
+    n_c1 = repair_c1_controls(bodies)
+    if n_c1:
+        print(f"    repaired {n_c1} punctuation mark(s) the text layer "
+              f"delivered as control characters")
     # After reconciliation, the lesson the chapter separator taught: the
     # publisher's layer keeps straight quotes, and reconciling after this
     # pass would quietly put them back.
