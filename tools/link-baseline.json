@@ -1,0 +1,306 @@
+{
+ "books": {
+  "1111": {
+   "installed_foot": 1,
+   "installed_notes": 0,
+   "name": "Combatives FM 21-150 - Department of the Army.",
+   "probe_foot": 1,
+   "probe_notes": 0
+  },
+  "1112": {
+   "installed_foot": 1,
+   "installed_notes": 0,
+   "name": "FM4-25 First Aid Manual - Department of the Ar",
+   "probe_foot": 1,
+   "probe_notes": 0
+  },
+  "1113": {
+   "installed_foot": 0,
+   "installed_notes": 0,
+   "name": "FM 5-103 Survivability Manual - Department of ",
+   "probe_foot": 0,
+   "probe_notes": 0
+  },
+  "1115": {
+   "installed_foot": 1,
+   "installed_notes": 0,
+   "name": "FM 21-10 Field Hygiene and Sanitation - Depart",
+   "probe_foot": 1,
+   "probe_notes": 0
+  },
+  "1116": {
+   "installed_foot": 0,
+   "installed_notes": 0,
+   "name": "FM-20-3-Camouflage-Concealment-and-Decoys - De",
+   "probe_foot": 0,
+   "probe_notes": 0
+  },
+  "1996": {
+   "installed_foot": 0,
+   "installed_notes": 568,
+   "name": "Chinese Communism and the Rise of Mao - Benjam",
+   "probe_foot": 0,
+   "probe_notes": 567
+  },
+  "2017": {
+   "installed_foot": 13,
+   "installed_notes": 0,
+   "name": "Russian Purge & the Extraction of Confessi - F",
+   "probe_foot": 13,
+   "probe_notes": 0
+  },
+  "2043": {
+   "installed_foot": 35,
+   "installed_notes": 0,
+   "name": "When Protest Becomes Crime - Carolijn Terwindt",
+   "probe_foot": 35,
+   "probe_notes": 0
+  },
+  "2044": {
+   "installed_foot": 0,
+   "installed_notes": 425,
+   "name": "Working the Phones - Jamie Woodcock.epub",
+   "probe_foot": 0,
+   "probe_notes": 425
+  },
+  "2045": {
+   "installed_foot": 0,
+   "installed_notes": 356,
+   "name": "Work, Sex, & Power - Willie Thompson.epub",
+   "probe_foot": 0,
+   "probe_notes": 356
+  },
+  "2046": {
+   "installed_foot": 0,
+   "installed_notes": 29,
+   "name": "A Critical History of Poverty Finance - Nick B",
+   "probe_foot": 0,
+   "probe_notes": 29
+  },
+  "2047": {
+   "installed_foot": 0,
+   "installed_notes": 37,
+   "name": "Antiblackness and Global Health - Lioba Hirsch",
+   "probe_foot": 0,
+   "probe_notes": 37
+  },
+  "2049": {
+   "installed_foot": 0,
+   "installed_notes": 929,
+   "name": "A People's History of Modern Europe - William ",
+   "probe_foot": 0,
+   "probe_notes": 929
+  },
+  "2050": {
+   "installed_foot": 0,
+   "installed_notes": 1453,
+   "name": "A People's History of the Second World War - D",
+   "probe_foot": 0,
+   "probe_notes": 1453
+  },
+  "2051": {
+   "installed_foot": 304,
+   "installed_notes": 0,
+   "name": "A People's History of the Russian Revoluti - N",
+   "probe_foot": 304,
+   "probe_notes": 0
+  },
+  "2052": {
+   "installed_foot": 0,
+   "installed_notes": 167,
+   "name": "Anthropology's World - Ulf Hannerz.epub",
+   "probe_foot": 0,
+   "probe_notes": 167
+  },
+  "2053": {
+   "installed_foot": 0,
+   "installed_notes": 111,
+   "name": "After Queer Theory - James Penney.epub",
+   "probe_foot": 0,
+   "probe_notes": 111
+  },
+  "2054": {
+   "installed_foot": 0,
+   "installed_notes": 296,
+   "name": "A Theory of Isis - Mohammad-Mahmoud Ould Moham",
+   "probe_foot": 0,
+   "probe_notes": 296
+  },
+  "2055": {
+   "installed_foot": 0,
+   "installed_notes": 549,
+   "name": "As If Already Free - Holly High.epub",
+   "probe_foot": 0,
+   "probe_notes": 549
+  },
+  "2056": {
+   "installed_foot": 0,
+   "installed_notes": 520,
+   "name": "Arms and the People - Mike Gonzalez.epub",
+   "probe_foot": 0,
+   "probe_notes": 520
+  },
+  "2057": {
+   "installed_foot": 1,
+   "installed_notes": 404,
+   "name": "Beyond Money - Anitra Nelson.epub",
+   "probe_foot": 1,
+   "probe_notes": 404
+  },
+  "2058": {
+   "installed_foot": 14,
+   "installed_notes": 0,
+   "name": "Bad News for Refugees - Greg Philo.epub",
+   "probe_foot": 14,
+   "probe_notes": 0
+  },
+  "2059": {
+   "installed_foot": 0,
+   "installed_notes": 38,
+   "name": "Border Watch - Alexandra Hall.epub",
+   "probe_foot": 0,
+   "probe_notes": 38
+  },
+  "2060": {
+   "installed_foot": 0,
+   "installed_notes": 836,
+   "name": "Borderline Justice - Frances Webber.epub",
+   "probe_foot": 0,
+   "probe_notes": 836
+  },
+  "2061": {
+   "installed_foot": 0,
+   "installed_notes": 500,
+   "name": "Burning Up - Simon Pirani.epub",
+   "probe_foot": 0,
+   "probe_notes": 500
+  },
+  "2062": {
+   "installed_foot": 0,
+   "installed_notes": 54,
+   "name": "Capitalism's New Clothes - Colin Cremin.epub",
+   "probe_foot": 0,
+   "probe_notes": 54
+  },
+  "2063": {
+   "installed_foot": 0,
+   "installed_notes": 809,
+   "name": "China's Engine of Environmental Collapse - Ric",
+   "probe_foot": 0,
+   "probe_notes": 809
+  },
+  "2064": {
+   "installed_foot": 0,
+   "installed_notes": 387,
+   "name": "Decolonising the University - Gurminder K. Bha",
+   "probe_foot": 0,
+   "probe_notes": 387
+  },
+  "2065": {
+   "installed_foot": 0,
+   "installed_notes": 683,
+   "name": "Disaster Anarchy - Rhiannon Firth.epub",
+   "probe_foot": 0,
+   "probe_notes": 683
+  },
+  "2066": {
+   "installed_foot": 9,
+   "installed_notes": 705,
+   "name": "Development Against Democracy - Irene L. Gendz",
+   "probe_foot": 9,
+   "probe_notes": 705
+  },
+  "2067": {
+   "installed_foot": 4,
+   "installed_notes": 0,
+   "name": "Feminist Solutions for Ending War - Megan MacK",
+   "probe_foot": 4,
+   "probe_notes": 0
+  },
+  "2068": {
+   "installed_foot": 0,
+   "installed_notes": 100,
+   "name": "Gramsci on Tahrir - Brecht De Smet.epub",
+   "probe_foot": 0,
+   "probe_notes": 100
+  },
+  "2069": {
+   "installed_foot": 0,
+   "installed_notes": 391,
+   "name": "Green Parties Green Future - Per Gahrton.epub",
+   "probe_foot": 0,
+   "probe_notes": 391
+  },
+  "2074": {
+   "installed_foot": 11,
+   "installed_notes": 0,
+   "name": "Laboratories of Learning - Mario Novelli.epub",
+   "probe_foot": 11,
+   "probe_notes": 0
+  },
+  "2077": {
+   "installed_foot": 1,
+   "installed_notes": 0,
+   "name": "Nomads, Empires, States - Kees Van der Pijl.ep",
+   "probe_foot": 1,
+   "probe_notes": 0
+  },
+  "2078": {
+   "installed_foot": 0,
+   "installed_notes": 547,
+   "name": "Monitored - Peter Bloom.epub",
+   "probe_foot": 0,
+   "probe_notes": 547
+  },
+  "2080": {
+   "installed_foot": 0,
+   "installed_notes": 41,
+   "name": "Race and Ethnicity in Latin America - Peter Wa",
+   "probe_foot": 0,
+   "probe_notes": 41
+  },
+  "2083": {
+   "installed_foot": 0,
+   "installed_notes": 791,
+   "name": "Revolutionary Movements in Africa - Pascal Bia",
+   "probe_foot": 0,
+   "probe_notes": 791
+  },
+  "224": {
+   "installed_foot": 3,
+   "installed_notes": 0,
+   "name": "The conquest of the old Northwest and its - Ja",
+   "probe_foot": 3,
+   "probe_notes": 0
+  },
+  "339": {
+   "installed_foot": 0,
+   "installed_notes": 339,
+   "name": "Shadow Libraries - Joe Karaganis.epub",
+   "probe_foot": 0,
+   "probe_notes": 339
+  },
+  "8644": {
+   "installed_foot": 89,
+   "installed_notes": 72,
+   "name": "The Invisible Government - David Wise.epub",
+   "probe_foot": 89,
+   "probe_notes": 72
+  },
+  "8718": {
+   "installed_foot": 0,
+   "installed_notes": 973,
+   "name": "Eagle Forgotten_ The Life of John Peter Al - H",
+   "probe_foot": 0,
+   "probe_notes": 973
+  },
+  "9013": {
+   "installed_foot": 0,
+   "installed_notes": 207,
+   "name": "A History of the Rock Island District Corp - R",
+   "probe_foot": 0,
+   "probe_notes": 207
+  }
+ },
+ "generated": "2026-09-12"
+}
