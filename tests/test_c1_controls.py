@@ -37,6 +37,33 @@ def test_quote_marks_come_back_before_typography_can_see_them(vtb):
     assert bodies == ["<p>“water” and the soldier’s canteen</p>"]
 
 
+def test_a_symbol_fonts_dingbat_is_not_read_as_cp1252_punctuation(vtb):
+    # FM 3-06 sets its second-level list marker at 0x83, an index into a
+    # symbol font. cp1252 calls that byte a florin sign, which is visible,
+    # searchable, and not what the page prints -- so with no witness in the
+    # book it stays a control character and unusual_characters reports it.
+    bodies = [f"<p>{chr(0x83)} Toxic industrial material</p>",
+              "<p>• Industrial areas</p>"]
+    assert vtb.repair_c1_controls(bodies) == 0
+    assert bodies[0] == f"<p>{chr(0x83)} Toxic industrial material</p>"
+
+
+def test_a_letter_the_book_prints_elsewhere_is_restored_on_that_evidence(vtb):
+    # The other half of the rule: a book that genuinely lost a letter to the
+    # same fault says so, because the letter survived somewhere.
+    bodies = [f"<p>c{chr(0x9C)}ur</p>", "<p>le cœur du problème</p>"]
+    assert vtb.repair_c1_controls(bodies) == 1
+    assert bodies[0] == "<p>cœur</p>"
+
+
+def test_punctuation_needs_no_witness_because_the_encoding_is_the_evidence(vtb):
+    # FM 21-10 prints no curly quote that survived, and its quotes are still
+    # restored: for punctuation cp1252 is not a guess about the book.
+    bodies = [f"<p>Use {chr(0x93)}safety{chr(0x94)} Stoddard solvent.</p>"]
+    assert vtb.repair_c1_controls(bodies) == 2
+    assert bodies == ["<p>Use “safety” Stoddard solvent.</p>"]
+
+
 def test_the_bytes_cp1252_never_assigned_are_left_exactly_as_they_are(vtb):
     for c in (0x81, 0x8D, 0x8F, 0x90, 0x9D):
         bodies = [f"<p>a{chr(c)}b</p>"]
@@ -60,6 +87,14 @@ def test_the_repair_reports_what_unusual_characters_was_only_able_to_warn_about(
     vtb.repair_c1_controls(bodies)
     assert [ch for ch, _ in vtb.unusual_characters(bodies)
             if 0x80 <= ord(ch) <= 0x9F] == []
+
+
+def test_what_the_repair_declines_is_still_handed_to_the_human(vtb):
+    bodies = [f"<p>a{chr(0x83)}b{chr(0x90)}c</p>"]
+    vtb.repair_c1_controls(bodies)
+    left = [ch for ch, _ in vtb.unusual_characters(bodies)
+            if 0x80 <= ord(ch) <= 0x9F]
+    assert sorted(left) == [chr(0x83), chr(0x90)]
 
 
 def test_markup_is_not_disturbed(vtb):

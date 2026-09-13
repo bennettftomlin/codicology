@@ -127,6 +127,7 @@ from collections import Counter
 import sys
 import tempfile
 import time
+import unicodedata
 from typing import NamedTuple
 
 import cv2
@@ -6048,19 +6049,34 @@ def repair_c1_controls(bodies: list[str]) -> int:
     carried 608 of them, every bullet in every list it prints.
 
     This is the one character repair the pipeline makes on its own, and it
-    makes it because the mapping is not a guess: cp1252 is what the bytes
-    meant, and reading them back through it is the inverse of the fault
-    rather than a correction of the text. The five bytes cp1252 leaves
+    makes it because for punctuation the mapping is not a guess: cp1252 is
+    what those bytes meant, and reading them back through it inverts the
+    fault rather than correcting the text. The five bytes cp1252 leaves
     unassigned are left exactly as they are — see [unusual_characters],
     which reports them for a human instead.
+
+    Punctuation is the whole of the safe case, and the limit is a real one.
+    A PDF may also use a C1 byte as an index into a SYMBOL font, where it
+    stands for a dingbat and cp1252 has nothing to say about it: one manual
+    sets its second-level list marker at 0x83, which cp1252 calls a florin
+    sign — visible, searchable, and not what the page prints. So anything
+    that is not punctuation needs the book's own word for it, exactly as a
+    missed running head does: restored only where the book prints that same
+    character somewhere it arrived intact. A French book that lost its œ
+    says so; a manual that never prints a florin does not.
     """
+    seen = set()
+    for body in bodies:
+        seen.update(body)
+    repair = {ch: tgt for ch, tgt in C1_REPAIR.items()
+              if unicodedata.category(tgt).startswith("P") or tgt in seen}
     n = 0
     for i, body in enumerate(bodies):
         if not any(0x80 <= ord(ch) <= 0x9F for ch in body):
             continue
         out = []
         for ch in body:
-            rep = C1_REPAIR.get(ch)
+            rep = repair.get(ch)
             out.append(rep if rep is not None else ch)
             n += rep is not None
         bodies[i] = "".join(out)
