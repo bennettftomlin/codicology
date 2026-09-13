@@ -2425,6 +2425,92 @@ def strip_running_heads(items: list[PageItem]) -> list[PageItem]:
     return keep
 
 
+def head_shape(text: str) -> str:
+    """A running head with its folio masked, so every page's is one shape."""
+    masked = re.sub(r"\d+", "#", " ".join(text.split()))
+    return re.sub(r"[^A-Za-z#]+", " ", masked).strip().lower()
+
+
+# A block with nothing block-level inside it, which is what a running head is.
+# Written so it can never swallow a figure, a list or a table by accident.
+_LEAF_BLOCK = (r"<(p|h[1-6])\b[^>]*>"
+               r"(?:(?!</?(?:p|h[1-6]|figure|div|table|ul|ol|blockquote)\b).)*?"
+               r"</\1>")
+_FIRST_LEAF = re.compile(r"\A\s*" + _LEAF_BLOCK, re.S)
+_LAST_LEAF = re.compile(_LEAF_BLOCK + r"\s*\Z", re.S)
+_OPENS_HEADING = re.compile(r"\A\s*<h[1-6]\b")
+_ENDS_HEADING = re.compile(r"</h[1-6]>\s*\Z")
+
+
+def strip_missed_running_heads(bodies: list[str],
+                               page_furniture: list[list[str]]
+                               ) -> list[tuple[int, str]]:
+    """
+    Drop the running heads the layout pass called content, and say which.
+
+    The layout model is not consistent about its own furniture. On one book
+    it labelled the line "10 THE REBEL PASSION" a PageHeader on 209 pages
+    and a SectionHeader on 49 — the same place on the page, the same 0.99
+    confidence — so 47 running heads shipped inside the prose, and 35 of
+    them as HEADINGS, dropped into sentences that ran across the page
+    break. No test of shape or position can separate the two groups,
+    because there is no difference between them to find. Only the book's
+    own testimony can, and the book gives it freely: a running head is
+    printed on every page of a section, so a shape recurring under a
+    furniture label is the book naming that line.
+
+    Three sightings, the threshold FURNITURE_PAGES already sets for
+    repeated decoration and for the same reason: two is a coincidence,
+    three is a habit. Recurrence alone is not enough, though, and the two
+    conditions that guard it were measured on the shelf rather than
+    supposed. parse_folio must read a page number out of the line, which
+    refuses the largest class of lookalikes — a bare chapter number
+    standing over its title, 20-odd of each digit across the books. And
+    the block beside it must not itself be a heading, because a chapter's
+    OPENING page prints no running head: a head-shaped line there is the
+    chapter number above the chapter's name.
+
+    Across every cached book the rule takes 57 lines in 8 books, while the
+    two conditions spare 129 repeated section titles and 3 chapter
+    openings.
+    """
+    census: dict[str, int] = {}
+    for texts in page_furniture:
+        for t in texts:
+            s = head_shape(t)
+            if s:
+                census[s] = census.get(s, 0) + 1
+    removed: list[tuple[int, str]] = []
+    if not census:
+        return removed
+    for i, body in enumerate(bodies):
+        for pattern, at_top in ((_FIRST_LEAF, True), (_LAST_LEAF, False)):
+            m = pattern.search(body)
+            if m is None:
+                continue
+            text = " ".join(_strip_tags(m.group(0)).split())
+            if not text or len(text) > RUNNING_HEAD_MAX_CHARS:
+                continue
+            if census.get(head_shape(text), 0) < FURNITURE_PAGES:
+                continue
+            if parse_folio(text) is None:
+                continue
+            rest = body[m.end():] if at_top else body[:m.start()]
+            if (_OPENS_HEADING if at_top else _ENDS_HEADING).search(rest):
+                continue
+            left = body[:m.start()] + body[m.end():]
+            # A head printed on an otherwise empty leaf interrupts nothing,
+            # and taking it leaves a body that reads as blank — which the
+            # blank pass then deletes, costing a page and its page-list
+            # anchor to tidy one line. Losing a page is the larger harm.
+            if "<img" not in left and not _strip_tags(left).strip():
+                continue
+            body = left
+            bodies[i] = body
+            removed.append((i, text))
+    return removed
+
+
 class PageVerdict(NamedTuple):
     """What the duplicate pass concluded about one page, and on what evidence."""
     index: int
@@ -7408,6 +7494,23 @@ def build_epub(
             figure_data.pop(name, None)
         print(f"    dropped {len(furniture)} repeated decoration(s) as page "
               f"furniture, freeing {freed / 1048576:.1f} MB")
+
+    # The same reconciliation, for lines of type rather than pictures: a head
+    # the layout pass labelled furniture on most pages it sometimes labels a
+    # heading, and that copy lands inside the sentence running across the page
+    # break. Here, beside the picture pass and for the same reason — before
+    # anything downstream counts or links what a page holds.
+    if strip_furniture:
+        missed = strip_missed_running_heads(bodies, page_furniture)
+        if missed:
+            gone = {(pg, t[:90]) for pg, t in missed}
+            label_heads = [h for h in label_heads if (h[0], h[2]) not in gone]
+            shapes = sorted({head_shape(t) for _, t in missed})
+            print(f"    dropped {len(missed)} running head(s) the layout "
+                  f"labelled as content, on the book's own evidence that it "
+                  f"prints the same line as furniture elsewhere"
+                  + (f": {len(shapes)} distinct head(s)" if len(shapes) > 1
+                     else f": {missed[0][1]!r}"))
 
     bodies = [normalize_entry_heads(normalize_math(b)) for b in bodies]
     n_promoted = normalize_note_heads(bodies)
