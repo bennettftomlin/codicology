@@ -3718,7 +3718,8 @@ PART_HEAD = re.compile(
 class TocEntry(NamedTuple):
     """One line of a book's own table of contents, as printed."""
     title: str
-    folio: int | None        # None: a roman-numbered or unnumbered line
+    folio: int | None        # None: an unnumbered line. Roman is carried
+                             # as i - ROMAN_FOLIO_BASE, as the audit carries it
     folio_text: str          # the number as printed, roman numerals included
     depth: int               # 0 = top grouping, 1 = subgroup, 2 = leaf
     # How the page itself declared this line's rank. A typesetter marks a
@@ -3989,7 +3990,7 @@ def parse_printed_toc(bodies: list[str], limit: int = 25,
                     flush()
                     title = re.sub(r"[\s.·…]+$", "", led.group(1))
                     folio_text = led.group(2)
-                    folio = int(folio_text) if folio_text.isdigit() else None
+                    folio = _contents_folio(folio_text)
                     entries.append(TocEntry(title, folio, folio_text, 2, False, 0, page_i))
                     continue
                 if not _FOLIO_ONLY.match(t) and not (
@@ -4062,8 +4063,8 @@ def parse_printed_toc(bodies: list[str], limit: int = 25,
                     entries.append(TocEntry(title, int(m.group(1)), folio_text,
                                             2, bold, indent, page_i))
                 elif roman and title:
-                    entries.append(TocEntry(title, None, folio_text, 2,
-                                            bold, indent))
+                    entries.append(TocEntry(title, _contents_folio(folio_text),
+                                            folio_text, 2, bold, indent, page_i))
                 else:
                     # A row with no folio at all is usually noise — but a
                     # part heading is printed exactly this way: eagle's
@@ -4327,6 +4328,42 @@ def _depths_from_typography(entries: "list[TocEntry]") -> "list[TocEntry]":
     return out
 
 
+def _contents_folio(text: str) -> "int | None":
+    """A contents line's printed folio, in the encoding the folio audit uses.
+
+    Roman included. Front matter paginates in Roman and the audit already
+    reads Roman off a running head, carrying it as i - ROMAN_FOLIO_BASE so
+    the whole numbering space stays ordered. The contents parser recognised
+    the same numerals and threw them away — "FIGURES ..... iv" arrived with
+    no address at all — and a line with no address falls through to the
+    title hunt, which only moves FORWARD. One manual's list of figures was
+    placed 233 pages past the page its own contents named, and because the
+    hunt's floor moves with every placement, every line after it inherited
+    that floor: four front-matter entries and a notes section lost.
+
+    _roman_to_int is strict and stops at 99, which is what front matter is.
+    """
+    t = text.strip()
+    if t.isdigit():
+        # Three digits at most, the same bar parse_folio holds a running
+        # head to: a book prints no page 1997, and a contents line that
+        # ends in a year would otherwise be given one as an address.
+        return int(t) if 1 <= len(t) <= 3 and int(t) else None
+    if re.fullmatch(r"[ivxlc]+", t, re.I):
+        r = _roman_to_int(t)
+        if r is not None:
+            return r - ROMAN_FOLIO_BASE
+    return None
+
+
+def _folio_series(n: int) -> int:
+    """Which numbering a folio belongs to: Roman front matter, plain Arabic,
+    or one of the compound forms. Interpolating across two of them is
+    meaningless arithmetic — the distance from folio iv to folio 7 is not a
+    number of pages — so the resolver only ever reasons within one."""
+    return -1 if n < 0 else n // 1000
+
+
 def folio_resolver(folios: "list[Folio]") -> "callable":
     """
     Printed folio → position in the book, exact where read, pinned where not.
@@ -4337,10 +4374,16 @@ def folio_resolver(folios: "list[Folio]") -> "callable":
     sits a known distance from the nearest anchor on each side, and both sides
     must agree before the answer is trusted.
     """
-    anchors = sorted((f.number, f.index) for f in folios
-                     if f.confident and f.number is not None)
+    by_series: dict = {}
+    for f in folios:
+        if f.confident and f.number is not None:
+            by_series.setdefault(_folio_series(f.number), []).append(
+                (f.number, f.index))
+    for v in by_series.values():
+        v.sort()
 
     def resolve(folio: int) -> int | None:
+        anchors = by_series.get(_folio_series(folio), [])
         if not anchors:
             return None
         import bisect

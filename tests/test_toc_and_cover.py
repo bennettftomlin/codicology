@@ -40,7 +40,12 @@ def test_contents_table_parses_to_titles_folios_and_groups(vtb):
     entries, toc_pages = vtb.parse_printed_toc([TOC_PAGE])
     assert toc_pages == {0}
     kinds = [(e.title, e.folio, e.depth) for e in entries]
-    assert ("Foreword", None, 2) in kinds          # roman folio: kept, unnumbered
+    # A Roman folio is an address like any other, carried in the encoding
+    # the folio audit uses: front matter sorts below Arabic 1 and stays an
+    # integer. Left unnumbered, this line had nothing to resolve against and
+    # fell through to the forward-only title hunt, which is how one manual's
+    # figure list landed 233 pages past the page its contents named.
+    assert ("Foreword", 9 - vtb.ROMAN_FOLIO_BASE, 2) in kinds
     assert ("BOOK 1 — The Story", None, 0) in kinds
     assert ("Part One: ADVENTURES", None, 1) in kinds
     # The chapter-number cell stays in the title: "1 Invasion" is how the
