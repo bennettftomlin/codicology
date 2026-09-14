@@ -2540,6 +2540,18 @@ _LEAF_BLOCK = (r"<(p|h[1-6])\b[^>]*>"
                r"</\1>")
 _FIRST_LEAF = re.compile(r"\A\s*" + _LEAF_BLOCK, re.S)
 _LAST_LEAF = re.compile(_LEAF_BLOCK + r"\s*\Z", re.S)
+# The same head, not given a block of its own: the layout pass put the
+# running head and the first line of prose in ONE paragraph with a <br/>
+# between them. One book carries 21 of these, and they survived the first
+# version of this pass untouched — it read a block's WHOLE text, which for
+# a fused head is the head plus the paragraph it interrupts, far past any
+# length a running head has. The check written to confirm that fix shared
+# the same assumption and reported the book clean.
+_INLINE = r"(?:(?!<br\s*/?>|</?(?:p|h[1-6]|figure|div|table|ul|ol|blockquote)\b).)*?"
+_FIRST_FUSED = re.compile(r"\A\s*<(?:p|h[1-6])\b[^>]*>(" + _INLINE
+                          + r")(<br\s*/?>\s*)", re.S)
+_LAST_FUSED = re.compile(r"(\s*<br\s*/?>)(" + _INLINE
+                         + r")</(?:p|h[1-6])>\s*\Z", re.S)
 _OPENS_HEADING = re.compile(r"\A\s*<h[1-6]\b")
 _ENDS_HEADING = re.compile(r"</h[1-6]>\s*\Z")
 
@@ -2586,21 +2598,38 @@ def strip_missed_running_heads(bodies: list[str],
     if not census:
         return removed
     for i, body in enumerate(bodies):
-        for pattern, at_top in ((_FIRST_LEAF, True), (_LAST_LEAF, False)):
+        # Four places a head can sit: alone in the page's first or last
+        # block, or fused by a <br/> into the front of the first block or
+        # the back of the last. Whole blocks first, so a page that has both
+        # is not read through the wrong lens.
+        for pattern, at_top, fused in ((_FIRST_LEAF, True, False),
+                                       (_LAST_LEAF, False, False),
+                                       (_FIRST_FUSED, True, True),
+                                       (_LAST_FUSED, False, True)):
             m = pattern.search(body)
             if m is None:
                 continue
-            text = " ".join(_strip_tags(m.group(0)).split())
+            if fused:
+                # the head is one group and the break the other; the span to
+                # cut covers both, so the paragraph closes up behind it
+                cut = ((m.start(1), m.end(2)) if at_top
+                       else (m.start(1), m.end(2)))
+                text = " ".join(_strip_tags(
+                    m.group(2) if not at_top else m.group(1)).split())
+            else:
+                cut = (m.start(), m.end())
+                text = " ".join(_strip_tags(m.group(0)).split())
             if not text or len(text) > RUNNING_HEAD_MAX_CHARS:
                 continue
             if census.get(head_shape(text), 0) < FURNITURE_PAGES:
                 continue
             if parse_folio(text) is None:
                 continue
-            rest = body[m.end():] if at_top else body[:m.start()]
-            if (_OPENS_HEADING if at_top else _ENDS_HEADING).search(rest):
+            rest = body[cut[1]:] if at_top else body[:cut[0]]
+            if not fused and \
+                    (_OPENS_HEADING if at_top else _ENDS_HEADING).search(rest):
                 continue
-            left = body[:m.start()] + body[m.end():]
+            left = body[:cut[0]] + body[cut[1]:]
             # A head printed on an otherwise empty leaf interrupts nothing,
             # and taking it leaves a body that reads as blank — which the
             # blank pass then deletes, costing a page and its page-list

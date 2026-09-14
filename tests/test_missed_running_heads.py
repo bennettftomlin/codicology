@@ -71,6 +71,73 @@ def test_a_page_carrying_a_head_and_a_foot_loses_both(vtb):
 
 
 # --------------------------------------------------------------------------
+# a head with no block of its own
+# --------------------------------------------------------------------------
+#
+# The layout pass does not always give the running head a block. On 21 pages
+# of one book it put the head and the first line of prose in ONE paragraph
+# with a <br/> between them. The first version of this pass read a block's
+# WHOLE text, which for a fused head is the head plus the paragraph it
+# interrupts -- far past any length a running head has -- so all 21 survived.
+#
+# The check written to confirm that fix asked whether a block's entire text
+# WAS a running head. It shared the assumption, so it reported the book clean
+# and the heads shipped. The test below is the one that had to exist.
+
+
+def both_dresses(n=9):
+    """A book numbers versos at the front of the head and rectos at the back."""
+    return ([[f"{2 * k} THE REBEL PASSION"] for k in range(5, 5 + n)]
+            + [[f"THE REBEL PASSION {2 * k + 1}"] for k in range(5, 5 + n)])
+
+
+def test_a_head_fused_to_the_paragraph_it_interrupts_is_still_found(vtb):
+    bodies = ["<p>34 THE REBEL PASSION<br/>cruelly ill-used her. "
+              "His strength was whole.</p>"]
+    removed = vtb.strip_missed_running_heads(bodies, both_dresses())
+    assert removed == [(0, "34 THE REBEL PASSION")]
+    assert bodies == ["<p>cruelly ill-used her. His strength was whole.</p>"]
+
+
+def test_the_other_dress_of_the_same_head_too(vtb):
+    bodies = ["<p>THE REBEL PASSION 29<br/>whole arch as it had been.</p>"]
+    removed = vtb.strip_missed_running_heads(bodies, both_dresses())
+    assert removed == [(0, "THE REBEL PASSION 29")]
+    assert bodies == ["<p>whole arch as it had been.</p>"]
+
+
+def test_a_fused_foot_at_the_end_of_the_page_goes_as_well(vtb):
+    bodies = ["<p>prose that ends the page<br/>52 THE REBEL PASSION</p>"]
+    removed = vtb.strip_missed_running_heads(bodies, both_dresses())
+    assert removed == [(0, "52 THE REBEL PASSION")]
+    assert bodies == ["<p>prose that ends the page</p>"]
+
+
+def test_a_line_break_in_ordinary_prose_is_not_a_head(vtb):
+    bodies = ["<p>ordinary prose<br/>with a line break and no head at all</p>"]
+    assert vtb.strip_missed_running_heads(bodies, both_dresses()) == []
+
+
+def test_a_fused_line_the_book_never_prints_as_furniture_stays(vtb):
+    bodies = ["<p>34 SOME OTHER TITLE<br/>and the prose beneath it.</p>"]
+    assert vtb.strip_missed_running_heads(bodies, both_dresses()) == []
+
+
+def test_the_fused_head_is_judged_on_its_own_text_not_the_block(vtb):
+    """The blind spot, stated as a property.
+
+    The block's whole text runs to hundreds of characters; only the segment
+    before the <br/> is the head, and only that segment is measured.
+    """
+    prose = ("cruelly ill-used her. " * 12).strip()
+    bodies = [f"<p>34 THE REBEL PASSION<br/>{prose}</p>"]
+    assert len(vtb._strip_tags(bodies[0])) > vtb.RUNNING_HEAD_MAX_CHARS * 3
+    removed = vtb.strip_missed_running_heads(bodies, both_dresses())
+    assert removed == [(0, "34 THE REBEL PASSION")]
+    assert bodies == [f"<p>{prose}</p>"]
+
+
+# --------------------------------------------------------------------------
 # the threshold: the book must say it more than once by accident
 # --------------------------------------------------------------------------
 
