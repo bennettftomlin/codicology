@@ -2430,11 +2430,25 @@ def demote_mislabelled_heads(items: "list[PageItem]",
     has_entry = any(not j.is_furniture and j.html
                     and re.search(r"(?:^|>)\s*1\.\s", j.html)
                     for j in items)
+    # A page that already shows a heading has lost nothing, and the demotion
+    # exists only to restore what was lost. Without this, every CONTINUATION
+    # page of a multi-chapter notes section qualifies — a new chapter's notes
+    # open with "1." there, so the entry test passes — and the running head
+    # printed at the top of every page of the section is copied into the body
+    # beside the group head that was never missing. Thirty such demotions on
+    # the shelf, in seven books, every one of them on a page carrying its own
+    # head ("IV. Collaboration", "CHAPTER 2"); three of one book's reached
+    # the table of contents.
+    has_head = any(not j.is_furniture and j.html
+                   and (j.label in ("SectionHeader", "Title")
+                        or re.match(r"\s*<h[1-6]", j.html))
+                   for j in items)
     out = []
     for it in items:
         if it.is_furniture and it.html:
             t = re.sub(r"\s+", " ", _strip_tags(it.html)).strip()
-            if has_entry and re.fullmatch(r"(?:FOOT|END)?NOTES?", t, re.I):
+            if has_entry and not has_head \
+                    and re.fullmatch(r"(?:FOOT|END)?NOTES?", t, re.I):
                 print(f"    [~] {page_name}: {t!r} was labelled page "
                       f"furniture but names the section beside it — kept "
                       f"in the body")
