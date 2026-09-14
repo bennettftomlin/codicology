@@ -5564,20 +5564,10 @@ def nav_from_placed(placed, pos_of, kept, bodies, toc_pages,
     stack: list = [(-1, links)]
     stripped_cache: dict = {}
 
-    heading_cache: dict = {}
-
     def stripped(t):
         if t not in stripped_cache:
             stripped_cache[t] = _strip_tags(bodies[t])
         return stripped_cache[t]
-
-    def headings(t):
-        """Only what the page prints as a heading."""
-        if t not in heading_cache:
-            heading_cache[t] = " ".join(
-                _strip_tags(m.group(0)) for m in
-                re.finditer(r"<h[1-6]\b[^>]*>.*?</h[1-6]>", bodies[t], re.S))
-        return heading_cache[t]
 
     for e, target, ok in placed:
         if ok:
@@ -5596,31 +5586,10 @@ def nav_from_placed(placed, pos_of, kept, bodies, toc_pages,
             # by definition, which is how "Foreword" once pointed at the
             # table that listed it.
             search = [t for t in kept if t > hunt_from and t not in toc_pages]
-            # A title of ONE word is not a phrase. The test below demands a
-            # contiguous phrase because "a contiguous phrase is not supplied
-            # by accident" — which is true of "The Analysis of Consumer
-            # Choice" and false of "Notes". Burning Up's contents line Notes
-            # matched a page that says "referred to in the notes to the
-            # chapters", forty pages past its own notes section, and dragged
-            # the hunt's floor with it so the section after it could never be
-            # placed at all.
-            #
-            # So a one-word line is offered the pages that HEAD that word
-            # first. Preferred, never required: a page whose heading the OCR
-            # read as body text still has only its text to be found by, and
-            # an entry that fails to place does not degrade — it disappears
-            # from the contents entirely. 325 such lines on the shelf, 284
-            # already on a page that heads them.
-            target = None
-            if len(e.title.split()) == 1:
-                target = next((t for t in search
-                               if _title_names_this_page(e.title, headings(t))),
-                              None)
-            if target is None:
-                target = next((t for t in search
-                               if _title_names_this_page(
-                                   e.title, stripped(t)[:300])),
-                              None)
+            target = next((t for t in search
+                           if _title_names_this_page(
+                               e.title, stripped(t)[:300])),
+                          None)
             if target is None and hunt_from < 0:
                 # Front matter — a Preface, a Foreword — sits in the
                 # opening pages and carries roman folios the audit never
