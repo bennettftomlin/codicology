@@ -1,0 +1,100 @@
+{
+  "source": "https://www.gutenberg.net.au/ebooks06/0601981h.html",
+  "title": "The War with the Newts",
+  "creator": { "name": "Karel Čapek", "file_as": "Čapek, Karel" },
+  "contributors": [
+    {
+      "name": "David Wyllie",
+      "role": "trl",
+      "file_as": "Wyllie, David",
+      "label": "Translator",
+      "credit": "Translated into English by David Wyllie",
+      "note": "David Wyllie, 2002"
+    }
+  ],
+  "language": "en",
+  "date": "1936",
+  "publisher": "Project Gutenberg Australia",
+  "rights": "English translation copyright (c) 2002 David Wyllie, licensed under Creative Commons Attribution-NonCommercial-ShareAlike 2.1 Australia.",
+  "description": "Karel Capek's 1936 satirical novel, translated by David Wyllie: a sea captain finds a colony of intelligent newts, industry puts them to work, and they inherit the coastline.",
+  "subjects": ["Science fiction", "Satire", "Czech literature"],
+  "author_html": "Karel Čapek (1890–1938); first published in Czech as <em>Válka s mloky</em>, 1936",
+  "source_note": "Project Gutenberg Australia, eBook no. 0601981h, first posted June 2006, last updated August 2024:",
+  "licence_html": "<a rel=\"license\" href=\"http://creativecommons.org/licenses/by-nc-sa/2.1/au/\"><img src=\"../images/cc-by-nc-sa.png\" alt=\"Creative Commons Licence\"/></a></p>\n<p>This work is licensed under a <a rel=\"license\" href=\"http://creativecommons.org/licenses/by-nc-sa/2.1/au/\">Creative Commons Attribution-NonCommercial-ShareAlike 2.1 Australia Licence</a>. English translation copyright © 2002 David Wyllie.</p>\n<p>Project Gutenberg Australia eBooks are created from printed editions which are in the public domain in Australia; copyright laws differ between countries, so check the law where you are before downloading or redistributing this file.",
+  "colophon_note_html": "The chapter named <em>Town carnival in Nové Stršací</em> is left as the source spells it. The town is Nové Strašecí, but the source’s own letters are damaged in a way its encoding cannot explain, and nothing in the book witnesses the correction.",
+
+  "reader": "divs",
+  "mojibake": true,
+  "the_end": "THE END",
+
+  "repairs": [
+    { "bad": "\\xa9", "good": "©", "count": 1,
+      "why": "a real copyright sign, not mojibake: cp1252 a9 is not valid UTF-8" },
+    { "bad": "NOV\\xc3 STR\\xc5AC\\xc3", "good": "NOVÉ STRŠACÍ", "count": 2,
+      "why": "uppercase of the book's own intact 'Nové STRšací' in chapter 10" },
+    { "bad": "Sedlá\\xc4ek", "good": "Sedláček", "count": 1,
+      "why": "Vojtěch Sedláček, named beside a Vojtěch whose caron survived" },
+    { "bad": "\\xc5árka", "good": "Šárka", "count": 1,
+      "why": "the ship Šárka; Czech has no other word of this shape" },
+    { "bad": "\\xc3coles", "good": "Écoles", "count": 2,
+      "why": "les Écoles Zimmermann, French throughout this passage" },
+    { "bad": "\\xc5afránek", "good": "Šafránek", "count": 1,
+      "why": "Inž. Mirko Šafránek, a Czech surname" },
+    { "bad": "GAL\\xc3PAGOS", "good": "GALÁPAGOS", "count": 1,
+      "why": "the same note spells 'Galápagos Islands' with its acute intact" },
+    { "bad": "\\xc4les", "good": "éles", "count": 1,
+      "why": "the book spells it 'Les Urodéles' with e-acute in note 1" },
+    { "bad": "Ha\\xc4ti", "good": "Haiti", "count": 1,
+      "why": "no witness in the book for a diacritic here, so left plain" },
+    { "bad": "×hningen", "good": "Öhningen", "count": 6,
+      "why": "wrong but valid: &mdash; (cp1252 97) stands where &ndash; (96) belongs, O-umlaut; Scheuchzer's fossil came from the Öhningen quarry" }
+  ],
+
+  "expect_dropped": [
+    "Project Gutenberg Australia a treasure-trove of literature",
+    "eBook No.: 0601981h",
+    "This work is licensed under a Creative Commons",
+    "English translation copyright",
+    "Translated into English by David Wyllie",
+    "Table of Contents",
+    "THE STRANGE BEHAVIOUR OF CAPTAIN VAN TOCH",
+    "MISTER POVONDRA READS THE PAPER",
+    "MASSACRE ON THE COCONUT ISLES",
+    "This site is full of FREE ebooks"
+  ],
+
+  "images": {
+    "0601981h-1.jpg": {
+      "src": "0601981h-images/0601981h-1.jpg",
+      "name": "fig-andrias-skeleton.jpg",
+      "alt": "Line drawing of the fossil skeleton of a giant salamander, seen from above."
+    },
+    "0601981h-1.gif": {
+      "src": "0601981h-images/0601981h-1.gif",
+      "name": "fig-newt-manifesto.gif",
+      "alt": "Facsimile of a newt manifesto printed in a Javanese script."
+    },
+    "0601981h-2.gif": {
+      "src": "0601981h-images/0601981h-2.gif",
+      "name": "fig-japanese-leaflet.gif",
+      "alt": "Facsimile of a leaflet printed in Japanese, set in vertical columns."
+    },
+    "commons-cc-by-nc-sa.png": {
+      "src": "0601981h-images/commons-cc-by-nc-sa.png",
+      "name": "cc-by-nc-sa.png",
+      "alt": "Creative Commons Licence badge."
+    }
+  },
+
+  "cover": {
+    "alt": "Cover: the fossil skeleton of a giant salamander, over the title The War with the Newts by Karel Čapek.",
+    "author_line": "KAREL ČAPEK",
+    "title_lines": ["THE WAR", "WITH THE", "NEWTS"],
+    "foot_lines": ["TRANSLATED BY DAVID WYLLIE", "1936"],
+    "plate": "fig-andrias-skeleton.jpg",
+    "plate_width": 1000,
+    "plate_top": 1240,
+    "ground": [14, 40, 44],
+    "ink": [238, 230, 211]
+  }
+}

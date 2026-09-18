@@ -1,0 +1,131 @@
+/* Project Gutenberg Australia text, restructured as EPUB 3. No colours
+   and no fonts are forced, so the reader's own choices and its night
+   mode survive. */
+
+html { font-size: 100%; }
+body {
+  margin: 0 5%;
+  line-height: 1.5;
+  text-align: justify;
+  widows: 2;
+  orphans: 2;
+}
+
+h1, h2, h3 {
+  font-weight: normal;
+  text-align: center;
+  line-height: 1.25;
+  page-break-after: avoid;
+  break-after: avoid;
+}
+h1 { font-size: 1.35em; margin: 1.5em 0 0.3em; }
+h2 { font-size: 1.15em; margin: 2em 0 0.8em; }
+
+header { margin-bottom: 2.5em; }
+p.chapnum {
+  text-align: center;
+  font-size: 0.85em;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  margin: 0 0 0.4em;
+  text-indent: 0;
+}
+
+section.part { margin-top: 25%; text-align: center; }
+section.part h1 { font-size: 1.8em; letter-spacing: 0.12em; }
+p.part-title {
+  text-align: center;
+  text-indent: 0;
+  font-size: 1.1em;
+  letter-spacing: 0.08em;
+  margin-top: 0.6em;
+}
+
+p { margin: 0; text-indent: 1.3em; }
+header + p { text-indent: 0; }
+p.first { text-indent: 0; }
+blockquote > p:first-child, aside > p:first-child { text-indent: 0; }
+
+/* A scene break is a rule before the section -- except where the
+   chapter opens with one, which three of them do. */
+section.scene::before {
+  content: "";
+  display: block;
+  width: 15%;
+  margin: 1.5em auto;
+  border-top: 1px solid currentColor;
+  opacity: 0.45;
+}
+header + section.scene::before { content: none; }
+
+blockquote {
+  margin: 1.2em 5%;
+  font-size: 0.95em;
+}
+div.quote { margin: 1.2em 4%; font-size: 0.95em; }
+div.telegram p {
+  font-family: "Courier New", monospace;
+  font-variant: small-caps;
+  text-align: left;
+  text-indent: 0;
+}
+
+p.center, .center { text-align: center; text-indent: 0; }
+.upper { text-transform: uppercase; }
+
+p.figure { text-align: center; text-indent: 0; margin: 1.4em 0; }
+p.figure img { max-width: 100%; height: auto; }
+
+sup { font-size: 0.7em; line-height: 0; vertical-align: super; }
+a { text-decoration: none; }
+a.noteref { font-size: 0.85em; }
+
+section.notes { margin-top: 3em; }
+section.notes aside {
+  margin: 1em 0 1em 4%;
+  font-size: 0.9em;
+}
+
+a.noteback { text-decoration: none; }
+
+/* front and back matter */
+section.titlepage { margin-top: 18%; text-align: center; }
+section.titlepage h1 {
+  font-size: 2em;
+  letter-spacing: 0.06em;
+  margin-bottom: 0.8em;
+}
+p.byline, p.translator {
+  text-align: center;
+  text-indent: 0;
+  margin: 0.4em 0;
+}
+p.byline { font-size: 1.25em; }
+p.translator { font-size: 0.9em; margin-top: 2em; }
+section.colophon { font-size: 0.9em; text-align: left; }
+
+section.colophon dl { margin: 0.7em 0; }
+section.colophon dt {
+  font-size: 0.85em;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+section.colophon dd { margin: 0 0 0.6em; }
+section.colophon img { max-width: 88px; }
+p.theend {
+  text-align: center;
+  text-indent: 0;
+  margin-top: 2.5em;
+  letter-spacing: 0.3em;
+}
+section.colophon p { text-indent: 0; margin: 0.7em 0; }
+section.notes aside p { font-size: 1em; }
+section.scene > p:first-child { text-indent: 0; }
+
+/* cover */
+body.cover { margin: 0; text-align: center; }
+body.cover img { max-width: 100%; max-height: 100%; }
+
+nav ol { list-style: none; padding-left: 1em; }
+nav > ol { padding-left: 0; }
+nav li { margin: 0.35em 0; }
