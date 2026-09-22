@@ -128,3 +128,13 @@ def test_continued_carryover_entries_still_link(vtb):
               "Congress, 66; defeated, 68; association with Martin, 65-66</p>"]
     st = vtb.link_index(bodies, MAP, set())
     assert st["linked"] == 3
+
+
+def test_an_index_that_cannot_be_found_is_reported_as_such(vtb):
+    """Not finding the index is an outcome the build must be able to say:
+    Lost Worlds' index lost its heading and the log said nothing at all."""
+    st = vtb.link_index(["<h1>248</h1><p>Aborigines’ Protection Society, "
+                         "208</p>"], MAP, set())
+    assert st["found"] is False and st["linked"] == 0
+    st = vtb.link_index(["<h1>INDEX</h1><p>Addams, Jane, 46</p>"], MAP, set())
+    assert st["found"] is True and st["linked"] == 1

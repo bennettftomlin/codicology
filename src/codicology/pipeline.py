@@ -6516,12 +6516,13 @@ def link_index(bodies: list[str], folio_to_page: dict, dropped: set) -> dict:
     word-preservation rule from the citation linker applies whole: an edited
     page that does not read back identical is reverted and counted.
     """
-    stats = {"linked": 0, "unknown_folio": 0, "reverted": 0,
+    stats = {"found": False, "linked": 0, "unknown_folio": 0, "reverted": 0,
              "skipped_paragraph_index": False, "pages": 0}
     hit = next(((k, m) for k, b in enumerate(bodies)
                 for m in [INDEX_HEAD.search(b)] if m), None)
     if hit is None:
         return stats
+    stats["found"] = True
     start, m = hit
     rank = int(m.group(1)[1])
     end = len(bodies)
@@ -8197,7 +8198,13 @@ def build_epub(
             folio_to_page = {n: i for i, n in numbers.items()
                              if i not in dropped}
             ist = link_index(bodies, folio_to_page, dropped)
-            if ist["skipped_paragraph_index"]:
+            # Every outcome is said. An index whose heading was lost reads,
+            # to the linker, exactly like a book with no index, and saying
+            # nothing on that path is how Lost Worlds shipped 1,720 plain
+            # references from a build whose log looked clean.
+            if not ist["found"]:
+                print("    index: no heading reading INDEX — nothing linked")
+            elif ist["skipped_paragraph_index"]:
                 print("    index: declares paragraph references, not pages — "
                       "left untouched as printed")
             elif ist["linked"]:
@@ -8205,6 +8212,13 @@ def build_epub(
                       f"across {ist['pages']} index page(s)"
                       + (f", {ist['unknown_folio']} named folios outside the "
                          f"map left plain" if ist["unknown_folio"] else ""))
+            elif not ist["reverted"]:
+                print("    index: found, but "
+                      + (f"none of its {ist['unknown_folio']} page "
+                         f"reference(s) names a folio in the map"
+                         if ist["unknown_folio"] else
+                         "no page references were read in it")
+                      + " — nothing linked")
             if ist["reverted"]:
                 print(f"    [!] index: {ist['reverted']} page(s) reverted — "
                       f"a link would have changed the page's words")
