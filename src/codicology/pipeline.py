@@ -2568,6 +2568,64 @@ _LAST_FUSED = re.compile(r"(\s*<br\s*/?>)(" + _INLINE
                          + r")</(?:p|h[1-6])>\s*\Z", re.S)
 _OPENS_HEADING = re.compile(r"\A\s*<h[1-6]\b")
 _ENDS_HEADING = re.compile(r"</h[1-6]>\s*\Z")
+# Four places a head can sit: alone in the page's first or last block, or
+# fused by a <br/> into the front of the first block or the back of the
+# last. Whole blocks first, so a page that has both is not read through the
+# wrong lens.
+_HEAD_SITES = ((_FIRST_LEAF, True, False), (_LAST_LEAF, False, False),
+               (_FIRST_FUSED, True, True), (_LAST_FUSED, False, True))
+# A running head that carries no folio is known by its rhythm instead: the
+# same line opening page after page, never more than this many pages between
+# one sighting and the next — every page, or every recto.
+HEAD_CADENCE = 2
+
+
+def _head_site(body: str, pattern, at_top: bool, fused: bool):
+    """The span a running head at this site would be cut from, and its text,
+    or None where the page has no such block."""
+    m = pattern.search(body)
+    if m is None:
+        return None
+    if fused:
+        # the head is one group and the break the other; the span to cut
+        # covers both, so the paragraph closes up behind it
+        return ((m.start(1), m.end(2)),
+                " ".join(_strip_tags(m.group(1 if at_top else 2)).split()))
+    return (m.start(), m.end()), " ".join(_strip_tags(m.group(0)).split())
+
+
+def _head_key(text: str) -> str:
+    """One line however each page happens to set it: case, the setting of
+    its quotes and dashes, and its spacing aside."""
+    return " ".join(text.translate(_SETTING).split()).casefold()
+
+
+def _head_runs(bodies: list[str], page_furniture: list[list[str]]) -> dict:
+    """{(line, page): (sightings in its run, the run's first page)} for every
+    short line that opens a page, or that the layout called furniture there,
+    split into runs wherever more than HEAD_CADENCE pages pass without it."""
+    seen: dict[str, set] = {}
+    for i, texts in enumerate(page_furniture):
+        for t in texts:
+            seen.setdefault(_head_key(t), set()).add(i)
+    for i, body in enumerate(bodies):
+        for site in _HEAD_SITES:
+            if not site[1]:
+                continue
+            hit = _head_site(body, *site)
+            if hit and hit[1] and len(hit[1]) <= RUNNING_HEAD_MAX_CHARS:
+                seen.setdefault(_head_key(hit[1]), set()).add(i)
+    runs = {}
+    for key, pages in seen.items():
+        pages = sorted(pages)
+        start = 0
+        for k in range(1, len(pages) + 1):
+            if k < len(pages) and pages[k] - pages[k - 1] <= HEAD_CADENCE:
+                continue
+            for p in pages[start:k]:
+                runs[(key, p)] = (k - start, pages[start])
+            start = k
+    return runs
 
 
 def strip_missed_running_heads(bodies: list[str],
@@ -2601,6 +2659,25 @@ def strip_missed_running_heads(bodies: list[str],
     Across every cached book the rule takes 57 lines in 8 books, while the
     two conditions spare 129 repeated section titles and 3 chapter
     openings.
+
+    A book that numbers its pages at the foot gives its running heads no
+    folio to read, and there the folio condition refuses every leak: China's
+    Engine of Environmental Collapse set its recto head REFERENCES as a
+    heading on all 36 notes pages it heads, and never once as furniture, so
+    the census never saw it either. What such a head has instead is rhythm —
+    the identical line, case and typesetting aside, opening page after page
+    with never more than HEAD_CADENCE pages between sightings — where a
+    repeated section title returns once a chapter and a chapter number
+    changes every time. The run's first page is the section's own heading,
+    since an opening page prints no running head, so it stays, and the head
+    must be seen FURNITURE_PAGES times besides it. The rhythm is read at the
+    head of the page only, because the foot is where a page repeats its own
+    apparatus, and not on a page whose furniture already carries words: that
+    page has its running head. Across the shelf this takes 217 more lines in
+    13 books — recto heads through notes, conclusions and indexes, leaked
+    book titles, a manual's designation — while those conditions spare a
+    chart's source line under four charts running, a field manual's NOTE
+    callouts, and a title printed on a cover, a half-title and a title page.
     """
     census: dict[str, int] = {}
     for texts in page_furniture:
@@ -2611,34 +2688,29 @@ def strip_missed_running_heads(bodies: list[str],
     removed: list[tuple[int, str]] = []
     if not census:
         return removed
+    runs = _head_runs(bodies, page_furniture)
+    # A page whose furniture already carries words, not just a number, has
+    # its running head; a second line the rhythm points at is its own.
+    has_head = [any(len(w) >= 3 and not re.fullmatch(r"[ivxlcdm]+", w, re.I)
+                    for t in texts for w in re.findall(r"[A-Za-z]+", t))
+                for texts in page_furniture]
+    has_head += [False] * (len(bodies) - len(has_head))
     for i, body in enumerate(bodies):
-        # Four places a head can sit: alone in the page's first or last
-        # block, or fused by a <br/> into the front of the first block or
-        # the back of the last. Whole blocks first, so a page that has both
-        # is not read through the wrong lens.
-        for pattern, at_top, fused in ((_FIRST_LEAF, True, False),
-                                       (_LAST_LEAF, False, False),
-                                       (_FIRST_FUSED, True, True),
-                                       (_LAST_FUSED, False, True)):
-            m = pattern.search(body)
-            if m is None:
+        for pattern, at_top, fused in _HEAD_SITES:
+            site = _head_site(body, pattern, at_top, fused)
+            if site is None:
                 continue
-            if fused:
-                # the head is one group and the break the other; the span to
-                # cut covers both, so the paragraph closes up behind it
-                cut = ((m.start(1), m.end(2)) if at_top
-                       else (m.start(1), m.end(2)))
-                text = " ".join(_strip_tags(
-                    m.group(2) if not at_top else m.group(1)).split())
-            else:
-                cut = (m.start(), m.end())
-                text = " ".join(_strip_tags(m.group(0)).split())
+            cut, text = site
             if not text or len(text) > RUNNING_HEAD_MAX_CHARS:
                 continue
-            if census.get(head_shape(text), 0) < FURNITURE_PAGES:
-                continue
-            if parse_folio(text) is None:
-                continue
+            if parse_folio(text) is not None:
+                if census.get(head_shape(text), 0) < FURNITURE_PAGES:
+                    continue
+            else:
+                n, first = runs.get((_head_key(text), i), (0, i))
+                if not at_top or first == i or n - 1 < FURNITURE_PAGES \
+                        or has_head[i]:
+                    continue
             rest = body[cut[1]:] if at_top else body[:cut[0]]
             if not fused and \
                     (_OPENS_HEADING if at_top else _ENDS_HEADING).search(rest):

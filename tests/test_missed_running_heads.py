@@ -268,3 +268,104 @@ def test_every_page_is_judged_on_the_whole_books_evidence_not_its_own(vtb):
     furn += [["16 THE REBEL PASSION"]]
     removed = vtb.strip_missed_running_heads(bodies, furn)
     assert removed == [(0, "10 THE REBEL PASSION")]
+
+
+# --------------------------------------------------------------------------
+# a head with no folio in it: known by its rhythm
+# --------------------------------------------------------------------------
+#
+# A book that numbers its pages at the foot gives its running heads nothing
+# for parse_folio to read. China's Engine of Environmental Collapse set its
+# recto head REFERENCES as a heading on all 36 notes pages it heads, and
+# never once as furniture, so neither condition above could ever see it.
+
+
+def _notes_pages(n=8):
+    """The notes section as China's Engine prints it: the opening page's own
+    heading, then REFERENCES atop every recto and the book's title as
+    furniture atop every verso, folios at the foot."""
+    notes = "<ol><li>22. Data sourced from the IMF's outlook database.</li></ol>"
+    bodies, furn = [], []
+    for p in range(n):
+        if p == 0:
+            bodies.append("<h1>References</h1><p>All hyperlinks accessed "
+                          "before December 31, 2019.</p>" + notes)
+            furn.append(["201"])
+        elif p % 2 == 0:
+            bodies.append("<h2>REFERENCES</h2>" + notes)
+            furn.append([str(201 + p)])
+        else:
+            bodies.append(notes)
+            furn.append(["CHINA'S ENGINE OF ENVIRONMENTAL COLLAPSE",
+                         str(201 + p)])
+    return bodies, furn
+
+
+def test_a_head_with_no_folio_goes_on_its_rhythm(vtb):
+    bodies, furn = _notes_pages()
+    removed = vtb.strip_missed_running_heads(bodies, furn)
+    assert removed == [(2, "REFERENCES"), (4, "REFERENCES"), (6, "REFERENCES")]
+    assert not any(b.startswith("<h2>REFERENCES") for b in bodies)
+
+
+def test_the_first_page_of_the_run_is_the_sections_own_heading(vtb):
+    # An opening page prints no running head, so the run's first sighting is
+    # the heading the section opens with — the one the notes linker and the
+    # contents both look for.
+    bodies, furn = _notes_pages()
+    vtb.strip_missed_running_heads(bodies, furn)
+    assert bodies[0].startswith("<h1>References</h1>")
+
+
+def test_a_verso_head_the_layout_calls_a_heading_once_goes_too(vtb):
+    # The same book's title, furniture on every other verso and a heading on
+    # this one: the furniture sightings carry the rhythm.
+    bodies, furn = _notes_pages()
+    bodies[3] = ("<h2>CHINA'S ENGINE OF ENVIRONMENTAL COLLAPSE</h2>"
+                 "<p>formula see the recall notice.</p>")
+    furn[3] = ["204"]
+    removed = vtb.strip_missed_running_heads(bodies, furn)
+    assert (3, "CHINA'S ENGINE OF ENVIRONMENTAL COLLAPSE") in removed
+    assert bodies[3] == "<p>formula see the recall notice.</p>"
+
+
+def test_a_section_title_that_returns_once_a_chapter_stays(vtb):
+    # "Key Terms" opens a page in chapter after chapter, but chapters are far
+    # apart: no rhythm, and every copy is a real heading.
+    bodies = ["<p>prose</p>"] * 90
+    for p in (10, 40, 70):
+        bodies[p] = "<h2>Key Terms</h2><p>absolute advantage</p>"
+    furn = [[str(p + 1)] for p in range(90)]
+    assert vtb.strip_missed_running_heads(bodies, furn) == []
+
+
+def test_an_opening_and_two_more_sightings_are_still_a_coincidence(vtb):
+    # The run's first page is the heading itself, so the head must be seen
+    # three times besides it — the threshold every repetition here meets.
+    # A cover, half-title and title page printing one title are a run of
+    # three, and none of them is a running head.
+    bodies, furn = _notes_pages(6)          # References, then pages 2 and 4
+    assert vtb.strip_missed_running_heads(bodies, furn) == []
+
+
+def test_a_callout_under_the_pages_own_running_head_stays(vtb):
+    # FM 4-25 opens page after page with a NOTE callout, under the manual's
+    # designation set as furniture. A page with its running head already in
+    # hand has no second one: the rhythm is the manual's, not a head's.
+    bodies, furn = [], []
+    for p in range(8):
+        bodies.append("<h2>NOTE</h2><p>Do not remove the helmet.</p>"
+                      if p % 2 else "<p>Check the airway first.</p>")
+        furn.append(["FM 4-25.11/NTRP 4-02.1/AFMAN 44-163(I)", f"2-{p + 1}"])
+    assert vtb.strip_missed_running_heads(bodies, furn) == []
+
+
+def test_a_line_repeated_at_the_foot_of_the_page_stays(vtb):
+    # Burning Up closes four pages running with the same source line under
+    # its charts. The rhythm is read at the head only: the foot is where a
+    # page repeats its own apparatus.
+    firsts = ["Coal led the mix.", "Oil followed it.", "Gas rose fastest.",
+              "Hydro held steady.", "Wind barely showed.", "Solar was last."]
+    bodies = [f"<p>{t}</p><p>Source: IEA Energy Balances</p>" for t in firsts]
+    furn = [[str(70 + p)] for p in range(6)]
+    assert vtb.strip_missed_running_heads(bodies, furn) == []
