@@ -270,3 +270,83 @@ def test_a_one_letter_word_keeps_the_case_the_page_prints(vtb, tmp_path):
     bodies, paths = _native(tmp_path, body, layer)
     vtb.reconcile_native_text(bodies, paths)
     assert "FINDING A JOB" in bodies[0]
+
+
+def test_a_drop_folio_is_not_pasted_over_the_heading_it_was_paired_with(
+        vtb, tmp_path):
+    """InDesign writes a drop folio first and a chapter opening's heading
+    last, so the aligner paired Lost Worlds' "INDEX" with the layer's "248"
+    — nothing agreed on the left to prove it — and the index shipped headed
+    <h1>248</h1>, which is why --link-index never found it. The same word
+    set the publisher's way needs no proof: the apostrophe beside it is
+    still the layer's to set."""
+    entries = ("Protection Society, 208 adventure fiction, 44, 47, 48, 73, "
+               "76, 208 British politics, and, 48").split()
+    body = "<h1>INDEX</h1><p>Aborigines' " + " ".join(entries) + "</p>"
+    layer = "248 Aborigines’ " + " ".join(entries) + " INDEX"
+    bodies, paths = _native(tmp_path, body, layer)
+    vtb.reconcile_native_text(bodies, paths)
+    assert "<h1>INDEX</h1>" in bodies[0]
+    assert "248" not in bodies[0]
+    assert "Aborigines’" in bodies[0]
+
+
+def test_a_folio_is_not_pasted_over_the_last_word_on_the_page(vtb, tmp_path):
+    """The other open end. A Works Cited page broke mid-entry after
+    "epitomiz'd ,", the layer ended "epitomiz’d, 224", and the folio went
+    into the bibliography."""
+    lead = ("Bacon, Francis (1651) Sylva Sylvarum: or A Natural History in "
+            "Ten Centuries, Verulam, Viscount St. Albans:").split()
+    body = "<p>" + " ".join(lead) + " <i>epitomiz'd</i> ,</p>"
+    layer = " ".join(lead) + " epitomiz’d, 224"
+    bodies, paths = _native(tmp_path, body, layer)
+    vtb.reconcile_native_text(bodies, paths)
+    assert "224" not in bodies[0]
+
+
+def test_the_same_word_set_differently_is_still_taken_at_the_edge(vtb,
+                                                                 tmp_path):
+    """Most substitutions at a page's edges were the publisher's curly
+    quotes and dashes — 231 of the 329 that reached the shelf — and those
+    are the same word, so the open side costs them nothing."""
+    lead = ("As Walter Prescott Webb noted in his study of the great plains, "
+            "the term").split()
+    body = "<p>" + " ".join(lead) + " 'frontier'</p>"
+    layer = " ".join(lead) + " ‘frontier’"
+    bodies, paths = _native(tmp_path, body, layer)
+    assert vtb.reconcile_native_text(bodies, paths) == 1
+    assert "‘frontier’" in bodies[0]
+
+
+def test_a_url_the_layer_breaks_in_two_is_not_cut_to_its_first_half(
+        vtb, tmp_path):
+    """The layer held a URL as two words, the second carrying its line-break
+    mark; we read one word and a semicolon. Conceding the clean half paired
+    our whole address with its first half, and 138 citations in one book's
+    notes shipped as "www.scmp.com/;"."""
+    lead = "South China Morning Post, October 25, 2017,".split()
+    tail = "Chris Buckley and Steven Myers, on the leader's words".split()
+    url = ("www.scmp.com/news/china/policies-politics/article/2116836/"
+           "xi-jinping")
+    body = "<p>" + " ".join(lead) + f" {url} ; " + " ".join(tail) + "</p>"
+    layer = (" ".join(lead) + " www.scmp.com/ news/china/policies-politics/"
+             "article/2116836/xi-\x02jinping; " + " ".join(tail))
+    bodies, paths = _native(tmp_path, body, layer)
+    vtb.reconcile_native_text(bodies, paths)
+    assert url in bodies[0]
+
+
+def test_a_line_break_inside_the_paired_word_does_not_cost_its_run(vtb,
+                                                                   tmp_path):
+    """Most garbled runs are sound — 438 of the shelf's 612: the mark sits
+    inside the very word it is paired with, so the publisher's apostrophe
+    beside it is still taken and the clean reading of the word is kept."""
+    lead = "The operation was planned by the 82nd".split()
+    tail = "staff over three weeks in the late summer of that year".split()
+    body = ("<p>" + " ".join(lead) + " Airborne Division's "
+            + " ".join(tail) + "</p>")
+    layer = " ".join(lead) + " Air\x02borne Division’s " + " ".join(tail)
+    bodies, paths = _native(tmp_path, body, layer)
+    assert vtb.reconcile_native_text(bodies, paths) == 1
+    assert "Airborne Division’s" in bodies[0]
+    assert "\x02" not in bodies[0]

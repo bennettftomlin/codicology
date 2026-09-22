@@ -9461,6 +9461,29 @@ _read_pages_resiliently.refused = []
 _read_pages_resiliently.restored = []
 
 
+# How one word can be set two ways: the publisher's curly quotes and primes
+# where the recogniser read straight ones, a true minus for a hyphen, a
+# ligature, an ellipsis as one character. None of them changes which word
+# it is, so none of them needs the pairing proven.
+_SETTING = str.maketrans({
+    "‘": "'", "’": "'", "‚": "'", "‛": "'", "′": "'",
+    "“": '"', "”": '"', "„": '"', "‟": '"', "″": "''",
+    "–": "-", "—": "-", "‒": "-", "−": "-", "…": "...",
+    "ﬀ": "ff", "ﬁ": "fi", "ﬂ": "fl", "ﬃ": "ffi", "ﬄ": "ffl",
+    "ﬅ": "st", "ﬆ": "st",
+})
+# What some layers write where they broke a line: "Air\x02borne".
+_CONTROL = re.compile(r"[\x00-\x1f]")
+
+
+def _same_word(ours: str, layer: str) -> bool:
+    """Whether two readings are one word set differently — see _SETTING —
+    allowing the first letter's case, the sentence boundary the reconciler
+    already concedes to the layer."""
+    a, b = ours.translate(_SETTING), layer.translate(_SETTING)
+    return a[1:] == b[1:] and a[:1].lower() == b[:1].lower()
+
+
 def reconcile_native_text(bodies: list[str], page_paths: list[str]) -> int:
     """
     Where a page's text is born-digital, defer to it word by word.
@@ -9478,6 +9501,30 @@ def reconcile_native_text(bodies: list[str], page_paths: list[str]) -> int:
     differs, bounded by words both sides agree on, with the same number of
     words on each side. Everything else — tables surya restructured, split
     hyphens the layer kept, regions that align loosely — stays ours.
+
+    "Bounded" is enforced, not assumed. The aligner pairs a page's first
+    words with the layer's first words whatever they are, and the layer's
+    order is the typesetter's, not the reader's: InDesign writes a drop
+    folio first and a chapter opening's heading last. On Lost Worlds' first
+    index page that paired our "INDEX" with the layer's "248", the heading
+    shipped as <h1>248</h1>, and --link-index, which finds the index by that
+    heading, linked none of its 1,720 references. Across the 53 born-digital
+    books on the shelf, 329 substitutions at a page's first or last words
+    reached a book; 231 set the same word the publisher's way — curly
+    quotes, en dashes, a true minus, primes — and most of the other 98 were
+    somebody else's words: folios and running heads pasted over index heads
+    and a caption's "Figure 8", "barter-free" turned "barter-technology".
+    Where one side is open, only the same word set differently is taken
+    (_same_word).
+
+    A control character marks where the layer broke a line. Usually that is
+    inside the very word it is paired with ("Air\x02borne"), the run is
+    sound, and the rest of it is taken as before: 438 of the shelf's 612
+    such runs. The other 174, 138 of them in one book's notes, were URLs the
+    layer holds as two words where we read one; conceding the clean half
+    paired our whole address with its first half and shipped "www.scmp.com/;"
+    where the page prints the full path. A garbled word that is not the word
+    it is paired with refuses its whole run.
     """
     import difflib
 
@@ -9513,12 +9560,22 @@ def reconcile_native_text(bodies: list[str], page_paths: list[str]) -> int:
         for tag, a0, a1, b0, b1 in sm.get_opcodes():
             if tag != "replace" or (a1 - a0) != (b1 - b0) or (a1 - a0) > 3:
                 continue
-            for off in range(a1 - a0):
-                cand = layer_words[b0 + off]
-                # Some layers carry control characters at line-break points
-                # ("Cana\x02da"); deferring to those would corrupt a word we
-                # read correctly. Authority does not extend to garbage.
-                if any(ord(c) < 32 for c in cand):
+            run = list(zip(range(a0, a1), layer_words[b0:b1]))
+            # Some layers carry control characters at line-break points
+            # ("Cana\x02da"); deferring to those would corrupt a word we
+            # read correctly. Authority does not extend to garbage — and
+            # where the garbled word is not even the word it is paired with,
+            # not to the rest of its run either (see the docstring).
+            if any(_CONTROL.search(cand)
+                   and not any(_same_word(ours[ti], w) for w in (
+                       _CONTROL.sub("", cand), _CONTROL.sub("-", cand)))
+                   for ti, cand in run):
+                continue
+            # The first or last run on the page has agreement on one side
+            # only, so the pairing itself is unproven there.
+            open_side = a0 == 0 or a1 == len(ours)
+            for ti, cand in run:
+                if _CONTROL.search(cand):
                     continue
                 # The layer is authority on WHICH words are on the page, not
                 # on how they are set. A book that prints a heading in small
@@ -9543,12 +9600,14 @@ def reconcile_native_text(bodies: list[str], page_paths: list[str]) -> int:
                 # broke a heading down the middle: FINDING A JOB came back
                 # as "FINDING a JOB". With no evidence, the page keeps what
                 # it prints.
-                mine = ours[a0 + off]
+                mine = ours[ti]
                 if mine.lower() == cand.lower() and (
                         len(mine) == 1 or mine[1:] != cand[1:]):
                     continue
-                if ours[a0 + off] != cand:
-                    subs.append((a0 + off, cand))
+                if open_side and not _same_word(mine, cand):
+                    continue
+                if mine != cand:
+                    subs.append((ti, cand))
         if not subs:
             continue
         # apply from the back so recorded offsets stay valid
