@@ -6538,8 +6538,15 @@ INDEX_NOT_PAGES = re.compile(r"\bby\s+paragraph|\bto\s+paragraph\s+numbers?",
                              re.I)
 # A page reference as an index prints one: a number, possibly a range with
 # either dash, possibly abbreviated ("167–8" means 167 to 168). A slash
-# neighbour is a name like 9/11, never a page.
-INDEX_REF = re.compile(r"(?<![\d/(])(\d{1,4})(\s*[-–]\s*(\d{1,4}))?(?![\d/])")
+# neighbour is a name like 9/11, never a page. Nor is a dash neighbour: a
+# real range is matched whole from its first number, so a number straight
+# after a dash is the tail of something whose head was refused — "(1976–79)"
+# refused at the parenthesis, then "79" taken as a page. All 46 such links
+# on the shelf were wrong: 20 year-range tails, Covid-19 five times, a bill
+# number, a malformed "42–4–5", and a field manual's second halves of
+# "6-8-6-15" pointing into its front matter.
+INDEX_REF = re.compile(
+    r"(?<![\d/(\-–—])(\d{1,4})(\s*[-–]\s*(\d{1,4}))?(?![\d/])")
 
 
 def _trailing_runs(text: str):

@@ -138,3 +138,18 @@ def test_an_index_that_cannot_be_found_is_reported_as_such(vtb):
     assert st["found"] is False and st["linked"] == 0
     st = vtb.link_index(["<h1>INDEX</h1><p>Addams, Jane, 46</p>"], MAP, set())
     assert st["found"] is True and st["linked"] == 1
+
+
+def test_the_tail_of_a_year_range_is_not_a_page(vtb):
+    """The parenthesis refuses "1976", and the regex used to slide forward
+    and take "79" as a page. A real range is matched whole from its first
+    number, so nothing straight after a dash is a reference — which also
+    spares the 19 of Covid-19."""
+    bodies = ["<h1>INDEX</h1><p>dirty war (<i>la guerra sucia</i>) "
+              "(1976–79), 184–5, 192–3</p><p>civil war (1960s–70s), 184, "
+              "188</p><p>virus <i>see</i> Covid-19</p>"]
+    st = vtb.link_index(bodies, MAP, set())
+    assert st["linked"] == 4
+    for tail in (">79</a>", ">70</a>", ">19</a>"):
+        assert tail not in bodies[0]
+    assert ">184–5</a>" in bodies[0] and ">192–3</a>" in bodies[0]
