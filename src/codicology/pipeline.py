@@ -4813,6 +4813,28 @@ GROUP_HEAD = re.compile(
     r"\s*(?:</[a-zA-Z]+>\s*)*</\1>", re.I)
 
 
+def _bare_numbered(bodies: list[str], start: int) -> bool:
+    """Whether the notes section opening at START numbers its entries bare,
+    "1 Source…" — at least ten such entries, and not one in any other dress
+    before the section ends. A single "1." or superscript entry says the
+    book uses that form, and then a bare numeral is somebody's citation
+    running on from the page before. Ten, because a notes section set this
+    way runs to dozens of entries, while three bare numerals were the panel
+    labels of a figure in FM 31-70's appendix, under a REFERENCES head."""
+    rank = re.search(r"<(h[1-6])[^>]*>\s*(?:FOOT|END)?NOTES?\s*</\1>",
+                     bodies[start], re.I)
+    stop = rf"<{rank.group(1)}[^>]*>" if rank else r"<h1[^>]*>"
+    bare = 0
+    for i in range(start, len(bodies)):
+        if i > start and re.search(stop, bodies[i], re.I):
+            break
+        if any(p.search(bodies[i]) for p in (NOTE_ENTRY, NOTE_ENTRY_PLAIN,
+                                              NOTE_ENTRY_LI, NOTE_ENTRY_BR)):
+            return False
+        bare += len(NOTE_ENTRY_BARE.findall(bodies[i]))
+    return bare >= 10
+
+
 def parse_notes_section(bodies: list[str]) -> tuple[int, list[list[tuple[int, int, int]]]]:
     """
     The book's endnotes, grouped as the book groups them.
@@ -4826,6 +4848,9 @@ def parse_notes_section(bodies: list[str]) -> tuple[int, list[list[tuple[int, in
     start = next((i for i, b in enumerate(bodies) if NOTES_SECTION_HEAD.search(b)), None)
     if start is None:
         return -1, []
+    bare = _bare_numbered(bodies, start)
+    entry_pats = (NOTE_ENTRY_PLAIN, NOTE_ENTRY_LI) + (
+        (NOTE_ENTRY_BARE,) if bare else ())
     groups: list[list[tuple[int, int, int]]] = []
     group_nos: list[int | None] = []
     current: list[tuple[int, int, int]] | None = None
@@ -4840,8 +4865,8 @@ def parse_notes_section(bodies: list[str]) -> tuple[int, list[list[tuple[int, in
         # since "1. " also opens ordinary numbered lists in prose
         plain_notes = [] if sup_notes else \
             [(m.start(), "note", int(m.group(1)))
-             for pat in (NOTE_ENTRY_PLAIN, NOTE_ENTRY_LI)
-             for m in pat.finditer(b)] + _br_run_notes(b)
+             for pat in entry_pats
+             for m in pat.finditer(b)] + _br_run_notes(b, bare=bare)
         heads = []
         for m in GROUP_HEAD.finditer(b):
             heads.append((m.start(), "group", None))
@@ -4927,6 +4952,9 @@ def _ungrouped_notes(bodies: list[str], start: int) -> list:
     rank = re.search(r"<(h[1-6])[^>]*>\s*(?:FOOT|END)?NOTES?\s*</\1>",
                      bodies[start], re.I)
     stop = rf"<{rank.group(1)}[^>]*>" if rank else r"<h1[^>]*>"
+    bare = _bare_numbered(bodies, start)
+    entry_pats = (NOTE_ENTRY_PLAIN, NOTE_ENTRY_LI) + (
+        (NOTE_ENTRY_BARE,) if bare else ())
     entries: list[tuple[int, int, int]] = []
     for i in range(start, len(bodies)):
         if i > start and re.search(stop, bodies[i], re.I):
@@ -4936,9 +4964,10 @@ def _ungrouped_notes(bodies: list[str], start: int) -> list:
             sup += [(pos, n) for pos, _kind, n in
                     _br_run_notes(bodies[i], sup=True)]
         plain = [] if sup else [(m.start(), int(m.group(1)))
-                                for pat in (NOTE_ENTRY_PLAIN, NOTE_ENTRY_LI)
+                                for pat in entry_pats
                                 for m in pat.finditer(bodies[i])] \
-            + [(pos, n) for pos, _kind, n in _br_run_notes(bodies[i])]
+            + [(pos, n) for pos, _kind, n in _br_run_notes(bodies[i],
+                                                            bare=bare)]
         entries += [(i, n, pos) for pos, n in sorted(sup + plain)]
     if len(entries) < 3:
         return []
@@ -4964,6 +4993,12 @@ def _entry_anchor(entry: str, note_id: str, back_href: str, n: int):
     if pm is not None:
         return pm.end(), (f'<{pm.group(1)} id="{note_id}">'
                           f'<a href="{back_href}">{n}.</a>')
+    # A bare-numbered entry (NOTE_ENTRY_BARE) keeps its own setting: no full
+    # stop is written that the book never printed.
+    bare = re.match(r"<(p|li)[^>]*>\s*(\d{1,3})(?=\s)", entry)
+    if bare is not None and int(bare.group(2)) == n:
+        return bare.end(), (f'<{bare.group(1)} id="{note_id}">'
+                            f'<a href="{back_href}">{n}</a>')
     # An entry inside a <br/>-divided run has no block of its own to carry
     # the id, so the number itself becomes the anchor. The break and the
     # space after it are reproduced exactly: they are the run's typesetting,
@@ -4972,6 +5007,10 @@ def _entry_anchor(entry: str, note_id: str, back_href: str, n: int):
     if bm is not None:
         return bm.end(), (f'{bm.group(1)}{bm.group(2)}'
                           f'<a id="{note_id}" href="{back_href}">{n}.</a>')
+    bb = re.match(r"(<br\s*/?>)(\s*)(\d{1,3})(?=\s)", entry)
+    if bb is not None and int(bb.group(3)) == n:
+        return bb.end(), (f'{bb.group(1)}{bb.group(2)}'
+                          f'<a id="{note_id}" href="{back_href}">{n}</a>')
     sm = re.match(r"(<br\s*/?>)(\s*)<sup>\s*(\d{1,3})\s*</sup>", entry)
     if sm is not None:
         # the superscript is the book's own typesetting and stays; only the
@@ -5156,6 +5195,16 @@ NOTE_ENTRY_PLAIN = re.compile(r"<p>\s*(\d{1,3})\.\s+\S")
 # convention, two renderings — both must parse or every group after the odd
 # page is silently lost.
 NOTE_ENTRY_LI = re.compile(r"<li[^>]*>\s*(\d{1,3})\.\s+\S")
+# A book may hang its note numbers in a column with no full stop at all:
+# "1  James Joyce, Ulysses…". How the West Came to Rule does, as a list on
+# its first notes page and as paragraphs after that, and every pattern here
+# wanted "1." or a superscript — its notes section parsed empty and all
+# 1,667 markers went plain. A bare numeral opening a paragraph is too
+# ordinary to trust everywhere (a citation continued from the page before can
+# open with a page number), so this form is read only in a notes section
+# that shows no other: see _bare_numbered.
+NOTE_ENTRY_BARE = re.compile(
+    r"<(?:p|li)[^>]*>\s*(\d{1,3})\s+(?=[^\W\d_]|[‘“'\"(\[<])")
 # A run of notes may be set as ONE paragraph, its entries divided by <br/>
 # rather than by blocks. Every pattern above anchors the number to a block's
 # opening, so only the run's first line is seen and the group's highest note
@@ -5167,9 +5216,13 @@ NOTE_ENTRY_BR = re.compile(r"<br\s*/?>\s*(\d{1,3})\.\s+\S")
 # column the layout pass failed to split. Eagle Forgotten hides 67 entries in
 # four such paragraphs, and 69 of its markers went plain for want of them.
 NOTE_ENTRY_BR_SUP = re.compile(r"<br\s*/?>\s*<sup>\s*(\d{1,3})\s*</sup>")
+# And the bare dress: How the West Came to Rule lost notes 60 to 87 into one
+# paragraph, "<p>59 Shaw,<br/>60 ĪnalcIk,<br/>61 Coles,…".
+NOTE_ENTRY_BR_BARE = re.compile(
+    r"<br\s*/?>\s*(\d{1,3})\s+(?=[^\W\d_]|[‘“'\"(\[<])")
 
 
-def _br_run_notes(body: str, sup: bool = False) -> list:
+def _br_run_notes(body: str, sup: bool = False, bare: bool = False) -> list:
     """The note entries a paragraph hides behind its <br/>s.
 
     Returned as (position, "note", number), the position being the <br/>
@@ -5177,10 +5230,12 @@ def _br_run_notes(body: str, sup: bool = False) -> list:
 
     `sup` picks the rendering. A book that numbers its entries "1. Source…"
     continues a run as "<br/>2. Source…"; a book that superscripts them
-    writes "<sup>2</sup>Source…" with no period. Both are the same column of
-    notes with the same break between them, and the opening of the paragraph
-    says which one this book uses — so the two are never mixed, and a run is
-    only ever read in the dress its own first entry wears.
+    writes "<sup>2</sup>Source…" with no period. `bare` is the third dress,
+    "<br/>2 Source…", read only in a section _bare_numbered says is set that
+    way. All are the same column of notes with the same break between them,
+    and the opening of the paragraph says which one this book uses — so they
+    are never mixed, and a run is only ever read in the dress its own first
+    entry wears.
 
     The guard against reading an ordinary line break this way is the
     numbering. The paragraph must already BE a note entry, so a block of
@@ -5193,6 +5248,7 @@ def _br_run_notes(body: str, sup: bool = False) -> list:
     this exists to repair.
     """
     head, tail = ((NOTE_ENTRY, NOTE_ENTRY_BR_SUP) if sup
+                  else (NOTE_ENTRY_BARE, NOTE_ENTRY_BR_BARE) if bare
                   else (NOTE_ENTRY_PLAIN, NOTE_ENTRY_BR))
     out = []
     for block in re.finditer(r"<p\b[^>]*>.*?</p>", body, re.S):

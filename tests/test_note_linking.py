@@ -262,3 +262,82 @@ def test_a_spaced_number_is_prose_not_a_demoted_marker(vtb):
     bodies = ["<p>It happened in 1995<sup>59</sup></p>"]
     assert vtb.strip_folio_superscripts(bodies, [_folio(vtb, 0, 59)]) == 1
     assert bodies[0] == "<p>It happened in 1995</p>"
+
+
+# --------------------------------------------------------------------------
+# notes numbered with no full stop: "1  Source…"
+# --------------------------------------------------------------------------
+#
+# How the West Came to Rule hangs its note numbers in a column with no full
+# stop, and every entry pattern wanted "1." or a superscript: its notes
+# section parsed empty and none of 1,667 markers linked.
+
+def bare_book():
+    """Two chapters of markers; the notes as the layout gave them — a list on
+    the first notes page, paragraphs after it, one entry opening with a
+    Turkish capital, which lies outside Latin-1. Ten entries at least: fewer
+    bare numerals are a figure's panel labels, not a notes section."""
+    return [
+        "<p>Chapter one prose.<sup>1</sup> More.<sup>2</sup> Again.<sup>3</sup></p>",
+        "<p>Second chapter begins.<sup>1</sup> And continues.<sup>2</sup> "
+        "Then more.<sup>3</sup></p>",
+        "<h1>Notes</h1><h2>Chapter One</h2><ol style=\"list-style-type: none;\">"
+        "<li>1 James Joyce, <i>Ulysses</i>, 34.</li>"
+        "<li>2 Niall Ferguson, <i>The Great Degeneration</i>.</li>"
+        "<li>3 ‘What would Marx say?’ <i>Economist</i>, 2008.</li>"
+        + "".join(f"<li>{n} Karl Marx, <i>Grundrisse</i>, {n}.</li>"
+                  for n in range(4, 11)) + "</ol>",
+        "<h2>Chapter Two</h2>"
+        "<p>1 İslamoğlu-İnan, <i>State and Peasant</i>, 8.</p>"
+        "<p>2 Wallerstein, <i>Modern World-System</i>, I.</p>"
+        "<p>3 Brenner, ‘Agrarian class structure’.</p>",
+    ]
+
+
+def test_notes_numbered_without_a_full_stop_link(vtb):
+    bodies = bare_book()
+    stats = vtb.link_notes(bodies, dropped=set())
+    assert stats["linked"] == 6 and stats["unlinked"] == 0
+    assert 'href="page_0003.xhtml#note-g1-1"' in bodies[1]
+
+
+def test_a_bare_entry_is_anchored_without_inventing_a_full_stop(vtb):
+    bodies = bare_book()
+    vtb.link_notes(bodies, dropped=set())
+    assert '<li id="note-g0-1"><a href="page_0000.xhtml#ref-g0-1">1</a> James' \
+        in bodies[2]
+    assert '<p id="note-g1-1"><a href="page_0001.xhtml#ref-g1-1">1</a> İslamoğlu' \
+        in bodies[3]
+
+
+def test_a_run_of_bare_notes_behind_line_breaks_is_read(vtb):
+    # notes 60 to 87 of one chapter came back as a single paragraph
+    bodies = bare_book()
+    bodies[3] = ("<h2>Chapter Two</h2><p>1 Shaw, <i>History</i>, 113.<br/>"
+                 "2 ĪnalcIk, <i>Ottoman Empire</i>, 80.<br/>3 Coles, 12.</p>")
+    stats = vtb.link_notes(bodies, dropped=set())
+    assert stats["linked"] == 6
+    assert '<br/><a id="note-g1-2" href="page_0001.xhtml#ref-g1-2">2</a> ĪnalcIk' \
+        in bodies[3]
+
+
+def test_a_bare_numeral_is_no_note_where_the_book_numbers_with_a_full_stop(vtb):
+    # A citation running on from the page before can open with a numeral;
+    # in a section that numbers its notes "1.", that is all it is.
+    bodies = book(vtb)
+    bodies[2] = ("<h1>NOTES</h1><h2>CHAPTER ONE</h2><p>1. First source.</p>"
+                 "<p>2. Second source, continued</p><p>34 per cent, Oxford.</p>"
+                 "<p>3. Third source.</p>")
+    start, groups = vtb.parse_notes_section(bodies)
+    assert [n for _, n, _ in groups[0]] == [1, 2, 3]
+
+
+def test_a_few_bare_numerals_under_a_notes_head_are_not_a_notes_section(vtb):
+    # FM 31-70's appendix sets a REFERENCES head and, pages on, a figure's
+    # panel labels: "1 Using the ski poles for support", "2 …", "3 …".
+    bodies = ["<p>Prose with no markers.</p>",
+              "<h3>REFERENCES</h3><p>FM 21-76, Survival.</p>",
+              "<p>1 Using the ski poles for support</p><p>2 Skis and poles "
+              "strapped together</p><p>3 A-frame method</p>"]
+    assert vtb._bare_numbered(bodies, 1) is False
+    assert vtb.parse_notes_section(bodies)[1] == []
