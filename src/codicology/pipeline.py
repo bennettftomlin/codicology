@@ -9234,13 +9234,71 @@ def _page_ink(image) -> float:
     return float((a < np.percentile(a, 90) - 40).mean())
 
 
-def _looks_fabricated(items, image) -> str | None:
+# …but paper repeats too. A field manual prints the same chlorine test twice
+# on facing pages (ST 31-91B, 20-4 and 20-5: 0.40, shipped blank), and
+# OpenStax exercise sets restate their question stems (up to 0.94, with the
+# publisher's own layer at 0.83). Legitimate pages reach far past 0.14; the
+# 47 reads behind that figure held none of these. What a loop does that
+# paper does not is repeat MORE than the page: so a looping reading is let
+# through when a witness that cannot loop — the page's own text layer where
+# it can testify, the classical reader where it cannot — holds the same
+# repeats, and the reading is as long as the witness's.
+#
+# Excess is the share of the reading's six-word runs that are copies beyond
+# the witness's own count of that run. The length band catches what excess
+# cannot: a loop that cut the page short and hid its few copies among
+# repeats the page really prints. Measured on 3,270 accepted readings of
+# scanned pages against their layers, with loops made the way surya makes
+# them — a true start, then the latest stretch repeated — including the
+# adversarial kind that stops the moment the guard fires: of 9,810 such
+# loops, none passes both tests (excess alone lets through 6 at 0.15; every
+# one of them was a truncated page). Loops run to a token budget measured
+# excess 0.395 and up. Genuine readings sit at excess 0.023 (p99) and 0.94
+# to 1.06 of their layer's length (p1-p99). The field manual's spread,
+# against the classical reader: excess 0.099, length 1.00.
+LOOP_MAX_EXCESS = 0.15
+LOOP_LENGTH_BAND = (0.85, 1.2)
+
+
+def _six_word_runs(text: str) -> "Counter[str]":
+    w = re.findall(r"[a-z0-9]{2,}", text.lower())
+    return Counter(" ".join(w[i:i + 6]) for i in range(len(w) - 5))
+
+
+def _repeats_are_on_the_page(text: str, witness: str) -> bool:
+    """Whether a witness that cannot loop repeats what this reading repeats."""
+    ours, theirs = _six_word_runs(text), _six_word_runs(witness)
+    total = sum(ours.values())
+    if not total:
+        return False
+    excess = sum(max(0, c - max(theirs.get(g, 0), 1))
+                 for g, c in ours.items() if c > 1) / total
+    words = lambda s: len(re.findall(r"[a-z]{3,}", s.lower()))
+    ratio = words(text) / max(1, words(witness))
+    lo, hi = LOOP_LENGTH_BAND
+    return excess < LOOP_MAX_EXCESS and lo <= ratio <= hi
+
+
+def _page_witness(page_path: str) -> "str | None":
+    """The page's own account of its words: its text layer where that can
+    testify, else what the classical reader makes of it; None if neither."""
+    if _layer_can_testify(page_path):
+        with open(page_path + ".layer.txt", encoding="utf-8") as fh:
+            return fh.read()
+    return _classical_text(page_path)
+
+
+def _looks_fabricated(items, image, page_path: "str | None" = None
+                      ) -> str | None:
     """Why this reading is suspect, or None if it looks like a real one."""
     text = " ".join(_strip_tags(it.html) for it in items
                     if it.html and not it.is_furniture).strip()
     if not text:
         return None                      # an empty read is the other guard's
     if _repeated_six_gram_share(text) >= DEGENERATE_REP6:
+        witness = _page_witness(page_path) if page_path else None
+        if witness and _repeats_are_on_the_page(text, witness):
+            return None
         return "text loops on itself"
     return None
 
@@ -9365,6 +9423,21 @@ def witness_available() -> bool:
 # checks quietly not happening.
 WITNESS_WAIVED = False
 UNWITNESSED = {"fabrication": 0, "blank": 0}
+
+
+@functools.lru_cache(maxsize=None)
+def _classical_text(page_path: str) -> "str | None":
+    """What the classical reader makes of the page, or None if unavailable."""
+    import shutil
+    import subprocess
+    if not shutil.which("tesseract"):
+        return None
+    try:
+        return subprocess.run(["tesseract", page_path, "stdout", "--psm", "3"],
+                              capture_output=True, text=True,
+                              timeout=300).stdout
+    except Exception:
+        return None
 
 
 @functools.lru_cache(maxsize=None)
@@ -9597,7 +9670,8 @@ def _read_pages_resiliently(paths: list[str], images: list,
         # unread, so this one refuses rather than guesses. A second reading
         # decides: a real page reads back the same, a made-up one usually
         # does not — and where it does, it is still looping, which shows.
-        why = _looks_fabricated(items, img) or _contradicts_layer(items, path)
+        why = _looks_fabricated(items, img, path) \
+            or _contradicts_layer(items, path)
         if why is None and not _layer_can_testify(path):
             # No layer to bear witness — a photographed source. A classical
             # OCR's silence on a page the model read paragraphs from is
@@ -9633,7 +9707,7 @@ def _read_pages_resiliently(paths: list[str], images: list,
                             _read_pages_resiliently.refused.append(path)
         elif why is not None:
             second = backend.run_items([img])[0]
-            why2 = _looks_fabricated(second, img) \
+            why2 = _looks_fabricated(second, img, path) \
                 or _contradicts_layer(second, path)
             if why2 is None:
                 # A clean reading is the answer, however little it resembles

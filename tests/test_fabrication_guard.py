@@ -77,6 +77,109 @@ def test_a_page_that_loops_differently_on_each_read_is_refused(vtb, tmp_path):
     assert vtb._read_pages_resiliently.refused == [p]
 
 
+# ST 31-91B, 20-4 and 20-5: one spread printing the same chlorine test twice,
+# once for a lister bag and once for a water trailer.
+CHLORINE_TEST = (
+    "CHECK THE RESIDUAL. Use the plastic test tube in the kit. Crush one OT "
+    "tablet in the metal cap. Dump the resulting powder into the plastic test "
+    "tube. Flush the tap from which you are going to take the sample. Fill "
+    "test tube with water to bottom of the yellow band. Compare colors: if the "
+    "water is at least as dark as the yellow band, proceed to step 6; if the "
+    "water is lighter, more chlorine is needed. Repeat steps 1 through 5. "
+    "WAIT 20 MORE MINUTES. Allow time for the chlorine residual to kill. "
+    "Check residual again before drinking; if chlorine residual is less than "
+    "5 ppm, repeat steps 1 through 5. ")
+SPREAD = ("Concept: any water can be poured into a lister bag and made safe "
+          "using chlorine ampules. Procedure: dissolve three ampules, using a "
+          "canteen cup as a bowl, and pour into the lister bag. Stir the bag "
+          "with a clean stick. Flush all the taps. Wait ten minutes. "
+          + CHLORINE_TEST +
+          "Concept: if the unit's field sanitation team tests the trailer and "
+          "fails to find a measurable chlorine residual, the water in the "
+          "trailer can be made safe using chlorine powder. Procedure: dissolve "
+          "one spoonful, using a mess kit spoon and a canteen cup. Pour into "
+          "the trailer and stir with a clean stick. Flush the trailer taps. "
+          "Wait ten minutes. " + CHLORINE_TEST +
+          "Remarks: the concept that any water can be made safe by "
+          "chlorination is a misconception.")
+
+
+def _no_layer_page(tmp_path, monkeypatch, vtb, witness):
+    """A scan with no text layer, whose classical reading is `witness`."""
+    p = str(tmp_path / "spread.png"); _page(ink_rows=30).save(p)
+    monkeypatch.setattr(vtb, "_classical_text", lambda path: witness)
+    return p
+
+
+def test_a_page_that_really_prints_its_text_twice_is_kept(vtb, tmp_path,
+                                                           monkeypatch):
+    """The loop rule sees the repeated test and says loop; the classical
+    reader, which cannot loop, sees it twice too — so the paper repeats."""
+    assert vtb._repeated_six_gram_share(SPREAD) >= vtb.DEGENERATE_REP6, \
+        "the loop rule alone must refuse this page, or the test proves nothing"
+    noisy = SPREAD.replace("Dump", "Bump").replace("(", "{").replace("OT", "0T")
+    p = _no_layer_page(tmp_path, monkeypatch, vtb, noisy)
+    be = FakeBackend(vtb, [SPREAD])
+    vtb._read_pages_resiliently.refused = []
+    got = vtb._read_pages_resiliently([p], [_page(ink_rows=30)], be, None)
+    assert got[p] and vtb._read_pages_resiliently.refused == []
+
+
+def test_a_loop_the_witness_does_not_share_is_refused(vtb, tmp_path,
+                                                      monkeypatch):
+    """A true start, then the latest stretch over and over: the witness
+    prints that stretch once, so the copies are the reader's own."""
+    words = SPREAD.split()
+    loop = " ".join(words[:120] + words[108:120] * 20)
+    p = _no_layer_page(tmp_path, monkeypatch, vtb, SPREAD)
+    be = FakeBackend(vtb, [loop, loop])
+    vtb._read_pages_resiliently.refused = []
+    got = vtb._read_pages_resiliently([p], [_page(ink_rows=30)], be, None)
+    assert got[p] == [] and vtb._read_pages_resiliently.refused == [p]
+
+
+def test_a_short_loop_hiding_among_real_repeats_is_refused(vtb, tmp_path,
+                                                           monkeypatch):
+    """The adversarial shape: every repeat the reading makes, the page
+    makes too — it gives the chlorine test twice — but it skipped the
+    trailer's introduction and the remarks to get there. Nothing is in
+    excess; the page is short, and its length gives it away."""
+    first = SPREAD.split(CHLORINE_TEST)[0] + CHLORINE_TEST
+    loop = first + CHLORINE_TEST
+    assert vtb._repeated_six_gram_share(loop) >= vtb.DEGENERATE_REP6
+    ours, theirs = vtb._six_word_runs(loop), vtb._six_word_runs(SPREAD)
+    assert all(c <= max(theirs[g], 1) for g, c in ours.items()), \
+        "a copy in excess would let the excess test refuse it instead"
+    assert not vtb._repeats_are_on_the_page(loop, SPREAD)
+    p = _no_layer_page(tmp_path, monkeypatch, vtb, SPREAD)
+    be = FakeBackend(vtb, [loop, loop])
+    vtb._read_pages_resiliently.refused = []
+    got = vtb._read_pages_resiliently([p], [_page(ink_rows=30)], be, None)
+    assert got[p] == [] and vtb._read_pages_resiliently.refused == [p]
+
+
+def test_without_a_witness_a_repeating_page_stays_refused(vtb, tmp_path,
+                                                          monkeypatch):
+    """No classical reader, no layer: nothing can say the paper repeats."""
+    p = _no_layer_page(tmp_path, monkeypatch, vtb, None)
+    be = FakeBackend(vtb, [SPREAD, SPREAD])
+    vtb._read_pages_resiliently.refused = []
+    got = vtb._read_pages_resiliently([p], [_page(ink_rows=30)], be, None)
+    assert got[p] == [] and vtb._read_pages_resiliently.refused == [p]
+
+
+def test_a_layer_that_can_testify_is_the_witness(vtb, tmp_path, monkeypatch):
+    """Where the page has its own words, they are asked, not the reader."""
+    img = _page(ink_rows=30)
+    p = _with_layer(tmp_path, img, SPREAD)
+    monkeypatch.setattr(vtb, "_classical_text",
+                        lambda path: pytest.fail("the layer was enough"))
+    be = FakeBackend(vtb, [SPREAD])
+    vtb._read_pages_resiliently.refused = []
+    got = vtb._read_pages_resiliently([p], [img], be, None)
+    assert got[p] and vtb._read_pages_resiliently.refused == []
+
+
 def test_a_genuinely_sparse_page_is_kept(vtb, tmp_path):
     """
     "BOOK ONE / THE STRUGGLE" is six words on a nearly empty page — the exact
