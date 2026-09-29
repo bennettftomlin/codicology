@@ -262,6 +262,114 @@ def test_a_garbled_scanner_layer_does_not_condemn_a_good_reading(vtb, tmp_path):
     assert got[p] and vtb._read_pages_resiliently.refused == []
 
 
+# Kill or Get Killed, contents page (p17): read correctly, and shipped blank
+# because its scanner layer mangles every title and shares 0.17 of the words.
+KGK_CONTENTS = (
+    "Contents Chapter Page 1. INTRODUCTION TO UNARMED COMBAT ..... 1 "
+    "2. OFFENSIVE UNARMED COMBAT ..... 6 3. DEFENSIVE UNARMED COMBAT ..... 49 "
+    "4. KNIFE ATTACK AND DEFENSE ..... 67 5. COMBAT USE OF THE HAND GUN ..... 97 "
+    "6. COMBAT FIRING WITH SHOULDER WEAPONS .... 179 7. DISARMING ..... 190 "
+    "8. PRISONER HANDLING AND CONTROL ..... 219 9. RAIDS AND ROOM COMBAT ..... 244 "
+    "10. TRAINING TECHNIQUES AND COMBAT RANGES ... 273 "
+    "11. ELEMENTARY FIELDCRAFT ..... 291 "
+    "12. POLICE BATON AND MISCELLANEOUS WEAPONS AND TECHNIQUES ..... 298 "
+    "13. CHEMICAL MUNITIONS FOR CONTROL OF MOBS AND INDIVIDUALS ..... 323 "
+    "14. CIVIL DOMESTIC DISTURBANCES AND THEIR CONTROL ..... 363 "
+    "15. COMMUNIST TACTICS AND STRATEGY IN DIRECTING MOB VIOLENCE ..... 371 "
+    "16. THE PROFESSIONAL RIOT CONTROL UNIT ..... 389 INDEX ..... 417")
+KGK_CONTENTS_LAYER = (
+    "Contents\n(:lJflpter\n1.\n?..\n3.\n4.\n5.\n6.\n7.\nN.\nY.\n10.\n11.\n12.\n"
+    "[3.\n1+\n15.\nI6.\nINT~O~UCTION -ro UNARM~~ COhIIIAT . . . . . . . . .\n"
+    "OFYENSIVF, UNARNIF,L) CONIMT . . . . . . . . . . . . . .\n"
+    "DIWENSIVK UNARMIW COMRAT . . . . . . . . . . . . . .\n"
+    "l<~]~KArI”,\\c~Ax~DEI:t~s~ . . . . . . . . . . . . . . . . . .\n"
+    "CokfBXrUsEoFTHEHAxDGux . . . . . . . . . . . . . .\n"
+    "(hrmxr ~IRING \\vl”rI[ SIIOL’LIM?RIVICAPONS . . . .\n"
+    "DISARNIING . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .\n"
+    "PRISONER l-IANIII.INGANI)(:{)NII{OI. . . . . . . . . . . . . .\n"
+    "l{AII)s ANI)R(M)31 COAlnj\\r . . . . . . . . . . . . . . . . . . . .\n"
+    "“1’RAINIXG‘I”lK;llNlfJ1’lS /\\NO CO\\lRAT I{ AX(:F.!. . .\n"
+    "E,LEAIi:XTARY Fllumwwr . . . . . . . . . . . . . . . . . . . .\n"
+    "POLICE BATONA~II MISCELLANEOLISLVEAIWNSAND\n"
+    "TECHNIQUES . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .\n"
+    "crrltAllCALMUNI’IW)NSF ORc ONTROL OIJ MOBSAND\n"
+    "lN~IvIDuALs . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .\n"
+    "CIVIL DOAIESTKJ DISTURBANCES AW ‘l-IIEIJ{\n"
+    "CONTROL . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .\n"
+    "COAIAIUNIST TAcTlcS AN~Srl{AIFGY IN DIRIXTIN[i\n"
+    "h40R VIOLENCE . . . . . . . . . . . . . . . . . . . . . . . . . . . .\n"
+    "-rIll? lJl(OFltssloNAl,ltrl)l’” ~ON”lRol.” Uxrr . . . . . . . .\n"
+    "INDEX. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .\n"
+    "~t~ge\nI\n6\n49\n67\n97\nI79\n190\n229\n244\n273\n291\n298\n323\n363\n"
+    "371\n389\n417\nxii")
+
+
+def test_a_layer_that_mangles_whole_words_is_judged_by_its_letters(vtb, tmp_path):
+    """Too few whole words survive the scanner's OCR to vouch for the
+    reading, but its letters, in order, still spell the same page."""
+    img = _page(ink_rows=20)
+    p = _with_layer(tmp_path, img, KGK_CONTENTS_LAYER)
+    words = set(vtb.re.findall(r"[a-z]{3,}", KGK_CONTENTS.lower()))
+    layer = set(vtb.re.findall(r"[a-z]{3,}", KGK_CONTENTS_LAYER.lower()))
+    assert len(words & layer) / len(words) < vtb.LAYER_MIN_OVERLAP, \
+        "the word rule alone must refuse this page, or the test proves nothing"
+    be = FakeBackend(vtb, [KGK_CONTENTS])
+    vtb._read_pages_resiliently.refused = []
+    got = vtb._read_pages_resiliently([p], [img], be, None)
+    assert "UNARMED COMBAT" in vtb._strip_tags(got[p][0].html)
+    assert vtb._read_pages_resiliently.refused == []
+
+
+def test_the_wrong_page_is_still_refused_against_a_mangled_layer(vtb, tmp_path):
+    """Same book, same subject, same kind of garbage layer — p43's reading
+    against p44's. It shares as few words as the contents page does (0.17)
+    and aligns only 0.11: a different page, not a mangled copy."""
+    img = _page(ink_rows=20)
+    reading = (
+        "TAIL BONE BLOW A blow to the tail bone area, like the kick with the "
+        "point of the toe, is dangerous. hand gives a sharp-edged effect, "
+        "causing a break, fracture or concussion. The force is expended on a "
+        "relatively small area. When applied to the area around the neck, the "
+        "cords on either side of the back of the neck, the base of the skull, "
+        "the sides of the neck, the windpipe area just below the Adam's apple, "
+        "the bridge of the nose, the kidneys, and the SIDL OF NECK BLOW A blow "
+        "to the side of the neck will hit vital nerves and the carotid artery, "
+        "causing a knock-out. COLLAR BONE BLOW A downward blow, like the blow "
+        "of a police baton, will fracture the collar bone and incapacitate "
+        "the opponent.")
+    next_layer = (
+        "() b’k’1:s s I \\’ l;, u N ,\\ It Al E 1) c [) Al n .i ‘r 27\n"
+        "end of the spine—this type of blrr~v IMs a devastating effect.\n"
+        "The bones of the forearm, the collnr bol~c, the end of the\n"
+        "chin, and the wrist area \\vill frncture WIICII subjcctcd to such\n"
+        "a blow. It should be dclivcrerl \\vith the ellro\\v l)cnt, utilizing\n"
+        "body force by n chopping motion. chopping is ilnportant\n"
+        "becnuse it tends to localize tllc force of the blow even more\n"
+        "I\\’l{Is”l” ()[{ BICEPS Br40\\v\n"
+        "A slxuy chojq~il]g MOIV to the \\vrist or forcortn will (Irtctl ca,]se a\n"
+        "frO~tllI’c. l~Cli!’CrCd to rllL> lIIIISCICS [If thC biCCpS, it ivill "
+        "c211sc tllcnl\nro crflmp.\nBRIDGE OF NOSE IILO\\V\n"
+        "This blow will crush the most dclicmc bones of the facisl structure.\n"
+        "Delivered at rhc bridge of the nose, where the brow and nose join,\n"
+        "it will cause concussion. Cerebral hctnorrhage is a possibility.")
+    assert vtb._layer_alignment(reading, next_layer) < vtb.LAYER_MIN_ALIGNED
+    p = _with_layer(tmp_path, img, next_layer)
+    be = FakeBackend(vtb, [reading, reading])
+    vtb._read_pages_resiliently.refused = []
+    got = vtb._read_pages_resiliently([p], [img], be, None)
+    assert got[p] == []
+    assert vtb._read_pages_resiliently.refused == [p]
+
+
+def test_letter_alignment_counts_only_runs_in_order(vtb):
+    assert vtb._layer_alignment("abcdefgh", "abcdefgh") == 1.0
+    # the same letters scrambled share no run of four
+    assert vtb._layer_alignment("abcdefgh", "hgfedcba") == 0.0
+    assert vtb._layer_alignment("", "anything") == 0.0
+    # case, spacing and punctuation are the layer's noise, not its letters
+    assert vtb._layer_alignment("Unarmed Combat", "UN-ARMED, combat!") == 1.0
+
+
 def test_short_readings_are_not_judged_against_the_layer(vtb, tmp_path):
     """ "Epilogue" against a layer of "384 TIHKAL Epilogue" must pass —
     six words have no vocabulary to compare."""

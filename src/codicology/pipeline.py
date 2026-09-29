@@ -9254,6 +9254,33 @@ def _looks_fabricated(items, image) -> str | None:
 LAYER_MIN_OVERLAP = 0.2
 LAYER_MIN_WORDS = 40
 
+# …except where the layer is the one garbling. A scanner's OCR layer can
+# mangle whole words ("INT~O~UCTION -ro UNARM~~ COhIIIAT" for "INTRODUCTION
+# TO UNARMED COMBAT"), and a count of shared words cannot tell a mangled
+# copy of the page from a different page: Kill or Get Killed's contents
+# shared 0.17 of its words with such a layer, read correctly, and shipped
+# blank. Letters taken in order can. A reading refused on words is let
+# through when this share of its letters lines up, in order and in runs of
+# four or more, with the layer's. Measured on 12 scanned books whose
+# layers are other people's OCR (3,270 pages): of 5,056 readings of the
+# wrong text that the word rule refuses — the next page, a page seven on,
+# a page of another book — none align this far, and one aligns past 0.25.
+# That contents page aligns 0.48. It is a rescue only: as a rule on its
+# own, alignment would condemn real TiHKAL pages that the word rule passes
+# (0.18, 0.35), so it never refuses anything.
+LAYER_MIN_ALIGNED = 0.3
+
+
+def _layer_alignment(text: str, layer: str, cap: int = 5000) -> float:
+    """Share of the reading's letters that line up, in order, with the layer's."""
+    ours = re.sub(r"[^a-z]", "", text.lower())[:cap]
+    theirs = re.sub(r"[^a-z]", "", layer.lower())[:cap]
+    if not ours:
+        return 0.0
+    blocks = difflib.SequenceMatcher(None, ours, theirs,
+                                     autojunk=False).get_matching_blocks()
+    return sum(b.size for b in blocks if b.size >= 4) / len(ours)
+
 
 def _contradicts_layer(items, page_path: str) -> str | None:
     """Why this reading disagrees with the page's own text layer, or None."""
@@ -9280,6 +9307,10 @@ def _contradicts_layer(items, page_path: str) -> str | None:
     if len(theirs) < LAYER_MIN_WORDS:
         return None
     if len(ours & theirs) / len(ours) < LAYER_MIN_OVERLAP:
+        body = " ".join(_strip_tags(it.html) for it in items
+                        if it.html and not it.is_furniture)
+        if _layer_alignment(body, layer) >= LAYER_MIN_ALIGNED:
+            return None
         return "reads nothing like the page's own text layer"
     return None
 
