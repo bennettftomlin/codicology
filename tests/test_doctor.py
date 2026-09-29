@@ -58,10 +58,30 @@ def test_smoke_reports_what_actually_answered(monkeypatch, vtb):
             return ["CODICOLOGY DOCTOR the quick brown fox reads page 42"]
 
     monkeypatch.setattr(vtb, "load_backend", lambda ocr, langs: Fake())
+    monkeypatch.setattr(doctor, "layout_smoke",
+                        lambda: {"ok": True, "boxes": 2})
     s = doctor.smoke("fake", ["en"])
     assert s["ok"] is True
     assert s["backend"] == "fake" and s["shape"] == "predictor"
     assert "fox" in s["matched"]
+    assert s["layout"]["boxes"] == 2
+
+
+def test_smoke_fails_when_the_fallback_layout_is_refused(monkeypatch, vtb):
+    # the page reads, but the layout step behind it returns nothing — the
+    # state the shelf ran in for two months, invisible to a read alone
+    class Reads:
+        name = "surya"
+        _shape = "predictor"
+
+        def run(self, images):
+            return ["CODICOLOGY DOCTOR the quick brown fox reads page 42"]
+
+    monkeypatch.setattr(vtb, "load_backend", lambda ocr, langs: Reads())
+    monkeypatch.setattr(doctor, "layout_smoke",
+                        lambda: {"ok": False, "boxes": 0})
+    s = doctor.smoke("surya", ["en"])
+    assert s["ok"] is False and "layout" in s["error"]
 
 
 def test_smoke_fails_on_a_backend_that_reads_nothing(monkeypatch, vtb):

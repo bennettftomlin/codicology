@@ -215,10 +215,38 @@ def smoke(ocr, langs):
     shape = getattr(backend, "_shape", None)
     if shape:
         out["shape"] = shape
+    if shape == "predictor":
+        out["layout"] = layout_smoke()
+        if not out["layout"]["ok"]:
+            out["ok"] = False
+            out["error"] = ("surya's layout step returned no boxes — it is "
+                            "the fallback for pages the full-page read "
+                            "fails, and without it they come back empty"
+                            + (f" ({out['layout']['error']})"
+                               if out["layout"].get("error") else ""))
     devices = _torch_devices()
     if devices:
         out["devices"] = devices
     return out
+
+
+def layout_smoke():
+    """Ask surya's layout step, guided, for the boxes on the test page.
+
+    The page read above never exercises it: layout only runs when a
+    full-page read fails, so a layout step the server refuses goes unseen
+    until a hard page needs it — and that page then ships blank. It went
+    unseen for two months that way (llama.cpp could not compile the
+    schema's `\\d`; see pipeline.llamacpp_safe_schemas)."""
+    try:
+        from surya.layout import LayoutPredictor
+        from .pipeline import llamacpp_safe_schemas
+        llamacpp_safe_schemas()
+        res = LayoutPredictor()([_test_page()])[0]
+    except Exception as exc:
+        return {"ok": False, "boxes": 0,
+                "error": f"{type(exc).__name__}: {exc}"}
+    return {"ok": bool(res.bboxes), "boxes": len(res.bboxes)}
 
 
 def _human(rep):
@@ -267,6 +295,8 @@ def _human(rep):
         print(f"  smoke test: {s['backend']} read the test page in "
               f"{s['seconds']}s{extra}")
         print(f"    read: {s['read']!r}")
+        if "layout" in s:
+            print(f"    layout (the fallback): {s['layout']['boxes']} box(es)")
     else:
         print(f"  smoke test FAILED"
               + (f" after {s['seconds']}s" if "seconds" in s else "")

@@ -2050,12 +2050,51 @@ def _to_xhtml(fragment: str) -> str:
 #
 # The measurement was run because the reason first written here was wrong.
 # It blamed this on memory pressure from grammar-initialisation failures
-# when two OCR stacks overlapped. Those failures are neither: the error is
-# surya's guided-decoding schema being rejected by llama.cpp's grammar
-# parser, it reproduces on an idle machine in a single process, and it is
-# harmless — a startup probe that falls back. Sized to the work, for the
-# reason the work actually supports; set before surya reads its settings.
+# when two OCR stacks overlapped. Those failures have nothing to do with
+# slots: they are surya's layout schema being refused by llama.cpp, which
+# llamacpp_safe_schemas below repairs. Sized to the work, for the reason
+# the work actually supports; set before surya reads its settings.
 os.environ.setdefault("SURYA_INFERENCE_PARALLEL", "4")
+
+
+def llamacpp_safe_schemas() -> int:
+    r"""Rewrite `\d` to `[0-9]` in surya's guided-decoding schemas, in place.
+
+    Surya 0.22 constrains its layout (and table) output with a JSON schema
+    whose box pattern is `^\d{1,4} \d{1,4} \d{1,4} \d{1,4}$`. llama.cpp turns
+    a schema into a grammar, and its pattern parser has no `\d` (build 10450,
+    and master as of 2026-09-29), so every guided layout request came back
+    HTTP 400 "failed to parse grammar" — four to a page, one call and three
+    retries — with no boxes at all.
+
+    That was once written off here as a harmless startup probe. It is not:
+    layout is surya's fallback for a page whose full-page read fails —
+    loops, errors, times out — and the fallback reads block by block inside
+    the boxes layout returns. With none returned it read nothing, so every
+    page that needed the fallback came back empty, on every build since
+    surya 0.22.1 went in on 2026-07-30. The empty-read retry above caught
+    each one the logs recorded. Three hard scanned pages from the shelf,
+    forced through the fallback, read 0 words with the stock pattern and
+    75, 470 and 107 with this.
+
+    The dicts are shared by reference — surya.layout and surya.table_rec
+    import the same objects from surya.inference.prompts — so an in-place
+    edit reaches every caller, and it must happen before a predictor is
+    built. Idempotent. Returns the number of patterns rewritten.
+    """
+    try:
+        from surya.inference import prompts
+    except ImportError:
+        return 0        # an older surya: no guided schemas to repair
+    n = 0
+    for name in ("LAYOUT_JSON_SCHEMA", "TABLE_REC_JSON_SCHEMA"):
+        schema = getattr(prompts, name, None) or {}
+        for prop in schema.get("items", {}).get("properties", {}).values():
+            pat = prop.get("pattern")
+            if pat and "\\d" in pat:
+                prop["pattern"] = pat.replace("\\d", "[0-9]")
+                n += 1
+    return n
 
 
 def set_pages_in_flight(n: int) -> None:
@@ -2094,6 +2133,7 @@ class SuryaBackend(OCRBackend):
         self._load()
 
     def _load(self) -> None:
+        llamacpp_safe_schemas()     # before any predictor: the fallback's layout
         try:
             from surya.recognition import RecognitionPredictor
         except ImportError:
@@ -6775,16 +6815,14 @@ def relabel_cache(cache_path: str, pdf_path: str, backend_name: str = "surya",
         if not cache.entries:
             print(f"  [!] cache is cold or tagged differently: {cache_path}")
             return {"pages": 0}
-        # The guided-decoding schema surya attaches to the standalone
-        # layout task fails llama.cpp's grammar parser (tested through
-        # build 10450). The full recognition pass — the call every build
-        # actually makes — never sends it, so neither do we: unguided,
-        # the model emits the same JSON and surya parses it itself; a
-        # malformed page yields no blocks and is skipped, counted.
-        os.environ.setdefault("SURYA_GUIDED_LAYOUT", "false")
+        # Guided layout, surya's default and what a build's fallback uses,
+        # with the schema repaired so llama.cpp can compile it. This ran
+        # unguided from August to dodge the grammar error. It cost nothing
+        # that can be seen: on Eagle Forgotten's last 22 pages the two
+        # return identical boxes — including none at all on the 17 dense
+        # back-matter pages, which neither mode can box.
+        llamacpp_safe_schemas()
         from surya.layout import LayoutPredictor
-        from surya.settings import settings as _surya_settings
-        _surya_settings.SURYA_GUIDED_LAYOUT = False
         lp = LayoutPredictor()
         st = _Counter()
         # The served model cold-starts, and a call against a waking server
