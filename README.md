@@ -191,7 +191,10 @@ No flags required for any of this.
 - **Bad pages are caught, not filled in.** A page whose OCR loops, or
   claims more words than its ink can account for, is re-read and then left
   empty rather than invented. On born-digital sources it is restored from
-  the publisher's own text.
+  the publisher's own text. A table that does nothing but count — the
+  other thing a recogniser makes of a page it cannot read — is left out
+  of the page, unless the page's text layer or tesseract finds the count
+  printed there.
 - **Layout labels are used, not just the text.** A one-line digit block
   the layout invented over prose is checked against the ink and dropped;
   an orphaned note marker that fits the page's sequence is re-attached as

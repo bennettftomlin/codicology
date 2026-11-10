@@ -7822,6 +7822,16 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
             items = demote_mislabelled_heads(items, os.path.basename(path))
             items, _nf = route_form_blocks(items)
             n_forms += _nf
+            items, _counts = drop_counting_tables(items, path)
+            for _n in _counts:
+                print(f"    [!] {os.path.basename(path)}: a table of {_n} "
+                      f"numbers that only counts, "
+                      + ("and neither the page's text layer nor a classical "
+                         "reader finds the count on the page"
+                         if witness_available() else
+                         "which the page's text layer does not hold, and no "
+                         "classical reader is installed to ask")
+                      + " — left out rather than printed as invention")
             # Furniture is set aside, never merely deleted: its text is the
             # folio audit's evidence, already recognised at full resolution.
             page_furniture.append([_strip_tags(it.html) for it in items
@@ -9446,6 +9456,125 @@ def _looks_fabricated(items, image, page_path: "str | None" = None
             return None
         return "text loops on itself"
     return None
+
+
+# A loop is not the only thing a generative reader makes of a page it cannot
+# read. It also counts. Three tables on the shelf are a count and nothing
+# else: page 49 of The History of Lloyd's (2,029 cells — 674 integers, every
+# one the same as the last or one more, and 8 cells of anything else), the
+# "Epilogue" part title of TiHKAL (539 integers, each beside the same three
+# words), and an eighteen-by-eighteen grid on a facsimile plate in Studies
+# in the History of Accounting (1 to 18, twice, in 361 cells). The loop
+# guard cannot see them, because a counter makes every six-word run unique;
+# the layer guard cannot, because none of the three pages has forty words of
+# layer to compare against. The first is why Kindle refused to reflow the
+# book it was in.
+#
+# The shape is most of the evidence. Of 2,338 tables in 159 caches (41,388
+# pages), ten hold thirty or more bare integers with nine steps in ten
+# standing still or rising by one. Seven are real — contents pages, numbered
+# rows — and say at least as many different things as they have numbers
+# (the least: 33 distinct cells beside 36 integers). The three inventions
+# say 0, 2 and 5 things beside 36, 539 and 674.
+#
+# But paper counts too: an answer key, a hundred chart, a numbered blank.
+# None is on this shelf to measure, so the shape only accuses, and the
+# verdict belongs to a witness that cannot invent. Of the 48 real tables
+# that count at all (twelve integers, eight steps in ten), the better of the
+# page's two witnesses prints every value of the count for 46, and 0.96 and
+# 0.47 of it for the other two — that last one a table with 106 other cells,
+# nowhere near the shape. For the inventions: 0.00, 0.00 and 0.28. It has to
+# be the better of the two, because either alone goes missing on real pages:
+# a scan has no layer worth the name (six real tables under half, four of
+# them at 0.00), and tesseract loses half the figures of a dense one (0.56,
+# 0.59) that the layer holds whole.
+COUNT_MIN_INTEGERS = 30
+COUNT_MIN_STEPS = 0.9        # of consecutive integers: the same, or one more
+COUNT_MAX_SAID = 0.1         # distinct other cells, per integer
+COUNT_MIN_WITNESSED = 0.5    # of the count's values, on the better witness
+
+_TABLE = re.compile(r"<table\b.*?</table>", re.S | re.I)
+_TABLE_CELL = re.compile(r"<t[dh]\b[^>]*?(?:/>|>(.*?)</t[dh]>)", re.S | re.I)
+_BARE_INTEGER = re.compile(r"[0-9]{1,5}")
+_STANDALONE_INTEGER = re.compile(r"(?<![0-9])[0-9]{1,5}(?![0-9])")
+
+
+def _count_in_table(table_html: str) -> "list[int] | None":
+    """The integers a table counts through, if counting is all it does."""
+    cells = [" ".join(_strip_tags(c).split())
+             for c in _TABLE_CELL.findall(table_html)]
+    numbers = [int(c) for c in cells if _BARE_INTEGER.fullmatch(c)]
+    if len(numbers) < COUNT_MIN_INTEGERS:
+        return None
+    steps = sum(1 for a, b in zip(numbers, numbers[1:]) if 0 <= b - a <= 1)
+    if steps < COUNT_MIN_STEPS * (len(numbers) - 1):
+        return None
+    said = {c for c in cells if c and not _BARE_INTEGER.fullmatch(c)}
+    if len(said) > COUNT_MAX_SAID * len(numbers):
+        return None
+    return numbers
+
+
+def _count_is_on_the_page(numbers: "list[int]", page_path: str) -> bool:
+    """Whether a witness that cannot invent prints the count this table makes.
+
+    Both are asked — the page's text layer, whatever its size (a page of
+    figures has no forty words, and does not need them to hold a number),
+    then the classical reader — and either is enough.
+    """
+    count = set(numbers)
+
+    def holds(witness: "str | None") -> bool:
+        if not witness:
+            return False
+        seen = {int(n) for n in _STANDALONE_INTEGER.findall(witness)}
+        return len(count & seen) >= COUNT_MIN_WITNESSED * len(count)
+
+    try:
+        with open(page_path + ".layer.txt", encoding="utf-8") as fh:
+            if holds(fh.read()):
+                return True
+    except OSError:
+        pass
+    return holds(_classical_text(page_path))
+
+
+def drop_counting_tables(items: "list[PageItem]",
+                         page_path: "str | None" = None
+                         ) -> "tuple[list[PageItem], list[int]]":
+    """Items without the tables that only count, and the size of each dropped.
+
+    Only the table goes. The rest of the page was read by the same pass and
+    stands or falls by the page-level guards: TiHKAL's part title keeps the
+    heading it really prints, and a page left with nothing is an empty page
+    to everything downstream, which is what the artwork recovery and the
+    blank-page witness exist to look at. Run where the book is assembled
+    rather than where the page is read, so it judges a reading from the
+    cache exactly as it judges a fresh one — the three that prompted it were
+    all in caches. With no page to consult, or no witness that holds the
+    count, the table is refused: the loop guard's rule.
+    """
+    out, dropped = [], []
+    for it in items:
+        if it.is_furniture or not it.html or "<table" not in it.html.lower():
+            out.append(it)
+            continue
+
+        def judge(m: "re.Match") -> str:
+            numbers = _count_in_table(m.group(0))
+            if numbers is None or (
+                    page_path and _count_is_on_the_page(numbers, page_path)):
+                return m.group(0)
+            dropped.append(len(numbers))
+            return ""
+
+        kept = _TABLE.sub(judge, it.html)
+        if kept == it.html:
+            out.append(it)
+        elif it.figure is not None or _strip_tags(kept) \
+                or re.search(r"<(?:img|svg|math)\b", kept, re.I):
+            out.append(it._replace(html=kept))
+    return out, dropped
 
 
 # Below this share of our words appearing in the page's own text layer, the
