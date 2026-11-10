@@ -84,15 +84,23 @@ def test_pageturn_joined_word_survives_the_rebuild(vtb, tmp_path):
 
 
 def test_case_variant_pair_lands_on_its_own_words(vtb, tmp_path):
-    """Two disputes fold to one token; the sheet numbers them on one
-    ordinal stream; apply must land each on its own literal word."""
+    """Two disputes fold to one token; each is addressed among the page's
+    instances of its own LITERAL word, and apply must land each there —
+    with an undisputed 'the' left standing after them."""
+    from codicology import adjudicate as adj
+    toks = adj.tokens("The cat. the dog. the end")
     rows = [{"page": 0, "surya": "The", "tesseract": "Thc",
-             "rung": "abstain", "winner": None, "shipped": "The"},
+             "rung": "abstain", "winner": None, "shipped": "The",
+             **adj.site_address(toks, 0)},
             {"page": 0, "surya": "the", "tesseract": "thc",
-             "rung": "abstain", "winner": None, "shipped": "the"}]
+             "rung": "abstain", "winner": None, "shipped": "the",
+             **adj.site_address(toks, 2)}]
     occs = review.assign_occurrences(rows)
-    dec = _decisions(tmp_path, [_row(0, occs[0], "The", "A"),
-                                _row(0, occs[1], "the", "a")])
+    assert occs == [0, 0]
+    dec = _decisions(tmp_path, [
+        dict(_row(0, occs[k], r["surya"], new),
+             before=r["before"], after=r["after"])
+        for k, (r, new) in enumerate(zip(rows, ("A", "a")))])
     epub = _epub(tmp_path, {0: "<p>The cat. the dog. the end</p>"})
     review.apply_decisions(epub, dec)
     import re, zipfile

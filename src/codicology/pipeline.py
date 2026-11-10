@@ -6953,12 +6953,12 @@ def apply_reviewer_decisions(bodies: list, decisions_path: str,
     """A review sheet's exported decisions, reapplied at rebuild time —
     before the linkers run, so a corrected word can still earn its anchor.
 
-    Same contract as `codicology apply`: text nodes only, the recorded
-    occurrence, and a site that no longer exists is stale — reported and
-    left as read, never guessed at. The reviewer read the shipped book;
-    a rebuild may differ from it in quote shape, so the straight/curly
-    variants of the site are tried before declaring it stale."""
-    from .review import apply_one_decision, coerce_page, pages_guard
+    Same contract as `codicology apply`, and the same code
+    (review.apply_page_decisions): the page's text only, the word each
+    decision is addressed to, deletions before swaps, and a decision that
+    cannot be placed with certainty is stale — reported and left as read,
+    never guessed at."""
+    from .review import apply_page_decisions, coerce_page, pages_guard
     try:
         with open(decisions_path) as fh:
             dec = json.load(fh)
@@ -6973,30 +6973,24 @@ def apply_reviewer_decisions(bodies: list, decisions_path: str,
         print(f"    refused: {refusal}")
         return {"applied": 0, "stale": len(rows)}
     applied = stale = 0
-    # highest occurrence first, so an earlier replacement of the same word
-    # on the same page cannot renumber a later one
-    # deletions run FIRST: both kinds were recorded against the same
-    # shipped text, and a word swap mutates the very characters a deletion
-    # must match — swap-first leaves the condemned run alive and the
-    # deletion stale, which is the harm the reviewer asked to remove. The
-    # swap inside a deleted run then reports stale, which is true: its
-    # site is gone, and gone was the point.
-    for d in sorted(rows, key=lambda d: (d.get("kind") != "delete_run",
-                                         -d.get("occurrence", 0))):
+    by_page: dict = {}
+    for d in rows:
         i = coerce_page(d)
         if i is None or not (0 <= i < len(bodies)):
             stale += 1
             print(f"    stale decision: page {d.get('page')!r} is not a "
                   f"page of this build — {d.get('old')!r} skipped")
             continue
-        got = apply_one_decision(bodies[i], d)
-        if got is None:
-            stale += 1
-            print(f"    stale decision: p{i} {d['old']!r} -> {d['new']!r} "
-                  f"— site changed since review, kept as read")
-        else:
-            bodies[i] = got
-            applied += 1
+        by_page.setdefault(i, []).append(d)
+    for i in sorted(by_page):
+        bodies[i], outcomes = apply_page_decisions(bodies[i], by_page[i])
+        for d, why in zip(by_page[i], outcomes):
+            if why is None:
+                applied += 1
+            else:
+                stale += 1
+                print(f"    stale decision: p{i} {d.get('old')!r} -> "
+                      f"{d.get('new')!r} — {why}; kept as read")
     return {"applied": applied, "stale": stale}
 
 

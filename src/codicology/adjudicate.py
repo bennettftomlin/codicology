@@ -80,6 +80,155 @@ def tokens(text: str) -> list:
     return WORD.findall(fold_text(text))
 
 
+# ── where a word stands on its page ──────────────────────────────────────────
+#
+# A dispute names one word of one page, and the page may print that word
+# many times. Its address is its place in the page's token stream — the
+# stream tokens() makes of epub_page_texts() — written down as the ordinal
+# among the page's instances of the same token plus the neighbours either
+# side. The appliers find the site again through page_tokens(), which makes
+# the SAME stream from a page's xhtml and keeps, for every token, the span
+# of markup it was read from. One tokeniser on both sides is the point:
+# the ordinal once counted a page's disputes while the applier counted
+# every instance, and a correction to the second "be" on a page landed on
+# the first.
+
+SITE_CONTEXT = 4        # neighbours recorded either side of a disputed word
+
+
+def site_address(toks: list, i: int) -> dict:
+    """The address of toks[i] within its page."""
+    return {"occurrence": toks[:i].count(toks[i]),
+            "before": toks[max(0, i - SITE_CONTEXT):i],
+            "after": toks[i + 1:i + 1 + SITE_CONTEXT]}
+
+
+def body_span(xhtml: str) -> tuple:
+    """The stretch of a page file the readers are shown: after the first
+    <body…>, before the first </body> that follows. A bare fragment is all
+    body."""
+    m = re.match(r".*?<body[^>]*>", xhtml, flags=re.S)
+    lo = m.end() if m else 0
+    hi = xhtml.find("</body>", lo)
+    return lo, (hi if hi >= 0 else len(xhtml))
+
+
+_TAG = re.compile(r"<[^>]+>")
+# html.unescape's own notion of a character reference; text_view expands
+# them one at a time to keep each character's source, and the tests hold
+# the result to html.unescape's
+_CHARREF = re.compile(r"&(#[0-9]+;?|#[xX][0-9a-fA-F]+;?"
+                      r"|[^\t\n\f <&#;]{1,32};?)")
+
+
+def text_view(body: str) -> tuple:
+    """A page body as the readers see it, and where each character came
+    from: (text, starts, ends, markup).
+
+    text is character for character what epub_page_texts returns — every
+    tag one space, every entity unescaped. text[k] was read from
+    body[starts[k]:ends[k]]; markup[k] is set where that source was a tag
+    rather than text."""
+    chars, starts, ends, markup = [], [], [], bytearray()
+
+    def plain(lo, hi):
+        chars.extend(body[lo:hi])
+        starts.extend(range(lo, hi))
+        ends.extend(range(lo + 1, hi + 1))
+        markup.extend(bytes(hi - lo))
+
+    def text(lo, hi):
+        at = lo
+        for m in _CHARREF.finditer(body, lo, hi):
+            got = html.unescape(m.group())
+            if got == m.group():
+                continue                    # not a reference after all
+            plain(at, m.start())
+            chars.extend(got)
+            starts.extend([m.start()] * len(got))
+            ends.extend([m.end()] * len(got))
+            markup.extend(bytes(len(got)))
+            at = m.end()
+        plain(at, hi)
+
+    at = 0
+    for m in _TAG.finditer(body):
+        text(at, m.start())
+        chars.append(" ")
+        starts.append(m.start())
+        ends.append(m.end())
+        markup.append(1)
+        at = m.end()
+    text(at, len(body))
+    return "".join(chars), starts, ends, markup
+
+
+def _fold_map(text: str) -> tuple:
+    """fold_text(text), and for each character of it the index in `text`
+    it came from."""
+    out, src = [], []
+    for k, ch in enumerate(text):
+        for c in _TYPO.get(ord(ch), ch):
+            out.append(c)
+            src.append(k)
+    t = "".join(out)
+    kept, idx, at = [], [], 0
+    for m in re.finditer(r"(\w)-\s*\n\s*(\w)", t):
+        kept.append(t[at:m.end(1)])
+        idx.extend(src[at:m.end(1)])
+        at = m.start(2)
+    kept.append(t[at:])
+    idx.extend(src[at:])
+    return "".join(kept), idx
+
+
+def page_words(body: str) -> tuple:
+    """The page as the adjudicator reads it — (folded text, words) — each
+    word (token, start, end, at): the span of `body` it was read from and
+    its offset in the folded text.
+
+    The span is None where the word cannot be rewritten in place — it
+    straddles markup (a hyphenation joined across two blocks), or shares
+    an entity with a neighbouring character. Such a word still counts; it
+    just cannot be edited."""
+    text, starts, ends, markup = text_view(body)
+    folded, idx = _fold_map(text)
+    out = []
+    for m in WORD.finditer(folded):
+        v0, v1 = idx[m.start()], idx[m.end() - 1] + 1
+        lo, hi = starts[v0], ends[v1 - 1]
+        whole = (not any(markup[v0:v1])
+                 and (v0 == 0 or ends[v0 - 1] <= lo)
+                 and (v1 == len(text) or starts[v1] >= hi))
+        out.append((m.group(), lo, hi, m.start()) if whole
+                   else (m.group(), None, None, m.start()))
+    return folded, out
+
+
+# tags that change the type a word is set in without ending the word
+_INLINE_TAG = re.compile(r"</?(?:a|abbr|b|cite|em|i|small|span|strong|sub"
+                         r"|sup|u)\b[^>]*>", re.I)
+STRUCK = "\x00"
+
+
+def hard_view(body: str) -> str:
+    """page_words' folded text, character for character, with the space
+    of every inline tag struck out (STRUCK): what the page prints hard
+    against what. "[α]<sub>D</sub>" is one printed expression, and the
+    readers' view of it — every tag a space — says "[α] D"."""
+    text, starts, ends, markup = text_view(body)
+    folded, idx = _fold_map(text)
+    return "".join(
+        STRUCK if markup[v] and _INLINE_TAG.fullmatch(body, starts[v], ends[v])
+        else ch for ch, v in zip(folded, idx))
+
+
+def page_tokens(body: str) -> list:
+    """The page's words exactly as tokens() counts them, each with the
+    span of `body` it was read from: (token, start, end)."""
+    return [w[:3] for w in page_words(body)[1]]
+
+
 # ── the readers ──────────────────────────────────────────────────────────────
 
 def read_tesseract(png: str) -> "str | None":
@@ -667,7 +816,10 @@ def align_disputes(ours: list, theirs: list, stats: "Counter | None" = None
     """Word-level disagreements between two readings of one page, by
     sequence alignment on folded forms — replacements only. Insertions and
     deletions are layout noise (furniture one side read and the other
-    stripped), not character disputes."""
+    stripped), not character disputes.
+
+    Each dispute is (our word, their word, their index, our index): the
+    witness index finds the ink, ours is the word's address in the book."""
     import difflib
     fo = [fold_word(w) for w in ours]
     ft = [fold_word(w) for w in theirs]
@@ -690,7 +842,7 @@ def align_disputes(ours: list, theirs: list, stats: "Counter | None" = None
                 if stats is not None:
                     stats["seam"] += 1
                 continue
-            out.append((a, b, j1 + k))
+            out.append((a, b, j1 + k, i1 + k))
     return out
 
 
@@ -705,8 +857,8 @@ def epub_page_texts(epub_path: str) -> dict:
         if not m:
             continue
         h = z.read(n).decode("utf-8", "replace")
-        b = re.sub(r"</body>.*$", "",
-                   re.sub(r"^.*?<body[^>]*>", "", h, flags=re.S), flags=re.S)
+        lo, hi = body_span(h)
+        b = h[lo:hi]
         # entities unescape AFTER the tag strip, exactly as compare does:
         # an escaped &amp;c. must reach the readers as the printed &c.,
         # never tokenize as a phantom 'amp' (R3's second half)
@@ -853,12 +1005,12 @@ def main(epub: str, pdf: str, report: "str | None" = None,
         t_tok, t_box, t_cbox, png = witness[i]
         s_tok = surya_tokens[i]
         pairs = align_disputes(s_tok, t_tok, align_stats)
-        pair_set = {fold_word(a) for a, _, _ in pairs} | \
-                   {fold_word(b) for _, b, _ in pairs}
+        pair_set = {fold_word(p[0]) for p in pairs} | \
+                   {fold_word(p[1]) for p in pairs}
         agreed.append([fold_word(w) for w in s_tok
                        if fold_word(w) not in pair_set])
         frac, only, runs = surya_only_runs(
-            s_tok, t_tok, skip_folds={fold_word(a) for a, _, _ in pairs})
+            s_tok, t_tok, skip_folds={fold_word(p[0]) for p in pairs})
         page_rows = []
         if runs:
             base = _page_text_density(t_tok, t_box)
@@ -943,7 +1095,7 @@ def main(epub: str, pdf: str, report: "str | None" = None,
                              "winner": verdict.get("winner"),
                              "shipped": a, "box": cbox,
                              "via": "crop"})
-        for a, b, j in info["pairs"]:
+        for a, b, j, at in info["pairs"]:
             verdict = adjudicate_pair(a, b, lexicon)
             if verdict["rung"] == "fold":
                 continue                    # policy, not a dispute
@@ -965,6 +1117,9 @@ def main(epub: str, pdf: str, report: "str | None" = None,
                    "box": boxes[j] if j < len(boxes) else None}
             if j < len(cboxes) and cboxes[j] != row["box"]:
                 row["cbox"] = cboxes[j]
+            # which of the page's instances of this word is in dispute:
+            # the review sheet carries it through to the decisions file
+            row.update(site_address(surya_tokens[i], at))
             disputes.append(row)
 
     print(f"pages examined: {n_done}")
@@ -1088,10 +1243,10 @@ def calibrate(pdf: str, epub: "str | None" = None,
         if not wit:
             continue
         pairs = align_disputes(ours, wit, cal_stats)
-        pair_set = {fold_word(a) for a, _, _ in pairs} | \
-                   {fold_word(b) for _, b, _ in pairs}
+        pair_set = {fold_word(p[0]) for p in pairs} | \
+                   {fold_word(p[1]) for p in pairs}
         agreed.append([w for w in ours if fold_word(w) not in pair_set])
-        for a, b, _ in pairs:
+        for a, b, _, _ in pairs:
             fa, fb = fold_word(a), fold_word(b)
             dispute_rows.append({
                 "page": i, "a": a, "b": b,

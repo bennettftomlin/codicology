@@ -253,9 +253,19 @@ corrects the EPUB in place (the original stays beside it as `.preapply`),
 or the file sits beside the OCR cache and the next rebuild picks it up
 via `convert --apply-decisions` — applied before the note, citation and
 index linkers run, so a corrected word can still earn its link. Either
-way, corrections land in text nodes only, at their recorded
-occurrence, and a decision whose site no longer exists is reported as
-stale and left alone rather than applied somewhere approximate.
+way, corrections land in the page's text only, on the one word each
+decision is addressed to: the sheet records which of the page's
+instances of the word was in dispute and the words either side of it,
+and the apply step finds it by those. A decision that cannot be placed
+with certainty — the word is gone, its neighbours have changed, two
+places fit equally — is reported as stale and left alone rather than
+applied somewhere approximate.
+
+Decisions exported from a sheet made before 2026-11-10 carry no
+neighbours, and their `occurrence` counted only the page's disputed
+words. They are applied where that cannot matter (the file accounts for
+every instance of the word on the page) and reported stale where it can;
+adjudicate the book again for a sheet whose decisions are addressed.
 
 ## Checking a build
 

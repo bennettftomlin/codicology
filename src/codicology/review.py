@@ -22,10 +22,20 @@ Rows are ranked by how likely the shipped word is to be wrong:
      editable: confirmation is a prior, the reader's eye is the authority.
 
 The exported decisions file records {page, occurrence, old, new, source,
-rung} per correction — source "human" for typed readings, "ladder" for
-accepted verdicts. Occurrence ordinals are counted among a page's disputes
-sharing the same shipped token, in reading order; the apply step targets
-the nth word-boundary match accordingly.
+rung, before, after} per correction — source "human" for typed readings,
+"ladder" for accepted verdicts. A correction is addressed to one word of
+its page: `occurrence` is the word's ordinal among ALL the page's
+instances of the same token, and `before`/`after` are the words either
+side. The apply step finds the site by those neighbours and falls back on
+the ordinal only to choose between places that read alike.
+
+Sheets made before 2026-11-10 numbered `occurrence` among a page's
+DISPUTES and recorded no neighbours, while the apply step counted every
+instance: where an undisputed instance stood ahead of the disputed one,
+the correction landed on the wrong word. A row without neighbours is
+therefore applied only where the two counts must agree — every instance
+of the word on the page accounted for by the file — and reported stale
+otherwise.
 """
 import base64
 import collections
@@ -37,8 +47,11 @@ import os
 import re
 import subprocess
 import tempfile
+import unicodedata
 
-from .adjudicate import _is_word, epub_page_texts, fold_text, fold_word
+from .adjudicate import (_TYPO, STRUCK, WORD, _is_word, body_span,
+                         epub_page_texts, fold_text, fold_word, hard_view,
+                         page_words, tokens)
 
 # battery v2, 2,591 truth-scored disputes — shown on the rung chips so the
 # reviewer knows how much each verdict is worth
@@ -64,17 +77,25 @@ def pair_counts(disputes) -> collections.Counter:
 
 
 def assign_occurrences(disputes) -> list:
-    """Ordinal of each dispute among its page's disputes sharing a shipped
-    token, in reading order — the apply step's word-boundary target index."""
+    """Each dispute's ordinal, as its row will export it.
+
+    The adjudicator addresses every dispute itself (adjudicate.site_address:
+    the ordinal among ALL the page's instances of the token, with its
+    neighbours), and that address is passed through untouched. A report
+    written before it did so has only this to go on: the ordinal among
+    the page's DISPUTES sharing a shipped token. That is not the page
+    ordinal whenever an undisputed instance stands earlier on the page,
+    which is why such rows carry no neighbours and the appliers treat
+    them as unaddressed."""
     seen = collections.Counter()
     out = []
     for d in disputes:
-        # keyed by the LITERAL shipped token: the apply step counts
-        # occurrences of the literal string, so the ordinal must be
-        # assigned on the same basis — a folded key merged 'The' and
-        # 'the' into one stream and mis-addressed both (I1)
+        # keyed by the LITERAL shipped token — a folded key merged 'The'
+        # and 'the' into one stream and mis-addressed both (I1)
         key = (d["page"], d.get("shipped") or d["surya"])
-        out.append(seen[key])
+        own = d.get("occurrence")
+        out.append(own if isinstance(own, int) and "before" in d
+                   else seen[key])
         seen[key] += 1
     return out
 
@@ -348,9 +369,16 @@ def _row_html(r, crops) -> str:
     proposal = (f'<button class="apply" data-act="apply">apply '
                 f'<b>{html.escape(winner)}</b></button>' if winner
                 and winner != shipped else "")
+    # the word's neighbours, when the report addressed it: they go out
+    # with the decision so the apply step can find the same word again
+    site = ""
+    if "before" in r:
+        site = "".join(
+            f'data-{side}="{html.escape(" ".join(r.get(side) or []), quote=True)}" '
+            for side in ("before", "after"))
     return (
         f'<div class="row" tabindex="0" data-idx="{r["idx"]}" '
-        f'data-page="{r["page"]}" data-occ="{r["occurrence"]}" '
+        f'data-page="{r["page"]}" data-occ="{r["occurrence"]}" {site}'
         f'data-old="{html.escape(shipped, quote=True)}" '
         f'data-new="{html.escape(winner, quote=True)}" '
         f'data-rung="{html.escape(rung, quote=True)}">'
@@ -423,12 +451,17 @@ document.getElementById('export').addEventListener('click', () => {
   document.querySelectorAll('.row').forEach(row => {
     const s = state[row.dataset.idx];
     if (!s || s.choice === 'keep') return;
-    decisions.push({
+    const d = {
       page: +row.dataset.page, occurrence: +row.dataset.occ,
       old: row.dataset.old,
       new: s.choice === 'human' ? s.text : row.dataset.new,
       source: s.choice === 'human' ? 'human' : 'ladder',
-      rung: s.choice === 'human' ? 'human' : row.dataset.rung});
+      rung: s.choice === 'human' ? 'human' : row.dataset.rung};
+    if ('before' in row.dataset) {
+      d.before = row.dataset.before.split(' ').filter(Boolean);
+      d.after = row.dataset.after.split(' ').filter(Boolean);
+    }
+    decisions.push(d);
   });
   document.querySelectorAll('.srow').forEach(row => {
     const s = state[row.dataset.sidx];
@@ -568,24 +601,18 @@ def render_sheet(report, crops=None) -> str:
     return "\n".join(parts)
 
 
-def _apply_to_xhtml(xhtml, old, new, occurrence) -> "str | None":
-    """Replace the nth word-boundary occurrence of old in text nodes only.
-    Tags are never touched — the segments are split apart and only text
-    between them is searched. Returns None when the site is not there:
-    a decision that no longer matches its book is stale, and stale
-    decisions are surfaced, never guessed at."""
-    segs = re.split(r"(<[^>]+>)", xhtml)
+def _regex_sites(body, old) -> list:
+    """Every word-boundary match of `old` in the body's text nodes, as
+    spans of the body. Tags are never searched. This is how a hand-written
+    `old` that is not one word of the page is found — the printed "&c.",
+    a phrase."""
     pat = re.compile(r"(?<![\w])" + re.escape(old) + r"(?![\w])")
-    seen = 0
-    for i, seg in enumerate(segs):
-        if seg.startswith("<"):
-            continue
-        for m in pat.finditer(seg):
-            if seen == occurrence:
-                segs[i] = seg[:m.start()] + new + seg[m.end():]
-                return "".join(segs)
-            seen += 1
-    return None
+    out, at = [], 0
+    for k, seg in enumerate(re.split(r"(<[^>]+>)", body)):
+        if k % 2 == 0:
+            out += [(at + m.start(), at + m.end()) for m in pat.finditer(seg)]
+        at += len(seg)
+    return out
 
 
 def _run_pattern(words: list) -> "re.Pattern":
@@ -737,40 +764,280 @@ def _delete_from_xhtml(xhtml, old) -> "str | None":
     return out
 
 
-def apply_one_decision(xhtml, d) -> "str | None":
-    """One decision against one page's xhtml, with the quote-shape retry
-    both consumers owe: the reviewer's old was recorded through the
-    adjudicator's fold (straight apostrophes), while the book may carry
-    curly ones — or the reverse. Both consumers of a decisions file MUST
-    pass through here; a correction that lands via the rebuild but goes
-    stale via `codicology apply` is the divergence the 2026-08-18 review
-    confirmed (I2)."""
-    import html
-    from .adjudicate import _TYPO
-    curl = str.maketrans({"'": "\u2019"})
-    if d.get("kind") == "delete_run":
-        for old in (d["old"], d["old"].translate(curl),
-                    d["old"].translate(_TYPO),
-                    html.escape(d["old"], quote=False)):
-            got = _delete_from_xhtml(xhtml, old)
-            if got is not None:
-                return got
-        return None
-    # the reviewer's words live in text space; the page is xhtml. old must
-    # also be tried entity-escaped (the printed &c. is stored as &amp;c.),
-    # and new must land escaped or an ampersand corrupts the page.
-    new = html.escape(d["new"], quote=False)
-    tried = set()
-    for old in (d["old"], d["old"].translate(curl),
-                d["old"].translate(_TYPO),
-                html.escape(d["old"], quote=False)):
-        if old in tried:
+_CURL = str.maketrans({"'": "\u2019"})
+
+
+def _shapes(old) -> list:
+    """`old` in the shapes the page may store it: the reviewer's word was
+    recorded through the adjudicator's fold (straight apostrophes) and
+    lives in text space, while the book may carry curly ones and stores
+    the printed &c. as &amp;c."""
+    return list(dict.fromkeys((old, old.translate(_CURL),
+                               old.translate(_TYPO),
+                               html.escape(old, quote=False))))
+
+
+def _context_score(toks, lo, hi, before, after) -> int:
+    """How many of a site's recorded neighbours stand where they stood,
+    were the site toks[lo:hi]."""
+    n = 0
+    for k, w in enumerate(reversed(before), 1):
+        if lo - k >= 0 and fold_word(toks[lo - k]) == fold_word(w):
+            n += 1
+    for k, w in enumerate(after):
+        if hi + k < len(toks) and fold_word(toks[hi + k]) == fold_word(w):
+            n += 1
+    return n
+
+
+def _reads_already(folded, at, old, new) -> bool:
+    """Whether the page already reads `new` around the `old` at
+    folded[at:]. A correction that adds what the tokeniser drops — "gs"
+    to "μgs", "D" to "[α]D" — leaves its own word standing, and applying
+    it a second time must not double the addition."""
+    if new == old:
+        return False
+    q = new.find(old)
+    while q >= 0:
+        if at >= q and folded[at - q:at - q + len(new)] == new:
+            return True
+        q = new.find(old, q + 1)
+    return False
+
+
+def _inside_a_longer_word(folded, at, n) -> bool:
+    """Whether the token at folded[at:at + n] is a piece of a longer word.
+
+    The tokeniser's alphabet is Latin-1 and it stops at any letter outside
+    it: a page's "diabolē" is read as "diabol", and a correction to that
+    token would be written inside the word — "diaboléē". Only a letter or
+    an accent continues a word. A digit does not: a note's number printed
+    hard against "Lloyd's" leaves "Lloyd's" a whole word, and correctable."""
+    def continues(ch):
+        return unicodedata.category(ch)[0] in "LM"
+    return bool((at > 0 and continues(folded[at - 1]))
+                or (at + n < len(folded) and continues(folded[at + n])))
+
+
+def _hard_against(hard, at, n) -> tuple:
+    """What the page prints with no space between it and the word at
+    hard[at:at + n]: (the run before it, the run after it, where the
+    first begins, where the second ends). `hard` is the page's hard_view:
+    a change of type — a subscript, an italic — is no space."""
+    a, b = at, at + n
+    while a > 0 and not hard[a - 1].isspace():
+        a -= 1
+    while b < len(hard) and not hard[b].isspace():
+        b += 1
+    return (hard[a:at].replace(STRUCK, ""),
+            hard[at + n:b].replace(STRUCK, ""), a, b)
+
+
+def _fitted(new, toks, k, folded, at, hard=None) -> tuple:
+    """What to write over the word toks[k], standing at folded[at:], for
+    the page to read `new` there: (text, None), or (None, why not).
+
+    A reviewer types the printed word, and the printed word can be more
+    than the tokeniser's. "8IMM" is the token "IMM" with an 8 against it:
+    the correction "81MM" is for both, and written over the token alone
+    it prints "881MM". So what `new` shares with the characters standing
+    hard against the word is not written a second time. Where `new`
+    repeats its surroundings in a way that cannot be trimmed, the page is
+    left as it is and the decision reported: a formula typed out whole
+    for one of its symbols ("C15H23ClN2O" for "ClN") would be printed
+    inside the formula, and three installed books had exactly that."""
+    new_t = new.translate(_TYPO)
+    left, right, a, b = _hard_against(hard or folded, at, len(toks[k]))
+    ms = list(WORD.finditer(new_t))
+    head = new_t[:ms[0].start()] if ms else new_t
+    tail = new_t[ms[-1].end():] if ms else new_t
+    lo = next((j for j in range(min(len(head), len(left)), 0, -1)
+               if left.endswith(new_t[:j])), 0)
+    hi = next((j for j in range(min(len(tail), len(right)), 0, -1)
+               if right.startswith(new_t[len(new_t) - j:])), 0)
+    if (lo or hi) and (lo + hi >= len(new_t)
+                       or new_t[lo:len(new_t) - hi] == toks[k]):
+        return None, f"the page already reads {new!r} there"
+    if not lo and head.strip() and head.strip() in left:
+        return None, (f"the page already prints {head.strip()!r} against "
+                      f"it — correct the page by hand")
+    if not hi and tail.strip() and tail.strip() in right:
+        return None, (f"the page already prints {tail.strip()!r} against "
+                      f"it — correct the page by hand")
+    nt = [m.group() for m in ms]
+    if (any(toks[k - j:k] == nt[:j] for j in range(1, min(len(nt), k + 1)))
+            or any(toks[k + 1:k + 1 + j] == nt[len(nt) - j:]
+                   for j in range(1, len(nt)))):
+        return None, ("the correction repeats the words beside it — "
+                      "correct the page by hand")
+    if not ms and new_t.strip():
+        # nothing in it the tokeniser can see: look at the characters
+        want = new_t.strip()
+        if (folded[b:b + len(want) + 8].lstrip().startswith(want)
+                or folded[max(0, a - len(want) - 8):a].rstrip()
+                .endswith(want)):
+            return None, (f"the page already prints {want!r} beside it — "
+                          f"correct the page by hand")
+    if lo or hi:
+        if len(new_t) != len(new):
+            return None, ("the correction overlaps what the page prints "
+                          "against the word — correct the page by hand")
+        return new[lo:len(new) - hi], None
+    return new, None
+
+
+def _occurrence(d) -> int:
+    try:
+        return max(0, int(d.get("occurrence", 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _locate(d, body, folded, words, kmax, trust_ordinal,
+            hard=None) -> tuple:
+    """The span of `body` one swap decision names and what to write
+    there: ((start, end, text), None), or (None, why it cannot be placed).
+
+    A decision that cannot be placed with certainty is stale. Stale
+    decisions are surfaced and never guessed at — a correction on the
+    wrong word is worse than none, and nobody is told."""
+    old, new = d.get("old"), d.get("new")
+    if not isinstance(old, str) or not old or not isinstance(new, str):
+        return None, "it names no word"
+    old_t, new_t = old.translate(_TYPO), new.translate(_TYPO)
+    occ = _occurrence(d)
+    toks = [w[0] for w in words]
+    cands = [k for k, t in enumerate(toks) if t == old_t]
+    already = f"the page already reads {new!r} there"
+    k = None
+
+    if "before" not in d and "after" not in d:
+        # an unaddressed row: its ordinal counted disputes, not instances.
+        # The two counts are certain to agree only when the file accounts
+        # for every instance of the word the page prints.
+        if cands:
+            sites = [(words[k][1], words[k][2]) for k in cands]
+        else:
+            sites = next((got for got in (_regex_sites(body, shape)
+                                          for shape in _shapes(old))
+                          if got), [])
+            if not sites:
+                return None, "the word is no longer on the page"
+        if len(sites) != kmax + 1:
+            return None, (f"its sheet numbered only the disputed words and "
+                          f"the page prints {old!r} {len(sites)} times — "
+                          f"adjudicate again and review it on the new sheet")
+        if cands:
+            k = cands[occ]
+            if _reads_already(folded, words[k][3], old_t, new_t):
+                return None, already
+        pick = sites[occ]
+    else:
+        if not cands:
+            return None, "the word is no longer on the page"
+        live = [k for k in cands
+                if not _reads_already(folded, words[k][3], old_t, new_t)]
+        if not live:
+            return None, already
+        before, after = list(d.get("before") or []), list(d.get("after") or [])
+        n = len(before) + len(after)
+        score = {k: _context_score(toks, k, k + 1, before, after)
+                 for k in live}
+        best = max(score.values())
+        if 2 * best < n:
+            return None, "the words around it have changed"
+        # the same neighbours around `new`: the correction is already in
+        new_toks = tokens(new)
+        if n and new_toks and new_toks != [old_t]:
+            m = len(new_toks)
+            if any(toks[p:p + m] == new_toks
+                   and _context_score(toks, p, p + m, before, after) >= best
+                   for p in range(len(toks) - m + 1)):
+                return None, already
+        winners = [k for k in live if score[k] == best]
+        if len(winners) == 1:
+            k = winners[0]
+        elif trust_ordinal and occ < len(cands) and cands[occ] in winners:
+            k = cands[occ]
+        else:
+            return None, (f"{len(winners)} places on the page fit it "
+                          f"equally")
+        pick = (words[k][1], words[k][2])
+    text = new
+    if k is not None:
+        if _inside_a_longer_word(folded, words[k][3], len(toks[k])):
+            return None, "the page prints it inside a longer word"
+        text, why = _fitted(new, toks, k, folded, words[k][3], hard)
+        if text is None:
+            return None, why
+    if pick[0] is None:
+        return None, "the word is split across the page's markup"
+    return (pick[0], pick[1], text), None
+
+
+def apply_page_decisions(xhtml, rows) -> tuple:
+    """One page's decisions against that page: (xhtml, outcomes), where
+    outcomes[k] is None for a decision that landed and otherwise the
+    reason it did not. Both consumers of a decisions file MUST pass
+    through here — a correction that lands via the rebuild but goes stale
+    via `codicology apply` is the divergence the 2026-08-18 review
+    confirmed (I2).
+
+    Only the body is read or written: the <title> is not the reviewer's
+    text. Deletions run first — both kinds were recorded against the same
+    shipped text, and a word swap mutates the very characters a deletion
+    must match; the swap inside a deleted run then reports stale, which
+    is true: its site is gone, and gone was the point. Every swap is then
+    located on the same text before any is written, so one correction
+    cannot move another's neighbours or renumber its word."""
+    lo, hi = body_span(xhtml)
+    body = xhtml[lo:hi]
+    outcomes = [None] * len(rows)
+    deleted = False
+    for k, d in enumerate(rows):
+        if d.get("kind") != "delete_run":
             continue
-        tried.add(old)
-        got = _apply_to_xhtml(xhtml, old, new, d.get("occurrence", 0))
-        if got is not None:
-            return got
-    return None
+        got = next((g for g in (_delete_from_xhtml(body, shape)
+                                for shape in _shapes(str(d.get("old") or "")))
+                    if g is not None), None)
+        if got is None:
+            outcomes[k] = "the run is not on the page"
+        else:
+            body, deleted = got, True
+    swaps = [k for k, d in enumerate(rows) if d.get("kind") != "delete_run"]
+    if swaps:
+        folded, words = page_words(body)
+        hard = hard_view(body)
+        kmax = collections.Counter()
+        for k in swaps:
+            d = rows[k]
+            if "before" not in d and "after" not in d:
+                kmax[d.get("old")] = max(kmax[d.get("old")], _occurrence(d))
+        edits = []
+        for k in swaps:
+            d = rows[k]
+            # after a deletion the ordinal counts a page that is gone:
+            # the neighbours alone must place the word
+            span, why = _locate(d, body, folded, words, kmax[d.get("old")],
+                                trust_ordinal=not deleted, hard=hard)
+            if span is None:
+                outcomes[k] = why
+            elif any(a < span[1] and span[0] < b for a, b, _ in edits):
+                outcomes[k] = "another decision already corrected this word"
+            else:
+                # the reviewer's word is text; the page is xhtml
+                edits.append((span[0], span[1],
+                              html.escape(span[2], quote=False)))
+        for a, b, new in sorted(edits, reverse=True):
+            body = body[:a] + new + body[b:]
+    return xhtml[:lo] + body + xhtml[hi:], outcomes
+
+
+def apply_one_decision(xhtml, d) -> "str | None":
+    """One decision against one page's xhtml: the corrected page, or None
+    when the decision is stale."""
+    got, (why,) = apply_page_decisions(xhtml, [d])
+    return got if why is None else None
 
 
 def coerce_page(d) -> "int | None":
@@ -803,9 +1070,9 @@ def apply_decisions(epub_path, decisions_path, out=None) -> dict:
     """Feed the reviewer's exported decisions back into the EPUB.
 
     The adjudicator never rewrites; this is the human act it reports
-    toward. Corrections land in text nodes at their recorded occurrence,
-    the original is kept beside the book as .preapply, and every decision
-    is accounted for: applied or stale, never silent."""
+    toward. Corrections land in the page's text at the word each decision
+    is addressed to, the original is kept beside the book as .preapply,
+    and every decision is accounted for: applied or stale, never silent."""
     import shutil
     import zipfile
 
@@ -819,33 +1086,34 @@ def apply_decisions(epub_path, decisions_path, out=None) -> dict:
         print(f"  refused: {refusal}")
         return {"applied": [], "stale": list(dec.get("decisions", [])),
                 "refused": True}
+    applied, stale = [], []          # stale: (decision, why)
     by_page = collections.defaultdict(list)
     for d in dec.get("decisions", []):
         i = coerce_page(d)
         if i is None:
-            print(f"  stale: unreadable page {d.get('page')!r} for "
-                  f"{d.get('old')!r} — decision skipped")
+            stale.append((d, f"its page {d.get('page')!r} is not a number"))
             continue
         by_page[i].append(d)
     out = out or epub_path
     if out == epub_path:
         shutil.copy2(epub_path, epub_path + ".preapply")
-    applied, stale = [], []
     changed = {}
-    for name in zin.namelist():
-        m = re.match(r".*page_(\d{4})\.xhtml$", name)
-        if not m or int(m.group(1)) not in by_page:
+    for name in page_files:
+        i = int(re.match(r".*page_(\d{4})\.xhtml$", name).group(1))
+        if i not in by_page:
             continue
-        xhtml = zin.read(name).decode("utf-8")
-        for d in sorted(by_page[int(m.group(1))],
-                        key=lambda d: -d.get("occurrence", 0)):
-            got = apply_one_decision(xhtml, d)
-            if got is None:
-                stale.append(d)
-            else:
-                xhtml = got
+        rows = by_page.pop(i)
+        xhtml, outcomes = apply_page_decisions(
+            zin.read(name).decode("utf-8"), rows)
+        for d, why in zip(rows, outcomes):
+            if why is None:
                 applied.append(d)
+            else:
+                stale.append((d, why))
         changed[name] = xhtml.encode("utf-8")
+    for i in sorted(by_page):
+        stale += [(d, f"page {i} is not a page of this book")
+                  for d in by_page[i]]
     names = zin.namelist()
     with zipfile.ZipFile(out + ".tmp", "w") as zout:
         for name in names:
@@ -855,15 +1123,15 @@ def apply_decisions(epub_path, decisions_path, out=None) -> dict:
                           zipfile.ZIP_STORED if name == "mimetype"
                           else zipfile.ZIP_DEFLATED)
     zin.close()
-    import os
     os.replace(out + ".tmp", out)
-    for d in stale:
-        print(f"  stale: p{d['page']} {d['old']!r} -> {d['new']!r} "
-              f"({d.get('source', '?')}) — site not found, kept as shipped")
+    for d, why in stale:
+        print(f"  stale: p{d.get('page')} {d.get('old')!r} -> "
+              f"{d.get('new')!r} ({d.get('source', '?')}) — {why}; "
+              f"kept as shipped")
     print(f"applied {len(applied)} correction(s)"
           + (f", {len(stale)} stale" if stale else "")
           + f": {out}")
-    return {"applied": applied, "stale": stale}
+    return {"applied": applied, "stale": [d for d, _ in stale]}
 
 
 def main(report_path, out=None, dpi=200, crops=True) -> int:

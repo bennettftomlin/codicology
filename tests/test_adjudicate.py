@@ -70,11 +70,12 @@ def test_alignment_ignores_furniture_asymmetry(vtb):
 
 
 def test_alignment_finds_the_real_replacement(vtb):
-    """The third element is the witness-token index — geometry's handle."""
+    """The third element is the witness-token index — geometry's handle;
+    the fourth is ours — the word's address in the book."""
     ours = adj.tokens("the prisoners were moved")
     theirs = adj.tokens("the prisoncrs were moved")
     pairs = adj.align_disputes(ours, theirs)
-    assert pairs == [("prisoners", "prisoncrs", 1)]
+    assert pairs == [("prisoners", "prisoncrs", 1, 1)]
 
 
 def test_wade_giles_survives_the_lexicon_path(vtb):
@@ -270,7 +271,7 @@ def test_damage_survives_the_seam_rule(vtb):
     theirs = adj.tokens("alpha thc qmck browu fux omega")
     stats = Counter()
     pairs = adj.align_disputes(ours, theirs, stats)
-    assert [a for a, _, _ in pairs] == ["the", "quick", "brown", "fox"]
+    assert [p[0] for p in pairs] == ["the", "quick", "brown", "fox"]
     assert stats["seam"] == 0
 
 
@@ -282,7 +283,7 @@ def test_short_blocks_are_never_second_guessed(vtb):
     theirs = adj.tokens("chapter Rasy the strike")
     stats = Counter()
     pairs = adj.align_disputes(ours, theirs, stats)
-    assert pairs == [("A", "Rasy", 1)]
+    assert pairs == [("A", "Rasy", 1, 1)]
     assert stats["seam"] == 0
 
 
@@ -304,7 +305,7 @@ def test_a_truncation_survives_a_page_that_repeats_the_word(vtb):
     theirs = adj.tokens("it had been said he would been there")
     stats = Counter()
     pairs = adj.align_disputes(ours, theirs, stats)
-    assert pairs == [("be", "been", 6)]
+    assert pairs == [("be", "been", 6, 6)]
     assert stats["seam"] == 0
 
 
