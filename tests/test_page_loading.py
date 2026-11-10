@@ -135,3 +135,131 @@ def test_a_born_digital_page_keeps_its_authority(vtb, tmp_path, name, fn):
     page = vtb.load_pages_from_pdf(p, str(d))[0]
     assert os.path.exists(page + ".native"), \
         f"{name}: born-digital text lost its authority"
+
+
+# ---- a scan that does not fill its page --------------------------------
+
+def _png(size, draw):
+    import io
+    img = Image.new("RGB", size, "white")
+    draw(img)
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
+
+
+def _printed(img):
+    """Dark bars where the lines of type would be."""
+    px = img.load()
+    for row in range(40, img.height - 40, 36):
+        for x in range(30, img.width - 30):
+            for y in range(row, row + 10):
+                px[x, y] = (25, 25, 25)
+
+
+def _plate(img):
+    """Something no line of type looks like."""
+    px = img.load()
+    for x in range(img.width):
+        for y in range(img.height):
+            px[x, y] = ((x * 5) % 256, (y * 3) % 256, ((x + y) * 2) % 256)
+
+
+def make_book(path, pages):
+    """A PDF of `pages`, each a list of ("image", rect, bytes) and
+    ("text", (x, y), words) drawn on a 466x704pt leaf — the size and the
+    margins Google Books gives a scanned octavo."""
+    pymupdf = pytest.importorskip("pymupdf")
+    doc = pymupdf.open()
+    for parts in pages:
+        page = doc.new_page(width=466, height=704)
+        for kind, where, what in parts:
+            if kind == "image":
+                page.insert_image(pymupdf.Rect(*where), stream=what)
+            else:
+                page.insert_text(where, what, fontsize=9)
+    doc.save(str(path))
+    return str(path)
+
+
+TYPE_AREA = (40, 45, 426, 659)          # 0.72 of the leaf, as Google sets it
+
+
+def scan_page(layer=False, extra=()):
+    parts = [("image", TYPE_AREA, _png((386, 614), _printed))]
+    if layer:                           # a recogniser's text, over the ink
+        parts += [("text", (60, 80 + 36 * k), "the scanner read this line")
+                  for k in range(12)]
+    return parts + list(extra)
+
+
+def typeset_page():
+    return [("text", (50, 60 + 14 * k), "The publisher set this line in type.")
+            for k in range(40)]
+
+
+def _sidecar(page):
+    import json
+    with open(page + ".source.json") as fh:
+        return json.load(fh)
+
+
+def test_a_scan_set_inside_its_margins_is_still_a_scan(vtb, tmp_path):
+    """
+    Google Books crops each page image to the type area and sets it inside
+    the margins, at 0.72 of the leaf. Nothing about that page is typeset,
+    but "a picture of the whole page" it is not, and a history of Lloyd's
+    shipped with the scan of every one of its 438 pages inserted as a figure
+    above that page's text.
+    """
+    p = make_book(tmp_path / "scan.pdf", [scan_page() for _ in range(4)])
+    d = tmp_path / "pages"; d.mkdir()
+    pages = vtb.load_pages_from_pdf(p, str(d))
+    for page in pages:
+        src = _sidecar(page)
+        assert src["scan"] is True
+        assert src["facsimile"] is False, "the page was rendered, not extracted"
+        assert page.endswith(".png")
+
+
+def test_a_layer_inside_a_margin_set_scan_is_not_the_publishers(vtb, tmp_path):
+    """
+    The same shape with a recogniser's text over it: the picture covers
+    under nine tenths of the leaf, so the layer passed for typesetting and
+    Confusion de Confusiones had sixty-three pages of its scanner's reading
+    handed to the reconciler as the author's.
+    """
+    p = make_book(tmp_path / "scan.pdf",
+                  [scan_page(layer=True) for _ in range(4)])
+    d = tmp_path / "pages"; d.mkdir()
+    for page in vtb.load_pages_from_pdf(p, str(d)):
+        assert os.path.exists(page + ".layer.txt"), "the layer still testifies"
+        assert not os.path.exists(page + ".native"), \
+            "a scanner's layer was marked as the publisher's own text"
+
+
+def test_one_plate_does_not_make_a_typeset_book_a_scan(vtb, tmp_path):
+    """A frontispiece is a picture and nothing else, in a book that is type
+    from there on. The pages count only where they are most of the book."""
+    plate = [("image", (60, 80, 406, 600), _png((346, 520), _plate))]
+    p = make_book(tmp_path / "typeset.pdf",
+                  [plate] + [typeset_page() for _ in range(4)])
+    d = tmp_path / "pages"; d.mkdir()
+    pages = vtb.load_pages_from_pdf(p, str(d))
+    assert [_sidecar(page)["scan"] for page in pages] == [False] * 5
+    for page in pages[1:]:
+        assert os.path.exists(page + ".native"), \
+            "typeset text lost its authority"
+
+
+def test_a_plate_with_its_caption_is_not_a_picture_of_itself(vtb, tmp_path):
+    """What separates a plate from a scan is the type printed beside it."""
+    plate = ("image", (60, 80, 406, 600), _png((346, 520), _plate))
+    p = make_book(tmp_path / "three.pdf", [
+        [plate, ("text", (60, 630), "PLATE IV. The Royal Exchange in 1810.")],
+        [plate, ("text", (120, 300), "words the picture itself carries")],
+        [("image", (150, 250, 300, 400), _png((150, 150), _plate))],
+    ])
+    doc = pdfium.PdfDocument(p)
+    assert [vtb._is_picture_of_itself(page) for page in doc] \
+        == [False, True, False]

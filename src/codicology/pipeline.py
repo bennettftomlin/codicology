@@ -1598,14 +1598,32 @@ def recover_orphan_artwork(items: list, page_path: str) -> list:
     covered = [it.box for it in items if it.figure is not None and it.box]
     orphans = []
     try:
+        placements = []
         for obj in page.get_objects():
             if not isinstance(obj, pdfium.PdfImage):
                 continue
             b = obj.get_bounds()
             placed = _pdf_box_to_normalized(b, pw, ph)
             area = (placed[2] - placed[0]) * (placed[3] - placed[1])
+            placements.append((area, placed, obj))
+        # On a scanned page the largest picture is the page, at whatever
+        # share of the sheet it was set, and it is what the layout was
+        # reading — not artwork the layout missed. What can be missed there
+        # is a plate stored as its own layer, and a plate lies on its page:
+        # a strip out in the PDF's margin is the scanner's bed or a
+        # library's stamp, which no reader of the book ever saw.
+        own = max(placements, key=lambda t: t[0]) \
+            if src.get("scan") and placements else None
+        for area, placed, obj in placements:
             if not 0.02 <= area <= 0.9:
                 continue            # a logo, or the whole page
+            if own is not None:
+                if obj is own[2]:
+                    continue        # the page itself
+                cx, cy = (placed[0] + placed[2]) / 2, (placed[1] + placed[3]) / 2
+                if not (own[1][0] <= cx <= own[1][2]
+                        and own[1][1] <= cy <= own[1][3]):
+                    continue        # off the page the scan shows
             if any(_box_iou(placed, c) >= 0.3 for c in covered):
                 continue            # already emitted
             orphans.append((placed, obj))
@@ -8979,6 +8997,69 @@ def dewarp_scan_pages(page_paths: list[str], pages_dir: str) -> None:
     _report_kept_photos(n_no_model, refused)
 
 
+PAGE_PICTURE_MIN = 0.5      # of its page, for a picture to be the page
+
+
+def _is_picture_of_itself(page) -> bool:
+    """
+    Whether everything this page prints sits inside a picture on it.
+
+    A scanned page is a photograph of a page: its words are pixels, and any
+    text the PDF carries is a recogniser's layer laid over them. A typeset
+    page that holds a plate prints something beside it in type — a caption,
+    a folio, a running head — and that is the difference this looks for:
+    a picture over at least half the page, and no text or line anywhere
+    off the pictures.
+    """
+    import pypdfium2 as pdfium
+    try:
+        pw, ph = page.get_size()
+        pictures, ink = [], []
+        for o in page.get_objects():
+            if not (isinstance(o, pdfium.PdfImage) or o.type in (1, 2)):
+                continue                    # 1 is text, 2 a path
+            b = o.get_bounds()
+            b = (min(b[0], b[2]), min(b[1], b[3]),
+                 max(b[0], b[2]), max(b[1], b[3]))
+            (pictures if isinstance(o, pdfium.PdfImage) else ink).append(b)
+    except Exception:
+        return False
+    if not pictures or max((b[2] - b[0]) * (b[3] - b[1]) for b in pictures) \
+            < PAGE_PICTURE_MIN * pw * ph:
+        return False
+    pad = 2
+    for b in ink:
+        cx, cy = (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
+        if not any(m[0] - pad <= cx <= m[2] + pad
+                   and m[1] - pad <= cy <= m[3] + pad for m in pictures):
+            return False
+    return True
+
+
+def _scanned_pages(doc) -> set:
+    """
+    The pages of a scanned book that are pictures of themselves.
+
+    One such page proves nothing — a typeset book's cover is a picture and
+    nothing else too. A book of them is a scan, and the shelf divides
+    cleanly on it: of 151 books, 115 have such a page on under 2% of their
+    pages or not at all, one picture book on 9%, and the 35 scans on 82% or
+    more. So the pages count only where they are most of the book.
+
+    It matters where the scan does not fill its page. Google Books crops
+    each page image to the type area and sets it inside the margins, at
+    0.72 of the page; another scan sits at 0.7 to 0.8 beside a library's
+    stamp. Neither is "a picture of the whole page", so both were handled
+    as typeset pages holding an illustration: the history of Lloyd's
+    shipped with the scan of every one of its 438 pages inserted above that
+    page's text as artwork the layout had missed, 130MB of it, and
+    Confusion de Confusiones had its scanner's text layer trusted as the
+    publisher's own.
+    """
+    found = {i for i, page in enumerate(doc) if _is_picture_of_itself(page)}
+    return found if 2 * len(found) > len(doc) else set()
+
+
 def load_pages_from_pdf(pdf_path: str, pages_dir: str) -> list[str]:
     """
     Take the page images straight back out of a PDF this script wrote earlier.
@@ -8994,6 +9075,7 @@ def load_pages_from_pdf(pdf_path: str, pages_dir: str) -> list[str]:
         sys.exit("--pages-from needs pypdfium2: pip install pypdfium2")
 
     doc = pdfium.PdfDocument(pdf_path)
+    scanned = _scanned_pages(doc)
     page_paths: list[str] = []
     for i, page in enumerate(doc):
         stem = os.path.join(pages_dir, f"page_{i:04d}")
@@ -9109,17 +9191,22 @@ def load_pages_from_pdf(pdf_path: str, pages_dir: str) -> list[str]:
                 except Exception:
                     pass
             behind = _union_fraction(boxes, pw_pt, ph_pt)
-            if not extracted and behind < 0.9:
+            # …nor does the picture have to reach the page's edges. A scan
+            # set inside its margins covers seven tenths of the page and is
+            # no more typeset for it; what gives it away is the book.
+            if not extracted and behind < 0.9 and i not in scanned:
                 open(out + ".native", "w").close()
         # Where this page came from. A figure cut out of the page raster is a
         # crop of a crop — the raster already resampled the artwork, at 3.12x
         # on one manual's line drawings, and JPEG rang every hard edge it
         # made. With the source in hand a figure can be taken from the PDF
-        # itself instead.
+        # itself instead — which needs to know when the largest picture
+        # on the page is not a figure at all but the scan of the page.
         try:
             with open(out + ".source.json", "w") as fh:
                 json.dump({"pdf": os.path.abspath(pdf_path), "page": i,
-                           "facsimile": bool(extracted)}, fh)
+                           "facsimile": bool(extracted),
+                           "scan": i in scanned}, fh)
         except OSError:
             pass
 
