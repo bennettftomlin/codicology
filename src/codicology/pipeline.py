@@ -4699,7 +4699,53 @@ ENTRY_HEAD_BARE = re.compile(r"^\s*(?:<b>\s*)?#(\d{1,3})\.")
 
 
 GREEK = {"alpha": "α", "beta": "β", "gamma": "γ", "delta": "δ", "Delta": "Δ",
-         "mu": "μ", "pi": "π", "psi": "ψ", "epsilon": "ε", "omega": "ω"}
+         "mu": "μ", "pi": "π", "psi": "ψ", "epsilon": "ε", "omega": "ω",
+         "zeta": "ζ", "eta": "η", "theta": "θ", "iota": "ι", "kappa": "κ",
+         "lambda": "λ", "nu": "ν", "xi": "ξ", "rho": "ρ", "sigma": "σ",
+         "tau": "τ", "upsilon": "υ", "phi": "φ", "chi": "χ", "Gamma": "Γ",
+         "Theta": "Θ", "Lambda": "Λ", "Xi": "Ξ", "Pi": "Π", "Sigma": "Σ",
+         "Phi": "Φ", "Psi": "Ψ", "Omega": "Ω"}
+
+# The signs the recogniser spells out, measured over every inline <math> in
+# 151 books' readings (5,746 of them): \times 108, \circ 91, \dots 39,
+# \rightarrow 21, and a handful each of the rest. Stripping the backslash,
+# as a name not listed here still has done to it, left "4 times 7" and
+# "14^{circ}F" in the prose.
+MATH_SIGNS = {"times": "×", "div": "÷", "pm": "±", "cdot": "·",
+              "leq": "≤", "le": "≤", "geq": "≥", "ge": "≥", "neq": "≠",
+              "ne": "≠", "approx": "≈", "rightarrow": "→", "to": "→",
+              "leftarrow": "←", "dots": "…", "ldots": "…", "cdots": "…",
+              "infty": "∞"}
+
+# The fractions Unicode sets as one character. Any other is set the way
+# a compositor without the sort would: raised numerator, fraction slash,
+# lowered denominator.
+VULGAR = {"1/2": "½", "1/3": "⅓", "2/3": "⅔", "1/4": "¼", "3/4": "¾",
+          "1/5": "⅕", "2/5": "⅖", "3/5": "⅗", "4/5": "⅘", "1/6": "⅙",
+          "5/6": "⅚", "1/7": "⅐", "1/8": "⅛", "3/8": "⅜", "5/8": "⅝",
+          "7/8": "⅞", "1/9": "⅑", "1/10": "⅒"}
+_RAISED = str.maketrans("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")
+_LOWERED = str.maketrans("0123456789", "₀₁₂₃₄₅₆₇₈₉")
+_FRACTION = re.compile(r"\\[dt]?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}")
+_MATH_FORMS = {"text", "mathrm", "mathit", "frac", "dfrac", "tfrac", "circ"}
+
+
+def _set_fraction(m) -> str:
+    over, under = m.group(1).strip(), m.group(2).strip()
+    if re.fullmatch(r"[0-9]+", over) and re.fullmatch(r"[0-9]+", under):
+        return (VULGAR.get(f"{over}/{under}")
+                or over.translate(_RAISED) + "⁄" + under.translate(_LOWERED))
+
+    def term(t):        # "100 cc./kg." over 10 is (100 cc./kg.)/10
+        if not re.search(r"[\s+\-−×·/]", t):
+            return t
+        depth = 0           # already one bracketed group: leave it
+        for k, ch in enumerate(t):
+            depth += (ch == "(") - (ch == ")")
+            if depth == 0 and k < len(t) - 1:
+                return f"({t})"
+        return t if t.startswith("(") else f"({t})"
+    return f"{term(over)}/{term(under)}"
 
 
 def normalize_math(body: str) -> str:
@@ -4712,12 +4758,30 @@ def normalize_math(body: str) -> str:
     The content is only ever letters and simple wrappers, so it translates
     exactly; anything unrecognised keeps its text with the markup stripped,
     which is never worse than what the reader would have shown.
+
+    It wraps a printed fraction the same way — 7<math>\\frac{1}{2}</math>
+    inches — in 25 of 151 books, and stripping that left "7frac{1}{2} inches"
+    on the page. A fraction, a degree sign and the common operators are set
+    as the characters they are. Subscripts and powers are still left as
+    written (P_1, cm^{-1}): a raised digit in this markup is a note call.
     """
+    def name(m):
+        word = m.group(1)
+        if word in _MATH_FORMS:
+            return m.group(0)       # has arguments: set below
+        return GREEK.get(word) or MATH_SIGNS.get(word) or word
+
     def clean(m):
         t = m.group(1)
+        # Names first, while each still ends where the recogniser ended it:
+        # \mu\text{g} is μ and then g, and unwrapped first it is \mug.
+        t = re.sub(r"\\([A-Za-z]+)", name, t)
         t = re.sub(r"\\(?:text|mathrm|mathit)\{([^}]*)\}", r"\1", t)
-        for name, ch in GREEK.items():
-            t = t.replace("\\" + name, ch)
+        while True:     # innermost first, so a fraction over a fraction sets
+            t, n = _FRACTION.subn(_set_fraction, t)
+            if not n:
+                break
+        t = re.sub(r"\^\s*(?:\{\s*\\circ\s*\}|\\circ)", "°", t)
         t = t.replace("\\,", ",").replace("\\", "")
         return t
     # Display math is exempt: a block the layout model LABELLED Formula is
