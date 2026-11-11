@@ -1550,6 +1550,55 @@ def find_image_furniture(page_figures: list[list[str]],
     return doomed
 
 
+# A ruled box is looked for on the page so that a drawing the layout never
+# made a block of is not lost (find_ruled_boxes). It is told which regions
+# are already figures, and nothing else, so wherever the layout DID make a
+# block of a ruled region the box was cut out as a picture all the same.
+# Across the shelf's caches (38,423 pages, 6,847 pictures) that is 417
+# pictures. 360 sit over a block that has its text: 332 tables, most of
+# them in three economics textbooks, which ship as a table and then again as
+# a picture of the table; and 28 boxed notes, warnings and contents lists.
+# The other 57 sit over a block that is only a picture waiting to be cut
+# (a chart or a chemical structure the recogniser returned as an empty
+# <img>), and recover_placeholder_figures then cut the same region a second
+# time: Where There Is No Dentist printed its diagnostic charts twice.
+#
+# Only a picture found by its ruled border is ever dropped, and only where
+# another block covers the same box. Sixty of the 360 were looked at, the
+# tables with the least text for their size and all 28 of the others: every
+# one is the block's own content.
+DOUBLED_BOX_OVERLAP = 0.8
+
+
+def drop_doubled_boxes(items: list) -> "tuple[list, int]":
+    """Return items without the pictures that only repeat a block the page
+    already has, and how many were dropped."""
+    ruled = [it for it in items
+             if it.figure is not None and it.label is None and it.box]
+    if not ruled:
+        return items, 0
+    gone = set()
+    for fig in ruled:
+        for it in items:
+            if it is fig or it.figure is not None or not it.box \
+                    or not it.html \
+                    or _box_iou(fig.box, it.box) < DOUBLED_BOX_OVERLAP:
+                continue
+            if _strip_tags(PLACEHOLDER_IMG.sub("", it.html)).strip():
+                gone.add(id(fig))   # the block says what the box holds
+            elif PLACEHOLDER_IMG.search(it.html):
+                gone.add(id(it))    # the same picture, about to be cut again
+    return [it for it in items if id(it) not in gone], len(gone)
+
+
+def _lies_inside(box, other, share: float = 0.9) -> bool:
+    """Whether nearly all of `box` falls within `other`."""
+    ix = max(0.0, min(box[2], other[2]) - max(box[0], other[0]))
+    iy = max(0.0, min(box[3], other[3]) - max(box[1], other[1]))
+    area = (box[2] - box[0]) * (box[3] - box[1])
+    return area > 0 and ix * iy >= share * area
+
+
 def recover_placeholder_figures(items: list, page_path: str) -> list:
     """Turn source-less image placeholders back into the pictures they mark."""
     if not any(it.figure is None and it.html and it.box
@@ -1634,8 +1683,12 @@ def recover_orphan_artwork(items: list, page_path: str) -> list:
                 if not (own[1][0] <= cx <= own[1][2]
                         and own[1][1] <= cy <= own[1][3]):
                     continue        # off the page the scan shows
-            if any(_box_iou(placed, c) >= 0.3 for c in covered):
-                continue            # already emitted
+            if any(_box_iou(placed, c) >= 0.3 or _lies_inside(placed, c)
+                   for c in covered):
+                # Already emitted, or part of a picture that was: a drawing
+                # set inside a chart is in the chart, and scored against the
+                # chart's whole box it overlaps too little to count.
+                continue
             orphans.append((placed, obj))
     except Exception:
         return items
@@ -7864,6 +7917,7 @@ class ReadPages(NamedTuple):
     n_hand_figures: int
     label_heads: list
     toc_label_pages: set
+    n_doubled: int = 0
 
 
 def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
@@ -7887,6 +7941,7 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
     n_reattached = 0
     n_phantoms = 0
     n_forms = 0
+    n_doubled = 0
     marker_seq_state: dict = {"last": None}
     label_heads: list = []      # (page, rank, text) from SectionHeader
     toc_label_pages: set = set()
@@ -8048,6 +8103,8 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
             n_phantoms += _sp
             if strip_furniture:
                 items = strip_running_heads(items)
+            items, _dbl = drop_doubled_boxes(items)
+            n_doubled += _dbl
             items = recover_placeholder_figures(items, path)
             items = recover_orphan_artwork(items, path)
             items = recover_vector_artwork(items, path)
@@ -8109,7 +8166,7 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
     return ReadPages(bodies, page_figures, figure_data, page_furniture,
                      furniture_known, n_figures, n_blank_figures,
                      n_label_rules, n_reattached, n_phantoms, n_forms,
-                     n_hand_figures, label_heads, toc_label_pages)
+                     n_hand_figures, label_heads, toc_label_pages, n_doubled)
 
 
 def build_epub(
@@ -8168,7 +8225,8 @@ def build_epub(
     rp = _read_pages(page_paths, backend, cache, book, strip_furniture)
     (bodies, page_figures, figure_data, page_furniture, furniture_known,
      n_figures, n_blank_figures, n_label_rules, n_reattached, n_phantoms,
-     n_forms, n_hand_figures, label_heads, toc_label_pages) = rp
+     n_forms, n_hand_figures, label_heads, toc_label_pages,
+     n_doubled) = rp
     if n_figures:
         print(f"    extracted {n_figures} figures")
     if n_blank_figures:
@@ -8185,6 +8243,10 @@ def build_epub(
     if n_phantoms:
         print(f"    suppressed {n_phantoms} phantom digit block(s) the "
               f"layout invented over prose — verified against the ink")
+    if n_doubled:
+        print(f"    left out {n_doubled} picture(s) of a ruled box that a "
+              f"block of the page already holds — a table printed as a "
+              f"table is not printed again as a picture of one")
     if n_forms:
         print(f"    kept {n_forms} form block(s) out of the body — a "
               f"document facsimile's fields are not prose; their text "
