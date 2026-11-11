@@ -38,14 +38,13 @@ OCR backend:
     beyond reading characters — figures, captions, running heads, headings,
     reading order, block geometry — depends on the layout Surya returns.
 
-    The other names --ocr accepts (easyocr, paddleocr, tesseract, gcv) are
-    residue. Not one of them has ever been run against a real book here, and
-    none is tested. Read the code and it is plain why: each returns FLAT
-    TEXT and nothing else, so a book built on one would arrive with no
-    figures, no furniture stripped, no headings, no contents, and no note
-    links — silently, since nothing checks for it. They are left in place
-    because the seam they sit behind is honest, not because they work.
-    Treat them as unimplemented.
+    There were four other names behind --ocr once (easyocr, paddleocr,
+    tesseract, gcv). None was ever run against a real book or tested, and
+    each returned flat text and nothing else, so a book built on one would
+    have arrived with no figures, no headings, no contents and no note
+    links, with nothing to say so. They are gone. OCRBackend is still the
+    seam a second engine would sit behind, and it would have to return
+    layout to be one.
 
 Usage:
     # a PDF — the usual case. Always pass --ocr-cache: it makes a rebuild
@@ -1349,14 +1348,6 @@ class OCRBackend:
         return [[PageItem(html=body)] for body in self.run_html(images)]
 
 
-def _lines_to_text(lines: list[tuple[float, float, str]]) -> str:
-    """Sort detected line boxes into reading order and join them."""
-    # Quantise y so that words on the same visual line don't get split by
-    # sub-pixel bbox jitter, then order left-to-right within each line.
-    lines.sort(key=lambda r: (round(r[0] / 10.0), r[1]))
-    return "\n".join(text for _, _, text in lines if text)
-
-
 # The blocks whose pixels are their content. These are the labels Surya does
 # not read (surya.recognition.SKIP_CANON_LABELS, less BlankPage): each comes
 # back skipped, with no HTML, so a label missing here is a block that leaves
@@ -2149,16 +2140,17 @@ def set_pages_in_flight(n: int) -> None:
 
 class SuryaBackend(OCRBackend):
     """
-    Surya's API has shifted repeatedly across releases, so we probe for the
-    shape that's installed:
-      - 0.6-0.2x: surya.recognition.RecognitionPredictor, called as rec(images).
-        Detection/layout run internally and results come back as layout blocks
-        carrying HTML, ordered by `reading_order`.
-      - older:    surya.ocr.run_ocr(...) with separately loaded models, returning
-        flat `text_lines` that we sort by bounding box.
+    Surya through surya.recognition.RecognitionPredictor, called as
+    rec(images): detection and layout run inside it, and the page comes back
+    as layout blocks carrying HTML, ordered by `reading_order`.
 
-    Note: 0.2x delegates inference to llama.cpp and needs a `llama-server`
-    binary on PATH (`brew install llama.cpp`), or LLAMA_CPP_BINARY set.
+    That is the API of the release this package pins (pyproject.toml), and
+    the only one read here. The branches for surya.ocr.run_ocr, which
+    returned flat text lines, could not run at the pin and are gone; when
+    the pin moves and the shape with it, this class is where to look.
+
+    0.2x delegates inference to llama.cpp and needs a `llama-server` binary
+    on PATH (`brew install llama.cpp`), or LLAMA_CPP_BINARY set.
     """
 
     name = "surya"
@@ -2177,63 +2169,28 @@ class SuryaBackend(OCRBackend):
         llamacpp_safe_schemas()     # before any predictor: the fallback's layout
         try:
             from surya.recognition import RecognitionPredictor
-        except ImportError:
-            pass
-        else:
-            self._rec = RecognitionPredictor()
-            self._shape = "predictor"
-            return
-
-        try:
-            from surya.model.detection.segformer import (
-                load_model as load_det_model,
-                load_processor as load_det_processor,
-            )
-            from surya.model.recognition.model import load_model as load_rec_model
-            from surya.model.recognition.processor import load_processor as load_rec_processor
-            from surya.ocr import run_ocr
         except ImportError as exc:
             raise RuntimeError(
-                "Could not find a supported Surya API. Install with `pip install surya-ocr`.\n"
-                "If Surya is installed but this still fails, its API has likely changed "
-                "again — check the installed version with\n"
-                "  python -c \"import importlib.metadata as m; print(m.version('surya-ocr'))\"\n"
-                "then adjust SuryaBackend._load()/_predict().\n"
+                "Could not find Surya's RecognitionPredictor. Install the "
+                "release this package pins: pip install 'codicology[surya]'.\n"
+                "If Surya is installed and this still fails, its API has "
+                "moved — check the installed version with\n"
+                "  python -c \"import importlib.metadata as m; "
+                "print(m.version('surya-ocr'))\"\n"
+                "then adjust SuryaBackend.\n"
                 f"Underlying import error: {exc}"
             ) from exc
-
-        self._run_ocr = run_ocr
-        self._det_model, self._det_processor = load_det_model(), load_det_processor()
-        self._rec_model, self._rec_processor = load_rec_model(), load_rec_processor()
-        self._shape = "run_ocr"
+        self._rec = RecognitionPredictor()
+        self._shape = "predictor"
 
     def _predict(self, images: list[Image.Image]):
-        if self._shape == "run_ocr":
-            return self._run_ocr(
-                images,
-                [self.langs] * len(images),
-                self._det_model,
-                self._det_processor,
-                self._rec_model,
-                self._rec_processor,
-            )
         return self._rec(images)
 
     def _page_fragments(self, images: list[Image.Image]) -> list[list[str]]:
         """Per page, the usable HTML fragments in reading order."""
         pages: list[list[str]] = []
         for pred in self._predict(images):
-            blocks = getattr(pred, "blocks", None)
-            if blocks is None:
-                # Legacy run_ocr shape: flat text lines positioned by bbox.
-                lines = []
-                for line in getattr(pred, "text_lines", []) or []:
-                    bbox = getattr(line, "bbox", None) or [0.0, 0.0, 0.0, 0.0]
-                    lines.append((float(bbox[1]), float(bbox[0]), getattr(line, "text", "")))
-                text = _lines_to_text(lines)
-                pages.append([f"<p>{html.escape(p)}</p>" for p in reflow_paragraphs(text)])
-                continue
-
+            blocks = getattr(pred, "blocks", None) or []
             ordered = sorted(blocks, key=lambda b: getattr(b, "reading_order", 0))
             pages.append([
                 b.html for b in ordered
@@ -2254,11 +2211,7 @@ class SuryaBackend(OCRBackend):
     def run_items(self, images: list[Image.Image]) -> list[list[PageItem]]:
         pages: list[list[PageItem]] = []
         for image, pred in zip(images, self._predict(images)):
-            blocks = getattr(pred, "blocks", None)
-            if blocks is None:
-                pages.append([PageItem(html=frag)
-                              for frag in self._page_fragments([image])[0]])
-                continue
+            blocks = getattr(pred, "blocks", None) or []
 
             items: list[PageItem] = []
             tops: list[float] = []          # each item's top edge, for box placement
@@ -2341,111 +2294,16 @@ class SuryaBackend(OCRBackend):
         return pages
 
 
-class EasyOCRBackend(OCRBackend):
-    name = "easyocr"
-    batch_size = 1
-
-    def __init__(self, langs: list[str]) -> None:
-        super().__init__(langs)
-        import easyocr
-
-        self._reader = easyocr.Reader(langs)
-
-    def run(self, images: list[Image.Image]) -> list[str]:
-        pages = []
-        for img in images:
-            lines = []
-            for box, text, _conf in self._reader.readtext(np.array(img)):
-                ys = [p[1] for p in box]
-                xs = [p[0] for p in box]
-                lines.append((float(min(ys)), float(min(xs)), text))
-            pages.append(_lines_to_text(lines))
-        return pages
-
-
-class PaddleOCRBackend(OCRBackend):
-    name = "paddleocr"
-    batch_size = 1
-
-    def __init__(self, langs: list[str]) -> None:
-        super().__init__(langs)
-        from paddleocr import PaddleOCR
-
-        self._ocr = PaddleOCR(use_angle_cls=True, lang=langs[0], show_log=False)
-
-    def run(self, images: list[Image.Image]) -> list[str]:
-        pages = []
-        for img in images:
-            result = self._ocr.ocr(np.array(img), cls=True) or []
-            lines = []
-            for block in result:
-                for box, (text, _conf) in block or []:
-                    ys = [p[1] for p in box]
-                    xs = [p[0] for p in box]
-                    lines.append((float(min(ys)), float(min(xs)), text))
-            pages.append(_lines_to_text(lines))
-        return pages
-
-
-class TesseractBackend(OCRBackend):
-    name = "tesseract"
-    batch_size = 1
-
-    def __init__(self, langs: list[str]) -> None:
-        super().__init__(langs)
-        import pytesseract
-
-        self._pytesseract = pytesseract
-        self._lang = "+".join(langs)
-
-    def run(self, images: list[Image.Image]) -> list[str]:
-        return [self._pytesseract.image_to_string(img, lang=self._lang) for img in images]
-
-
-class GoogleVisionBackend(OCRBackend):
-    name = "gcv"
-    batch_size = 1
-
-    def __init__(self, langs: list[str]) -> None:
-        super().__init__(langs)
-        from google.cloud import vision
-
-        self._vision = vision
-        self._client = vision.ImageAnnotatorClient()
-
-    def run(self, images: list[Image.Image]) -> list[str]:
-        import io
-
-        pages = []
-        for img in images:
-            buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=92)
-            response = self._client.document_text_detection(
-                image=self._vision.Image(content=buf.getvalue())
-            )
-            if response.error.message:
-                raise RuntimeError(f"Google Vision error: {response.error.message}")
-            pages.append(response.full_text_annotation.text)
-        return pages
-
-
 OCR_BACKENDS: dict[str, type[OCRBackend]] = {
     "surya": SuryaBackend,
-    "easyocr": EasyOCRBackend,
-    "paddleocr": PaddleOCRBackend,
-    "tesseract": TesseractBackend,
-    "gcv": GoogleVisionBackend,
 }
 
 
 def load_backend(name: str, langs: list[str]) -> OCRBackend:
-    if name != "surya":
-        # Said once, plainly, at the moment it stops being hypothetical.
-        print(f"[!] --ocr {name}: this pipeline was built around Surya and has "
-              f"never been run with anything else. {name} returns flat text "
-              f"with no layout, so the book will have no figures, no headings, "
-              f"no contents and no note links, and nothing downstream will "
-              f"notice. This path is untested.")
+    if name not in OCR_BACKENDS:
+        sys.exit(f"There is no OCR backend called {name!r}. Surya is the "
+                 f"one this pipeline reads with: everything it does beyond "
+                 f"reading characters depends on the layout Surya returns.")
     try:
         return OCR_BACKENDS[name](langs)
     except ImportError as exc:
@@ -11440,13 +11298,10 @@ def main(argv: "list[str] | None" = None) -> None:
                              "early and late, or a session's own drift will "
                              "pose as a result")
     parser.add_argument("--ocr", choices=sorted(OCR_BACKENDS), default="surya",
-                        help="OCR backend used for --epub (default: surya). "
-                             "Surya is the only one this pipeline was built "
-                             "for or has ever been run with; the others "
-                             "return flat text with no layout, so a book "
-                             "built on one arrives with no figures, headings, "
-                             "contents or note links. Treat them as "
-                             "unimplemented")
+                        help="OCR backend used for --epub. Surya is the one "
+                             "there is: everything this pipeline does beyond "
+                             "reading characters depends on the layout it "
+                             "returns")
     parser.add_argument("--lang", default="en",
                         help="Comma-separated OCR language codes (default: en)")
     parser.add_argument("--title", default="Scanned Book", help="EPUB title metadata")

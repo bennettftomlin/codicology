@@ -51,14 +51,6 @@ This pipeline was built around Surya and only Surya. Everything it does
 beyond reading characters — figures, captions, running heads, headings,
 reading order, block geometry — depends on the layout Surya returns.
 
-`--ocr` also accepts `easyocr`, `paddleocr`, `tesseract`, and `gcv`.
-**Treat these as unimplemented.** None has been run against a real book
-here and none is tested. Each returns flat text and nothing else, so a
-book built on one would come out with no figures, no running heads
-stripped, no headings, no contents and no note links — and nothing
-downstream would report it. They exist only because the interface they
-sit behind is generic.
-
 ### Tesseract is the witness, not a backend
 
 Tesseract has no language model behind it, so it cannot invent text. That

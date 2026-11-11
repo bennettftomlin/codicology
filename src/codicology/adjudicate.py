@@ -706,11 +706,10 @@ SEAM_KEEP_LEN = 2
 # classes: real print carries letterform ink in its boxes, and the measured
 # 140-word invention sat over blank paper. Photo-textured regions defeat
 # the ink test (texture reads as ink); the tier is warn-only and a human
-# judges. Thresholds sit in the measured gap: the tail starts at 17%, the
-# densest honest page below it ran 13%.
-SURYA_ONLY_FRAC = 0.15     # page flagged at this surya-only fraction…
-SURYA_ONLY_MIN = 8         # …with at least this many such words, or
-SURYA_ONLY_RUN = 12        # any single contiguous run this long
+# judges. (Three page-level thresholds sat here once, in the gap between
+# the densest honest page, 13%, and the start of the tail, 17%. Nothing
+# ever read them: every run of SURYA_RUN_MIN words is recorded, whatever
+# share of its page it is.)
 SURYA_RUN_MIN = 3          # runs shorter than this fold into the stat
 SURYA_INKLESS = 0.005      # letterform ink below this = words over blank
 

@@ -68,15 +68,25 @@ def test_the_escape_hatch_gets_past_the_gate(vtb, monkeypatch, capsys):
     assert "WITHOUT a witness" in out
 
 
-def test_an_untested_backend_says_so_before_it_is_used(vtb, capsys):
-    """Surya is the only backend this pipeline was built for. The others
-    return flat text, so a book built on one loses figures, headings,
-    contents and note links with nothing downstream noticing."""
+@pytest.mark.parametrize("name", ["easyocr", "paddleocr", "tesseract", "gcv",
+                                  "nothing-at-all"])
+def test_a_backend_that_is_not_surya_is_refused_by_name(vtb, name):
+    """Four other names sat behind --ocr once. None was ever run on a book
+    or tested, and each returned flat text, so a book built on one would
+    have lost its figures, headings, contents and note links with nothing
+    to say so. They are gone, and asking for one says what there is."""
+    with pytest.raises(SystemExit) as stop:
+        vtb.load_backend(name, ["en"])
+    assert f"no OCR backend called {name!r}" in str(stop.value)
+    assert "Surya" in str(stop.value)
+
+
+def test_the_command_line_offers_surya_and_nothing_else(vtb, capsys):
+    assert sorted(vtb.OCR_BACKENDS) == ["surya"]
     with pytest.raises(SystemExit):
-        vtb.load_backend("easyocr", ["en"])
-    out = capsys.readouterr().out
-    assert "never been run" in out
-    assert "untested" in out
+        vtb.main(["--pages-from", "book.pdf", "--epub", "book.epub",
+                  "--ocr", "easyocr"])
+    assert "invalid choice: 'easyocr'" in capsys.readouterr().err
 
 
 def test_surya_is_not_warned_about(vtb, capsys, monkeypatch):
