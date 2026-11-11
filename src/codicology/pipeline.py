@@ -2148,6 +2148,73 @@ def _fold_loose_inline(div) -> None:
                 el.append(nxt)          # its own tail travels with it
 
 
+# What may stand in a page's body without a paragraph round it, beside the
+# blocks themselves: an equation set on its own line, and a picture.
+_STANDS_ALONE = _BLOCK_TAGS | {"math", "img", "svg", "section", "aside",
+                               "dl", "caption"}
+
+
+def _wrap_loose_inline(div) -> None:
+    """Give running text that stands outside every block a paragraph.
+
+    A block the layout calls a heading often comes back from the recogniser
+    as nothing but `<b>Keep Your Hands Clean</b>`: 871 of the 921 fragments
+    in the shelf's caches that hold no block at all. Each went into the
+    page as it came, and nothing in a page separates one such fragment
+    from the next, so the index of Where There Is No Doctor read
+    "Consumption (See Tuberculosis)Contact dermatitis, 204, 421Contraception"
+    and a dosage ran straight on from the warning before it. 259 pages in
+    40 books carried them.
+
+    What _fold_loose_inline could not give to a block before it is a block
+    of its own. Nothing is said about what kind: it is a paragraph, bold or
+    italic as it was read.
+    """
+    from lxml import etree
+
+    nodes = []
+    if div.text:
+        nodes.append(div.text)
+        div.text = None
+    for child in list(div):
+        tail, child.tail = child.tail, None
+        div.remove(child)
+        nodes.append(child)
+        if tail:
+            nodes.append(tail)
+    para = None
+    for node in nodes:
+        if isinstance(node, str):
+            if para is None:
+                if not node.strip():
+                    continue            # white space between two blocks
+                para = etree.SubElement(div, "p")
+                para.text = node.lstrip()
+            elif len(para):
+                para[-1].tail = (para[-1].tail or "") + node
+            else:
+                para.text = (para.text or "") + node
+        elif node.tag in _STANDS_ALONE and not (
+                node.tag == "math" and node.get("display") != "block"):
+            para = None
+            div.append(node)
+        else:
+            if para is None:
+                para = etree.SubElement(div, "p")
+            para.append(node)
+    for para in list(div):
+        # a line break or an empty tag with no words round it is not a
+        # paragraph, and a placeholder picture is looked for bare
+        if para.tag == "p" and para.get("id") is None \
+                and not "".join(para.itertext()).strip():
+            at = div.index(para)
+            for inner in reversed(list(para)):
+                if inner.tag != "br":
+                    div.insert(at, inner)
+            if not len(para) or all(k.tag == "br" for k in para):
+                div.remove(para)
+
+
 def _to_xhtml(fragment: str) -> str:
     """Reparse model-generated HTML into well-formed XHTML for the EPUB."""
     try:
@@ -2159,10 +2226,9 @@ def _to_xhtml(fragment: str) -> str:
         return f"<p>{html.escape(_strip_tags(fragment))}</p>"
 
     _fold_loose_inline(div)
-    # Loose text needs a block wrapper; a bare text node in <body> isn't valid XHTML.
-    parts = [f"<p>{html.escape(div.text.strip())}</p>"] if (div.text or "").strip() else []
-    parts += [etree.tostring(child, method="xml", encoding="unicode") for child in div]
-    return "".join(parts)
+    _wrap_loose_inline(div)
+    return "".join(etree.tostring(child, method="xml", encoding="unicode")
+                   for child in div)
 
 
 # Surya's llama.cpp backend sizes the server's KV cache as parallel-slots x
@@ -2522,6 +2588,12 @@ _CLOSED_EARLY = re.compile(
     r"(?!<(?:p|h[1-6]|li|ul|ol|table|div|figure|blockquote|pre|hr)\b)(?=\S)")
 
 
+# A fragment that begins with running text rather than a block has text
+# outside every block, whatever else it holds (see _wrap_loose_inline).
+_OPENS_ON_A_BLOCK = re.compile(
+    r"\s*<(?:p|h[1-6]|li|ul|ol|table|div|figure|blockquote|pre|hr|math|img)\b")
+
+
 def refold_cached_fragments(items: "list[PageItem]") -> "list[PageItem]":
     """Fold loose inline content in fragments that predate the repair.
 
@@ -2538,7 +2610,8 @@ def refold_cached_fragments(items: "list[PageItem]") -> "list[PageItem]":
     """
     out = []
     for it in items:
-        if it.html and _CLOSED_EARLY.search(it.html):
+        if it.html and (_CLOSED_EARLY.search(it.html)
+                        or not _OPENS_ON_A_BLOCK.match(it.html)):
             it = it._replace(html=_to_xhtml(it.html))
         out.append(it)
     return out

@@ -109,3 +109,55 @@ def test_the_entries_then_parse_as_a_group(vtb):
     bodies = ["<p>a<sup>1</sup>b<sup>2</sup>c<sup>3</sup></p>", notes]
     stats = vtb.link_notes(bodies, set())
     assert stats["linked"] == 3 and stats["unlinked"] == 0
+
+
+# ── running text that no block came before ──────────────────────────────────
+
+@pytest.mark.parametrize("fragment, wrapped", [
+    ("<b>Keep Your Hands Clean</b>", "<p><b>Keep Your Hands Clean</b></p>"),
+    ("<b>Consumption</b> (See Tuberculosis)",
+     "<p><b>Consumption</b> (See Tuberculosis)</p>"),
+    ("<i>Dosage</i> to treat acute attacks of malaria:",
+     "<p><i>Dosage</i> to treat acute attacks of malaria:</p>"),
+    ("Figure 7 <i>(continued)</i>", "<p>Figure 7 <i>(continued)</i></p>"),
+])
+def test_a_fragment_with_no_block_in_it_is_a_paragraph(vtb, fragment, wrapped):
+    """A block the layout calls a heading often comes back as a bare <b>:
+    871 of the 921 fragments in the shelf's caches that hold no block. Each
+    went into its page as it came, with nothing between it and the next, so
+    an index read "Consumption (See Tuberculosis)Contact dermatitis, 204"
+    and a dosage ran on from the warning before it."""
+    assert vtb._to_xhtml(fragment) == wrapped
+    assert vtb.refold_cached_fragments([vtb.PageItem(html=fragment)])[0].html \
+        == wrapped, "and a warm rebuild gets it too"
+
+
+def test_two_such_fragments_are_two_paragraphs_on_the_page(vtb):
+    entries = ["<b>Consumption</b> (See Tuberculosis)",
+               "<b>Contact dermatitis, 204, 421</b>"]
+    page = "".join(i.html for i in vtb.refold_cached_fragments(
+        [vtb.PageItem(html=e) for e in entries]))
+    assert page == ("<p><b>Consumption</b> (See Tuberculosis)</p>"
+                    "<p><b>Contact dermatitis, 204, 421</b></p>")
+
+
+def test_loose_text_after_a_table_gets_a_paragraph_of_its_own(vtb):
+    assert vtb._to_xhtml("<table><tr><td>cell</td></tr></table>Source: IEA") \
+        == "<table><tr><td>cell</td></tr></table><p>Source: IEA</p>"
+
+
+@pytest.mark.parametrize("fragment", [
+    "<img/>",                                   # a picture waiting to be cut
+    '<math display="block">x = 1</math>',       # an equation on its own line
+    "<p>one</p><p>two</p>",
+    '<figure><img src="f.jpg"/></figure>',
+    "<h2>CHAPTER TWO</h2>",
+])
+def test_what_already_stands_as_a_block_is_left_as_it_is(vtb, fragment):
+    assert vtb._to_xhtml(fragment) == fragment
+    assert vtb._OPENS_ON_A_BLOCK.match(fragment)
+
+
+def test_a_letter_in_the_middle_of_a_sentence_stays_in_the_sentence(vtb):
+    assert vtb._to_xhtml("<p>where </p><math>\\alpha</math> is the share") \
+        == "<p>where <math>\\alpha</math> is the share</p>"
