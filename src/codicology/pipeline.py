@@ -12697,6 +12697,41 @@ def _finish(
                  if not boxed else "") + ")")
 
 
+def bind_book(epub_path: str) -> "dict | None":
+    """The built book's pages bound into chapters, and a line to say so.
+
+    The build writes a file to a page, because a page is what it reads,
+    checks and corrects. A reader does not want one: every printed page
+    then starts a new screen, half of them in the middle of a sentence. A
+    book the binding will not answer for is left as it was built, which is
+    a book that reads worse and is wrong in nothing."""
+    from . import binding
+    try:
+        st = binding.bind_epub(epub_path)
+    except binding.CannotBind as exc:
+        print(f"\n[!] Left a file to a page: {exc}. The book is complete; "
+              f"it starts a new screen at every printed page.")
+        return None
+    except Exception as exc:    # the book is built, and is worth more than
+        # the way its files are cut: whatever went wrong in the binding,
+        # the book as built is still there (nothing is replaced until the
+        # bound one is whole) and the run ends as a run that built a book
+        print(f"\n[!] Left a file to a page: the binding failed "
+              f"({type(exc).__name__}: {exc}). The book is complete; it "
+              f"starts a new screen at every printed page.")
+        return None
+    print(f"\n[+] Bound {st['pages']} page(s) into {st['files']} file(s) by "
+          f"chapter: {st['joined']} paragraph(s) that ran over a page are "
+          f"one paragraph"
+          + (f", {st['words']} of them broken inside a word"
+             if st.get("words") else "")
+          + (f"; the notes or figures of {st['held']} page(s) wait for the "
+             f"paragraph to end" if st["held"] else "")
+          + ". Every page's start and printed number are marked where "
+            "they were.")
+    return st
+
+
 def process_video(
     video_path: str | None,
     output_pdf: str | None,
@@ -12966,6 +13001,17 @@ def main(argv: "list[str] | None" = None) -> None:
                              "script wrote earlier. Re-running OCR on a book already "
                              "extracted takes seconds instead of re-reading the video")
     parser.add_argument("--epub", metavar="FILE", help="Also produce an OCR'd EPUB")
+    parser.add_argument("--page-files", action="store_true",
+                        help="Leave the EPUB one file to a printed page, as "
+                             "it is built. By default the pages are then "
+                             "bound into chapters: a paragraph that runs "
+                             "over the page is one paragraph, the notes at "
+                             "the foot of the page wait for it to end, and "
+                             "a reader turns the screen where the text "
+                             "does and not where the paper ran out. Every "
+                             "page's start and printed number stay marked "
+                             "either way, and `codicology unbind` takes a "
+                             "bound book apart again")
     parser.add_argument("--pdf-text-layer", action="store_true",
                         help="Give the --pdf output a positioned, invisible text "
                              "layer from the OCR, so it searches and copies like a "
@@ -13348,6 +13394,8 @@ def _convert(args, parser) -> None:
         decisions_path=args.apply_decisions,
         serve_stale_cache=args.keep_stale_cache,
     )
+    if args.epub and not args.page_files and os.path.exists(args.epub):
+        bind_book(args.epub)
     progress.emit(event="result", epub=args.epub, pdf=output_pdf)
 
 

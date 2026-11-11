@@ -1113,16 +1113,16 @@ def apply_decisions(epub_path, decisions_path, out=None) -> dict:
     is addressed to, the original is kept beside the book as .preapply,
     and every decision is accounted for: applied or stale, never silent."""
     import shutil
-    import zipfile
+
+    from . import binding
 
     with open(decisions_path) as fh:
         dec = json.load(fh)
-    zin = zipfile.ZipFile(epub_path)
-    page_files = [n for n in zin.namelist()
-                  if re.match(r".*page_(\d{4})\.xhtml$", n)]
-    refusal = pages_guard(dec.get("page_files"), len(page_files))
+    # Pages, not files: a book whose pages are bound into chapters has as
+    # many pages as it had, and a decision is addressed to a word of one.
+    n_pages = len(binding.page_bodies(epub_path))
+    refusal = pages_guard(dec.get("page_files"), n_pages)
     if refusal:
-        zin.close()
         print(f"  refused: {refusal}")
         return {"applied": [], "stale": list(dec.get("decisions", [])),
                 "refused": True}
@@ -1140,35 +1140,28 @@ def apply_decisions(epub_path, decisions_path, out=None) -> dict:
         # overwrite this with the first round's result, and the book as it
         # was built could no longer be had.
         shutil.copy2(epub_path, epub_path + ".preapply")
-    changed = {}
-    for name in page_files:
-        i = int(re.match(r".*page_(\d{4})\.xhtml$", name).group(1))
+    def corrected(i, body):
+        """A page with its decisions applied, for binding.rewrite_pages."""
         if i not in by_page:
-            continue
+            return None
         rows = by_page.pop(i)
         with tokens_as(dec.get("tokens")):
-            xhtml, outcomes = apply_page_decisions(
-                zin.read(name).decode("utf-8"), rows)
+            body, outcomes = apply_page_decisions(body, rows)
         for d, why in zip(rows, outcomes):
             if why is None:
                 applied.append(d)
             else:
                 stale.append((d, why))
-        changed[name] = xhtml.encode("utf-8")
+        return body
+
+    # Each entry goes back under its own record (its date, its mode, its
+    # compression), so that what the corrections changed can be read off
+    # the files; and a page bound into a chapter is taken out, corrected
+    # and bound in again.
+    binding.rewrite_pages(epub_path, out, corrected)
     for i in sorted(by_page):
         stale += [(d, f"page {i} is not a page of this book")
                   for d in by_page[i]]
-    with zipfile.ZipFile(out + ".tmp", "w") as zout:
-        for info in zin.infolist():
-            # Each entry goes back under its own record: its date, its
-            # mode, its compression (mimetype first and stored, as the
-            # EPUB contract has it). Written under a fresh one, every
-            # entry of the book differed from the original's, and "what
-            # did the corrections change" could not be read off the files.
-            zout.writestr(info, changed.get(info.filename,
-                                            zin.read(info.filename)))
-    zin.close()
-    os.replace(out + ".tmp", out)
     for d, why in stale:
         print(f"  stale: p{d.get('page')} {d.get('old')!r} -> "
               f"{d.get('new')!r} ({d.get('source', '?')}) — {why}; "

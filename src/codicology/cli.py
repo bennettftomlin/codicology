@@ -223,6 +223,27 @@ def main(argv: "list[str] | None" = None) -> "int | None":
     p_apply.add_argument("--out", metavar="EPUB",
                          help="write here instead of correcting in place")
 
+    p_bind = sub.add_parser(
+        "bind",
+        help="bind the pages of a built EPUB into chapters, as convert "
+             "now does by default: a paragraph that runs over the page "
+             "becomes one paragraph and a reader's screen turns where the "
+             "text does. Nothing is read again and no word changes; every "
+             "page's start and printed number stay marked, and verify, "
+             "adjudicate and apply go on working by page")
+    p_bind.add_argument("epub", help="an EPUB this pipeline built, one "
+                                     "file to a page")
+    p_bind.add_argument("--out", metavar="EPUB",
+                        help="write here instead of binding in place")
+
+    p_unbind = sub.add_parser(
+        "unbind",
+        help="take a bound EPUB apart into one file to a printed page "
+             "again")
+    p_unbind.add_argument("epub", help="an EPUB bound into chapters")
+    p_unbind.add_argument("--out", metavar="EPUB",
+                          help="write here instead of unbinding in place")
+
     p_dec = sub.add_parser(
         "decisions",
         help="look after a book's decisions files: list one, take a row "
@@ -289,6 +310,28 @@ def main(argv: "list[str] | None" = None) -> "int | None":
     if args.command == "apply":
         from . import review
         review.apply_decisions(args.epub, args.decisions, out=args.out)
+        return 0
+    if args.command in ("bind", "unbind"):
+        from . import binding
+        try:
+            st = (binding.bind_epub if args.command == "bind"
+                  else binding.unbind_epub)(args.epub, out=args.out)
+        except binding.CannotBind as exc:
+            print(f"not {'bound' if args.command == 'bind' else 'unbound'}: "
+                  f"{exc}")
+            return 1
+        if args.command == "bind":
+            print(f"bound {st['pages']} page(s) into {st['files']} file(s): "
+                  f"{st['joined']} paragraph(s) that ran over a page are "
+                  f"one paragraph"
+                  + (f", {st['words']} of them broken inside a word"
+                     if st.get("words") else "")
+                  + (f"; what stood at the foot of {st['held']} page(s) "
+                     f"waits for the paragraph to end" if st["held"] else "")
+                  + f": {args.out or args.epub}")
+        else:
+            print(f"{st['files']} file(s) taken apart into {st['pages']} "
+                  f"page(s): {args.out or args.epub}")
         return 0
     if args.command == "relabel":
         from . import pipeline

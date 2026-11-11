@@ -16,11 +16,12 @@ latter being where pipeline improvements hide."""
 import re
 import sys
 import unicodedata
-import zipfile
 import html as H
 from collections import Counter
 
 import pypdfium2 as pdfium
+
+from . import binding
 
 WORD = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿŒœ][A-Za-zÀ-ÖØ-öø-ÿŒœ'-]*")
 # Two systems can render the same printed mark differently — a publisher's
@@ -42,22 +43,16 @@ def words(s):
 def epub_pages(path):
     """page index -> (body words, caption words) with markup stripped."""
     out = {}
-    with zipfile.ZipFile(path) as z:
-        for n in z.namelist():
-            m = re.match(r".*page_(\d{4})\.xhtml$", n)
-            if not m:
-                continue
-            # 'replace', like verify and adjudicate: one malformed byte
-            # in one page file must degrade that page's words, not crash
-            # the whole audit (R3 — this was the only strict decode of
-            # the three page-extraction implementations)
-            t = z.read(n).decode("utf-8", "replace")
-            t = re.sub(r"^.*?<body[^>]*>", "", t, flags=re.S)  # drop <title>
-            caps = " ".join(re.findall(r"<figcaption[^>]*>(.*?)</figcaption>",
-                                       t, flags=re.S))
-            body = re.sub(r"<figure.*?</figure>", " ", t, flags=re.S)
-            strip = lambda x: H.unescape(re.sub(r"<[^>]+>", " ", x))
-            out[int(m.group(1))] = (words(strip(body)), words(strip(caps)))
+    # One reading of the book's pages for verify, adjudicate and this:
+    # binding.page_bodies, which takes a book written a file to a page or
+    # bound into chapters, and decodes with 'replace' so that one
+    # malformed byte costs a page's words and not the whole audit (R3).
+    for i, t in binding.page_bodies(path).items():
+        caps = " ".join(re.findall(r"<figcaption[^>]*>(.*?)</figcaption>",
+                                   t, flags=re.S))
+        body = re.sub(r"<figure.*?</figure>", " ", t, flags=re.S)
+        strip = lambda x: H.unescape(re.sub(r"<[^>]+>", " ", x))
+        out[i] = (words(strip(body)), words(strip(caps)))
     return out
 
 

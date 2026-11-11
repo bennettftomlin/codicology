@@ -17,9 +17,10 @@ Usage: codicology verify book.epub source.pdf
 """
 import re
 import sys
-import zipfile
 
 import pypdfium2 as pdfium
+
+from . import binding
 
 WORD = re.compile(r"[A-Za-z][A-Za-z'-]*")
 
@@ -81,7 +82,6 @@ def main(epub_path, pdf_path):
 
 def _main(epub_path, pdf_path):
     pdf = pdfium.PdfDocument(pdf_path)
-    z = zipfile.ZipFile(epub_path)
 
     # is the source a scan? a scan keeps a picture of the whole page behind
     # its text, which is also what decides whether we may trust that text
@@ -102,16 +102,12 @@ def _main(epub_path, pdf_path):
 
     ours = {}
     as_printed = set()      # pages the build chose to show as themselves
-    for n in z.namelist():
-        m = re.match(r".*page_(\d{4})\.xhtml$", n)
-        if not m:
-            continue
-        t = z.read(n).decode("utf-8", "replace")
-        body = re.sub(r"</body>.*$", "",
-                      re.sub(r"^.*?<body[^>]*>", "", t, flags=re.S), flags=re.S)
-        ours[int(m.group(1))] = WORD.findall(re.sub(r"<[^>]+>", " ", body))
+    # by page, however the book's files are cut: a page bound into a
+    # chapter is still the page of the PDF it was read from
+    for i, body in binding.page_bodies(epub_path).items():
+        ours[i] = WORD.findall(re.sub(r"<[^>]+>", " ", body))
         if AS_PRINTED.search(body):
-            as_printed.add(int(m.group(1)))
+            as_printed.add(i)
 
     # What we hold, as sets of overlapping word-runs, so a page the book
     # shows twice can be recognised wherever we kept it.

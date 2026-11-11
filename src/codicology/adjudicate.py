@@ -1158,20 +1158,16 @@ def align_disputes(ours: list, theirs: list, stats: "Counter | None" = None
 # ── the verb ─────────────────────────────────────────────────────────────────
 
 def epub_page_texts(epub_path: str) -> dict:
-    import zipfile
-    z = zipfile.ZipFile(epub_path)
+    # the book's pages, whether it was written a file to a page or with
+    # its pages bound into chapters: a page is a page either way, and every
+    # address in a dispute record is a word of a page
+    from . import binding
     out = {}
-    for n in z.namelist():
-        m = re.match(r".*page_(\d{4})\.xhtml$", n)
-        if not m:
-            continue
-        h = z.read(n).decode("utf-8", "replace")
-        lo, hi = body_span(h)
-        b = h[lo:hi]
+    for i, b in binding.page_bodies(epub_path).items():
         # entities unescape AFTER the tag strip, exactly as compare does:
         # an escaped &amp;c. must reach the readers as the printed &c.,
         # never tokenize as a phantom 'amp' (R3's second half)
-        out[int(m.group(1))] = html.unescape(re.sub(r"<[^>]+>", " ", b))
+        out[i] = html.unescape(re.sub(r"<[^>]+>", " ", b))
     return out
 
 

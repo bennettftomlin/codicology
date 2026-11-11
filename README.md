@@ -125,7 +125,7 @@ It reads only the pages it is asked about, about twelve seconds each on an
 M1 Pro, and its readings are kept beside the OCR cache, so a rebuild does
 not read them again.
 
-## One command, ten verbs
+## One command, twelve verbs
 
 ```bash
 # build — from a PDF (the usual case), photographs, or video.
@@ -160,7 +160,9 @@ backfills layout labels into a cache written before they were kept, and
 was named for the page's pixels. A build does that refiling for itself the
 first time it meets such a cache; `rekey` brings a whole cache over ahead
 of time. `codicology decisions` looks after decisions files; it is
-described under the review sheet below.)
+described under the review sheet below. `codicology bind` and `codicology
+unbind` change how a built book's files are cut and nothing else; see
+"Pages, bound into chapters" below.)
 
 The cache is what makes a rebuild cheap, and it holds hours of reading, so
 it is keyed on the page and nothing else: a rendered page by its pixels, a
@@ -273,6 +275,57 @@ No flags required for any of this.
   a superscript; a footnote region printed without its rule gets one.
 - **Born-digital text is authority.** On a scan, the embedded text layer
   is somebody else's OCR — it is used as a witness, never as the answer.
+- **Pages are bound into chapters.** See the next section.
+
+## Pages, bound into chapters
+
+The build works a page at a time, and so does everything that checks it:
+page 212 of the book is page 212 of the PDF, which is what lets a reading
+be held against its ink. Written out that way, one file to a page, a
+reading system starts a new screen at every printed page, and a printed
+page ends where the paper ran out. On one shelf of 152 books that is the
+middle of a sentence at about half of all page turns.
+
+So the last thing `convert` does is bind the pages into the files a reader
+turns through:
+
+- **A file is a chapter.** It begins where an entry of the book's contents
+  does. A chapter longer than 60 pages, or a book with no contents, is cut
+  where a page ends its paragraph, and never anywhere else.
+- **A paragraph that runs over the page is one paragraph.** A page that
+  stops without a full stop, taken up by a small letter, is joined to what
+  takes it up. Taken up by a capital it is joined only where the paragraph
+  is prose that stops on a small word or a comma ("…banned all trade
+  except in | Canton"). Lines are not sentences: an index, verse, a
+  caption, a running head that slipped through, a signature mark at the
+  foot of the page are left as they stand.
+- **What stood in the way waits.** The footnotes of the page the paragraph
+  began on, a figure set at its foot or at the head of the next, come
+  after the paragraph instead of in the middle of it.
+- **A word the printer broke at the foot of the page is one word** where
+  its two halves make a word of the dictionary's or of the book's own
+  ("con-" | "centration"). A compound that happened to break at its hyphen
+  ("self-" | "control") keeps it.
+
+Nothing is read again and no word changes. Every page's start is marked in
+the text (`id="page-0212"`), the printed page number stays exactly where
+its page begins, in the middle of a paragraph if that is where it falls,
+and the page list, the contents, the notes, the index and the citations
+all lead where they led. Because the marks are there, a bound book comes
+apart into the same pages: `verify`, `compare`, `adjudicate`, `review` and
+`apply` read a book either way, a decisions file recorded against one
+layout applies to the other, and the place Calibre's viewer remembers
+inside the book is carried to the page it was on.
+
+```bash
+codicology bind book.epub      # a book built before this, or with --page-files
+codicology unbind book.epub    # one file to a printed page again
+```
+
+`convert --page-files` leaves the book as it is built. A book the binding
+will not answer for (its pages would not come apart again exactly, or one
+of them is a file no strict reader would open) is left a file to a page,
+with a line in the log to say why.
 
 ## Research conveniences, behind flags
 
