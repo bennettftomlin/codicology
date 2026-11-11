@@ -448,6 +448,11 @@ def _is_roman(orig: str) -> bool:
     return bool(_ROMAN.match(t.upper()))
 
 
+def _dash_parts(word: str) -> int:
+    """How many pieces a dash joins in a token: 2 for well-nigh, 1 for nigh."""
+    return len([p for p in word.translate(_TYPO).split("-") if p])
+
+
 def adjudicate_pair(a: str, b: str, lexicon: Counter,
                     attested_floor: int = 0) -> dict:
     """One dispute between two attested readings, through the ladder.
@@ -467,6 +472,17 @@ def adjudicate_pair(a: str, b: str, lexicon: Counter,
         # crowned 'a' over a contents-page XXXII on exactly that arithmetic.
         # Only ink evidence or a human settles a dispute touching one.
         return {"rung": "abstain", "winner": None, "note": "roman numeral"}
+    if _dash_parts(a) != _dash_parts(b):
+        # One reader has joined across a dash what the other read as
+        # separate words, so these are not two readings of one word. "11a—or"
+        # is the token "a-or" to one and "or" to the other; the lexicon
+        # crowned "or", which the book uses on every page, and accepting it
+        # would have deleted the letter of note 11a. Of the 159 ladder
+        # verdicts accepted on the shelf, three are of this shape, and at
+        # least that one is wrong. No rung can rule on it, the ink rung
+        # included: a common word is always somewhere on the page.
+        return {"rung": "abstain", "winner": None, "note": "compound",
+                "reviewer": True}
     la, lb = lexicon.get(fa, 0), lexicon.get(fb, 0)
     # The lexicon counts FOLDED tokens, so its counts may not be about the
     # candidate at all when the readers disagree on case shape: 'As If
@@ -1190,7 +1206,8 @@ def _adjudicate(epub: str, pdf: str, report: "str | None", scale: float,
             verdict = adjudicate_pair(a, b, lexicon)
             if verdict["rung"] == "fold":
                 continue                    # policy, not a dispute
-            if verdict["rung"] == "abstain" and have_vision:
+            if verdict["rung"] == "abstain" and have_vision \
+                    and not verdict.get("reviewer"):
                 if vis_tok is None:
                     v = read_vision(info["png"])
                     vis_tok = {fold_word(w) for w in tokens(v or "")}

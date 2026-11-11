@@ -213,3 +213,51 @@ def test_a_word_the_second_look_disputes_reaches_the_ladder(tmp_path,
     assert row["occurrence"] == 0
     assert row["before"][-2:] == ["the", "chairman"]
     assert row["after"][:1] == ["proceedings"]
+
+
+# ── a dash-joined token against a plain one ──────────────────────────────────
+
+@pytest.mark.parametrize("ours, theirs", [
+    ("a-or", "or"),                 # "11a—or": would have deleted note 11a's letter
+    ("In-Width", "width"),
+    ("Staet-proof", "Staetproef"),
+    ("or", "a-or"),                 # and the other way about
+])
+def test_no_rung_rules_between_a_compound_and_a_plain_word(ours, theirs):
+    from collections import Counter
+    lexicon = Counter({"or": 400, "width": 30})
+    assert adj.adjudicate_pair(ours, theirs, lexicon) == {
+        "rung": "abstain", "winner": None, "note": "compound",
+        "reviewer": True}
+
+
+@pytest.mark.parametrize("ours, theirs, winner", [
+    ("well-night", "well-nigh", None),      # same shape: the rungs still rule
+    ("Greeco-Roman", "Greco-Roman", "Greco-Roman"),
+])
+def test_two_compounds_of_the_same_shape_still_go_through_the_ladder(
+        ours, theirs, winner):
+    from collections import Counter
+    got = adj.adjudicate_pair(ours, theirs, Counter({"grecoroman": 9}))
+    assert got.get("note") != "compound"
+    assert got["winner"] == winner
+
+
+def test_the_ink_rung_does_not_rule_on_a_compound_either(tmp_path,
+                                                          monkeypatch):
+    """Vision settles an abstain by which reading it saw on the page, and
+    a word like "or" is always somewhere on the page."""
+    epub = _epub(tmp_path, {0: "<p>see note a—or the appendix for details, "
+                               "or ask the editor</p>"})
+    pdf = _pdf(tmp_path, 1)
+    report = str(tmp_path / "book-disputes.json")
+    read = "see note or the appendix for details, or ask the editor"
+    monkeypatch.setattr(adj, "_tesseract_present", lambda: True)
+    monkeypatch.setattr(adj, "_vision_present", lambda: True)
+    monkeypatch.setattr(adj, "read_vision", lambda png: read)
+    monkeypatch.setattr(adj, "read_tesseract_tsv",
+                        lambda png: _tsv(read.split()))
+    assert adj.main(epub, pdf, report=report) == 0
+    (row,) = json.load(open(report))["disputes"]
+    assert (row["surya"], row["tesseract"]) == ("a-or", "or")
+    assert row["rung"] == "abstain" and row["winner"] is None
