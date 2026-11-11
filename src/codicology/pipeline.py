@@ -10675,6 +10675,29 @@ _SETTING = str.maketrans({
 })
 # What some layers write where they broke a line: "Air\x02borne".
 _CONTROL = re.compile(r"[\x00-\x1f]")
+# What a layer holds for a glyph set in a symbol font: a private-use code
+# point, or a control character. The publisher's bullet is U+F0B7 in the
+# layer of Principles of Macroeconomics and 0x83 in FM 3-06, and no reader
+# has a glyph for either; the recogniser read the bullet off the page. The
+# layer says which words a page prints. It does not get to say that one of
+# them is a character nobody can print.
+#
+# One kind of control character is not that. A layer that stores its
+# punctuation as WinAnsi bytes holds 0x92 for the apostrophe and 0x97 for
+# the dash, and repair_c1_controls puts those back once the page is
+# assembled: FM 21-10 sets "unit's" and "LEADERS'" that way throughout, and
+# refusing those words left the recogniser's straight apostrophe where the
+# book has a curly one. What that repair will mend is as good as printed.
+_NO_GLYPH = re.compile("[\x7f-\x9f\ue000-\uf8ff\U000f0000-\U0010fffd]")
+
+
+def _no_glyph(word: str) -> bool:
+    """Whether a word of the layer holds a character nobody can print."""
+    for m in _NO_GLYPH.finditer(word):
+        meant = C1_REPAIR.get(m.group(0))
+        if meant is None or not unicodedata.category(meant).startswith("P"):
+            return True
+    return False
 
 
 # The recogniser's own markup is setting as well. What it takes for
@@ -10798,6 +10821,8 @@ def reconcile_native_text(bodies: list[str], page_paths: list[str]) -> int:
             open_side = a0 == 0 or a1 == len(ours)
             for ti, cand in run:
                 if _CONTROL.search(cand):
+                    continue
+                if _no_glyph(cand) and not _no_glyph(ours[ti]):
                     continue
                 # The layer is authority on WHICH words are on the page, not
                 # on how they are set. A book that prints a heading in small

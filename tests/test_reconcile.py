@@ -385,6 +385,54 @@ def test_markup_does_not_make_another_word_the_same_word(vtb, tmp_path,
     assert bodies[0].endswith(f" {ours}</p>")
 
 
+@pytest.mark.parametrize("glyph", ["", "", "\x83", "\x90"])
+def test_a_bullet_the_layer_holds_as_a_symbol_font_code_stays_a_bullet(
+        vtb, tmp_path, glyph):
+    """The layer's word for a bullet set in a symbol font is a private-use
+    code point or a control character, which no reader can show. Three
+    books rebuilt in November carried 755 of them where the recogniser had
+    read the bullet off the page."""
+    lead = "These features are designed to give you a sense of what we mean".split()
+    tail = "Start Up chapter introductions set the stage for each chapter".split()
+    body = "<p>" + " ".join(lead) + "</p><ul><li>• " + " ".join(tail) + "</li></ul>"
+    layer = " ".join(lead) + f" {glyph} " + " ".join(tail)
+    bodies, paths = _native(tmp_path, body, layer)
+    assert vtb.reconcile_native_text(bodies, paths) == 0
+    assert "<li>• Start" in bodies[0] and glyph not in bodies[0]
+
+
+@pytest.mark.parametrize("byte, ours, printed", [
+    ("\x92", "unit's", "unit\u2019s"),         # WinAnsi apostrophe
+    ("\x97", "offense-defense", "offense\u2014defense"),   # and em dash
+])
+def test_winansi_punctuation_in_the_layer_is_not_such_a_glyph(
+        vtb, tmp_path, byte, ours, printed):
+    """FM 21-10's layer holds its apostrophes as the byte 0x92, which the
+    page is given back as a curly apostrophe once it is assembled. Refused
+    with the symbol-font codes, those words kept the recogniser's straight
+    one: twenty-two pages of the manual."""
+    lead = "The commander is responsible for the health of every member of the".split()
+    tail = "and for the measures that keep it fit to fight in the field".split()
+    theirs = printed.replace("\u2019", byte).replace("\u2014", byte)
+    body = "<p>" + " ".join(lead) + f" {ours} " + " ".join(tail) + "</p>"
+    bodies, paths = _native(tmp_path, body,
+                            " ".join(lead) + f" {theirs} " + " ".join(tail))
+    assert vtb.reconcile_native_text(bodies, paths) == 1
+    assert vtb.repair_c1_controls(bodies) == 1
+    assert f" {printed} " in bodies[0]
+
+
+def test_a_word_beside_such_a_glyph_is_still_the_layers_to_correct(vtb,
+                                                                   tmp_path):
+    lead = "These features are designed to give you a sense of what we mean".split()
+    tail = "chapter introductions set the stage for each chapter in turn".split()
+    body = "<p>" + " ".join(lead) + "</p><ul><li>• Startt " + " ".join(tail) + "</li></ul>"
+    layer = " ".join(lead) + "  Start " + " ".join(tail)
+    bodies, paths = _native(tmp_path, body, layer)
+    assert vtb.reconcile_native_text(bodies, paths) == 1
+    assert "<li>• Start chapter" in bodies[0]
+
+
 def test_a_url_the_layer_breaks_in_two_is_not_cut_to_its_first_half(
         vtb, tmp_path):
     """The layer held a URL as two words, the second carrying its line-break
