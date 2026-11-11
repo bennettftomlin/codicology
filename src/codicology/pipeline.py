@@ -2144,6 +2144,10 @@ class SuryaBackend(OCRBackend):
 
     name = "surya"
     batch_size = 4
+    # Recognition at this pin is called with the images and nothing else, so
+    # the language list changes no word of the reading. OCRCache leaves it
+    # out of the tag for such an engine.
+    language_blind = True
 
     def __init__(self, langs: list[str]) -> None:
         super().__init__(langs)
@@ -2853,14 +2857,22 @@ class OCRCache:
     which the reader struck out, how the book is assembled — is cheap to redo
     and is exactly what gets iterated on.
 
-    Keyed on the bytes of the page image together with the engine and languages,
-    so a re-crop or a different backend misses rather than serving a stale read.
+    Keyed on the bytes of the page image together with the engine, so a
+    re-crop or a different backend misses rather than serving a stale read.
+    The languages join the engine in the tag only where they steer the
+    reading. They used to be there always, and a tag that does not match
+    loads nothing and is overwritten by the next save: typing "en,de" for
+    one book would have discarded that book's whole reading, an hour's work,
+    for a setting Surya never sees. Its only other effect is dc:language.
+    All 155 caches on the shelf say "surya|en", and still load.
     """
 
     def __init__(self, path: str, backend_name: str, langs: list[str],
                  serve_stale: bool = False) -> None:
         self.path = path
-        self.tag = f"{backend_name}|{','.join(langs)}"
+        blind = getattr(OCR_BACKENDS.get(backend_name), "language_blind", False)
+        self.tag = (backend_name if blind
+                    else f"{backend_name}|{','.join(langs)}")
         self.entries: dict[str, list[dict]] = {}
         self._key_memo: dict = {}
         self.hits = 0
@@ -2872,7 +2884,9 @@ class OCRCache:
             try:
                 with gzip.open(path, "rt", encoding="utf-8") as fh:
                     stored = json.load(fh)
-                if stored.get("tag") == self.tag:
+                was = stored.get("tag") or ""
+                if was == self.tag or (
+                        blind and was.split("|", 1)[0] == backend_name):
                     self.entries = stored.get("pages", {})
             except (OSError, ValueError, KeyError):
                 pass  # an unreadable cache is a cold cache, never an error
