@@ -74,11 +74,14 @@ class ReaderUnavailable(RuntimeError):
     nothing is to be remembered about the page on the strength of it."""
 
 
-def model_files() -> "tuple[str, str] | None":
-    """The model and its projector, or None where there is no second reader."""
-    model, mmproj = os.environ.get(MODEL_ENV), os.environ.get(MMPROJ_ENV)
+def model_files(directory: "str | None" = None, model_env: str = MODEL_ENV,
+                mmproj_env: str = MMPROJ_ENV) -> "tuple[str, str] | None":
+    """The model and its projector, or None where there is no such reader.
+    With no arguments, the second reader's; third.py asks for its own."""
+    model, mmproj = os.environ.get(model_env), os.environ.get(mmproj_env)
     if not (model and mmproj):
-        ggufs = sorted(glob.glob(os.path.join(DEFAULT_DIR, "*.gguf")))
+        ggufs = sorted(glob.glob(os.path.join(directory or DEFAULT_DIR,
+                                              "*.gguf")))
         proj = [f for f in ggufs if os.path.basename(f).startswith("mmproj")]
         body = [f for f in ggufs if f not in proj]
         if len(proj) != 1 or len(body) != 1:
@@ -103,6 +106,11 @@ class SecondReader:
     """LightOnOCR behind a llama-server of its own, started on first use."""
 
     name = NAME
+    # What a reader of another kind changes (third.py): what it is asked
+    # beside the picture, and whether the picture is brought to a size.
+    prompt: "str | None" = None
+    long_side: "int | None" = PAGE_LONG_SIDE
+    max_tokens = MAX_TOKENS
 
     def __init__(self, model: "str | None" = None, mmproj: "str | None" = None,
                  server: "str | None" = None):
@@ -187,16 +195,18 @@ class SecondReader:
             self.down = str(exc)        # a server that will not start will
             raise ReaderUnavailable(self.down) from exc     # not start again
         im = image.convert("RGB")
-        if max(im.size) > PAGE_LONG_SIDE:
-            k = PAGE_LONG_SIDE / max(im.size)
+        if self.long_side and max(im.size) > self.long_side:
+            k = self.long_side / max(im.size)
             im = im.resize((round(im.width * k), round(im.height * k)))
         buf = io.BytesIO()
         im.save(buf, "PNG")
-        body = {"messages": [{"role": "user", "content": [
-                    {"type": "image_url", "image_url": {
-                        "url": "data:image/png;base64,"
-                               + base64.b64encode(buf.getvalue()).decode()}}]}],
-                "temperature": 0.0, "max_tokens": MAX_TOKENS}
+        content = [{"type": "image_url", "image_url": {
+            "url": "data:image/png;base64,"
+                   + base64.b64encode(buf.getvalue()).decode()}}]
+        if self.prompt:
+            content.append({"type": "text", "text": self.prompt})
+        body = {"messages": [{"role": "user", "content": content}],
+                "temperature": 0.0, "max_tokens": self.max_tokens}
         req = urllib.request.Request(
             self._url + "/v1/chat/completions", data=json.dumps(body).encode(),
             headers={"Content-Type": "application/json"})
@@ -238,10 +248,10 @@ class SecondCache:
             pass
 
     @staticmethod
-    def beside(first_cache_path: str) -> str:
+    def beside(first_cache_path: str, suffix: str = ".second.gz") -> str:
         stem = first_cache_path[:-len(".ocr.gz")] \
             if first_cache_path.endswith(".ocr.gz") else first_cache_path
-        return stem + ".second.gz"
+        return stem + suffix
 
     def get(self, key: str):
         """The reading filed under this page: a string, or None where the

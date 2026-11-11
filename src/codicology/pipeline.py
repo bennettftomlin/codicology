@@ -1628,12 +1628,61 @@ def _tex_name(word: str) -> str:
         or word
 
 
+def _brace_group(t: str, i: int) -> "tuple[str, int]":
+    """The group that opens with the brace at t[i]: its inside, and the
+    index after its closing brace."""
+    def written_out(j: int) -> bool:
+        """Whether the brace at j is \\{ or \\}: one backslash before
+        it, or any odd number. Two are a row's end and the brace is a brace."""
+        k = j
+        while k > 0 and t[k - 1] == "\\":
+            k -= 1
+        return (j - k) % 2 == 1
+
+    depth = 0
+    for j in range(i, len(t)):
+        if t[j] == "{" and not written_out(j):
+            depth += 1
+        elif t[j] == "}" and not written_out(j):
+            depth -= 1
+            if depth == 0:
+                return t[i + 1:j], j + 1
+    return t[i + 1:], len(t)
+
+
+def _unfrac(t: str) -> str:
+    """\\frac{A}{B} as A/B, however deep its arguments nest: a power in
+    the numerator is a brace inside the brace, which a pattern cannot count."""
+    for _ in range(64):
+        m = re.search(r"\\[dt]?frac\s*(?=\{)", t)
+        if not m:
+            break
+        a, j = _brace_group(t, m.end())
+        k = j
+        while k < len(t) and t[k].isspace():
+            k += 1
+        if k >= len(t) or t[k] != "{":
+            t = t[:m.start()] + a + t[j:]
+            continue
+        b, e = _brace_group(t, k)
+        t = t[:m.start()] + a + "/" + b + t[e:]
+    return t
+
+
 def _flat_tex(tex: str) -> str:
     """The symbols of an equation in the order they are printed, with what
-    says how to set them taken off."""
+    says how to set them taken off. Three readers write TeX three ways
+    ("p_a'", "p'_a", "p _ {a} ^ {\\prime}"), and this is what they are
+    compared in."""
     t = html.unescape(tex)
+    t = re.sub(r"\s*([_^])\s*", r"\1", t)             # "p _ {a}" is "p_{a}"
+    t = re.sub(r"\^\{((?:\s*\\prime)+)\s*\}",
+               lambda m: "'" * m.group(1).count("prime"), t)
+    t = t.replace("\\prime", "'")
     # p'_a and p_a' are one symbol written two ways
     t = re.sub(r"('+)_(\{[^{}]*\}|[A-Za-z0-9])", r"_\2\1", t)
+    t = re.sub(r"\\tag\s*\{([^{}]*)\}", r"(\1)", t)
+    t = _unfrac(t)
     for _ in range(4):
         t = re.sub(r"\\(?:text|mathrm|mathit|mathbf|operatorname|textbf|"
                    r"textit)\s*\{([^{}]*)\}", r"\1", t)
@@ -1716,14 +1765,130 @@ def _differ_in_figures_alone(a: str, b: str) -> bool:
                for tag, a0, a1, b0, b1 in ops)
 
 
+def _differences(x: str, y: str) -> list:
+    return [(tag, i1, i2, j2 - j1) for tag, i1, i2, j1, j2 in
+            difflib.SequenceMatcher(None, x, y, autojunk=False).get_opcodes()
+            if tag != "equal"]
+
+
+def _stands(lo: int, hi: int, ops: list) -> bool:
+    """Whether a reader whose differences from this reading are `ops` has
+    this reading's own symbols from lo to hi (and, where lo is hi, has put
+    nothing in at that point either)."""
+    for tag, i1, i2, n in ops:
+        if lo == hi:
+            if i1 <= lo <= i2 and (tag == "insert"
+                                   or (tag == "replace" and n != i2 - i1)
+                                   or (tag == "delete" and i1 < lo < i2)):
+                return False
+        elif (i1 < hi and i2 > lo) or (i1 == i2 and lo < i1 < hi):
+            return False
+    return True
+
+
+def majority_reading(flats: "list[str]") -> "int | None":
+    """Which of three readings has, wherever it differs from one of the
+    others, the third on its side; None where none has.
+
+    That is a vote taken at each point of difference and not on the
+    equation as a whole, which is what lets it find the page where every
+    reader is wrong somewhere: Sraffa's Λ₁ρ₁ was A₁ρ₁ to the first reader
+    and Λ₁p₁ to the second, and the third had both symbols. Two readers
+    that share a mistake outvote the one that is right, and nothing here
+    can know it."""
+    for k, x in enumerate(flats):
+        ops = [_differences(x, y) for j, y in enumerate(flats) if j != k]
+        if all(_stands(i1, i2, ops[1 - n])
+               for n in (0, 1) for _, i1, i2, _ in ops[n]):
+            return k
+    return None
+
+
+_LINES_OF = r"array|aligned|align\*?|gathered"
+
+
+def _tex_rows(tex: str) -> "list[str]":
+    """The lines of a reading that sets several in one array. Only an array
+    whose rows are equations is taken apart: the rows of a matrix or of a
+    set of cases are parts of one thing, and cut at a row's end they are
+    half an environment each."""
+    if re.search(r"\\begin\{(?!(?:" + _LINES_OF + r")\})", tex):
+        return [tex.strip()] if tex.strip() else []
+    t = re.sub(r"\\begin\{array\}\s*\{[^{}]*\}"
+               r"|\\(?:begin|end)\{(?:" + _LINES_OF + r")\}", " ", tex)
+    return [r.strip() for r in re.split(r"\\\\(?:\[[^\]]*\])?", t)
+            if r.strip()]
+
+
+def _stands_alone(tex: str) -> bool:
+    """Whether a piece of TeX opens nothing it does not close. What is
+    printed from the third reader is printed as it wrote it, and half an
+    environment or a brace left open would be printed as that."""
+    depth = 0
+    for k, ch in enumerate(tex):
+        j = k
+        while j > 0 and tex[j - 1] == "\\":
+            j -= 1
+        if (k - j) % 2:
+            continue                    # \{ and \} are characters
+        depth += (ch == "{") - (ch == "}")
+        if depth < 0:
+            return False
+    return depth == 0 \
+        and len(re.findall(r"\\begin\{", tex)) == len(re.findall(r"\\end\{", tex)) \
+        and len(re.findall(r"\\left\b", tex)) == len(re.findall(r"\\right\b", tex))
+
+
+def _tidy_tex(tex: str) -> str:
+    """A third reader's TeX set the way the first reader's is. It writes
+    every token apart ("p _ {a}", "2 0", "\\mathrm {i r o n}") and wraps
+    its brackets in \\left and \\right; the book prints the TeX as it
+    stands, so the habits come off and the symbols stay."""
+    t = re.sub(r"\s+", " ", tex).strip()
+    # \left. and \right. are the bracket that is not there; any other
+    # \left or \right only sizes the bracket after it
+    t = re.sub(r"\\(?:left|right)\s*\.", "", t)
+    t = re.sub(r"\\(?:left|right)(?![A-Za-z])\s*", "", t)
+    t = re.sub(r"\s*([_^])\s*", r"\1", t)
+    t = re.sub(r"\\([A-Za-z]+) (?=\{)", r"\\\1", t)
+
+    def upright(m: "re.Match") -> str:
+        """\\mathrm {i r o n} is the word iron, and \\mathrm{\\Delta}
+        is still mathematics."""
+        inside = m.group(1)
+        if re.fullmatch(r"[A-Za-z](?: [A-Za-z])*", inside):
+            return "\\text{" + inside.replace(" ", "") + "}"
+        if re.fullmatch(r"[A-Za-z0-9 .,]+", inside):
+            return "\\text{" + inside + "}"
+        return m.group(0)
+    t = re.sub(r"\\mathrm\{([^{}]*)\}", upright, t)
+    t = re.sub(r"(?<=\d) (?=\d)", "", t)
+    for _ in range(3):                  # c_{1} as c_1, inside a group or out
+        t = re.sub(r"([_^])\{([A-Za-z0-9])\}", r"\1\2", t)
+    t = re.sub(r"\^\{((?:\\prime ?)+)\}",
+               lambda m: "'" * m.group(1).count("prime"), t)
+    # a row of dots it saw one of
+    t = re.sub(r"(?<=[+\-=,]) ?\. ?(?=[+\-=,])", r" \\dots ", t)
+    return re.sub(r" +", " ", t).strip()
+
+
 def mend_equations(items: list, page_path: "str | None",
-                   second: "SecondOpinion | None"
+                   second: "SecondOpinion | None",
+                   third: "ThirdOpinion | None" = None
                    ) -> "tuple[list, list[tuple[str, str]], list[tuple[str, str]]]":
     """Items with a display equation the second reader reads otherwise set
     as the second reader has it, where the PDF's own text prefers that
     reading or, on a scan, where the two differ only in figures; then (as it
     was, as it is) in symbols for each one changed, and (first, second) for
-    each on which the readers differ and the first was kept."""
+    each on which the readers differ and the first was kept.
+
+    With a third reader, a scan's equation on which the first two differ is
+    put to it, and the reading that has another reader with it at every
+    point of difference is printed: the second's, the third's own, or the
+    first's as it stood. Such an entry carries a third member, saying how
+    the vote went. A reading with fewer figures than the first is never
+    printed on a vote: on a typeset page, where the PDF could be asked, the
+    one majority that was wrong had lost a digit."""
     if second is None or not any(
             it.html and not it.is_furniture and 'display="block"' in it.html
             for it in items):
@@ -1732,7 +1897,36 @@ def mend_equations(items: list, page_path: "str | None",
     text_in = _typeset_text_in(page_path)
     offered = None
     taken: set = set()      # the second reader's equations already printed
+    rows_of: dict = {}      # the third reader's lines for a block, by block
+    rows_used: dict = {}    # and those of them already printed
     out, changed, differ = [], [], []
+
+    def best_run(first: str, lines: list, used=()) -> tuple:
+        best = (0.0, 0, 0)
+        for i in range(len(lines)):
+            for j in range(i, min(len(lines), i + 12)):
+                if used and used.intersection(range(i, j + 1)):
+                    break               # printed once already, for a block before
+                like = _likeness(first, "".join(f for _, f in lines[i:j + 1]))
+                if like > best[0]:
+                    best = (like, i, j)
+        return best
+
+    def third_run(it, first: str) -> "list | None":
+        """The third reader's lines for this equation of the block, or None
+        where it was not asked, gave nothing, or has nothing like it."""
+        if third is None or not it.box:
+            return None
+        if id(it) not in rows_of:
+            said = third.formula(page_path, it.box)
+            rows_of[id(it)] = [(t, _flat_tex(t)) for t in
+                               map(_tidy_tex, _tex_rows(said))] if said else []
+        lines = rows_of[id(it)]
+        used = rows_used.setdefault(id(it), set())
+        like, i, j = best_run(first, lines, used)
+        if not lines or like < EQUATION_SAME_BLOCK:
+            return None
+        return [(*lines[n], n) for n in range(i, j + 1)]
     for it in items:
         if not (it.html and not it.is_furniture and 'display="block"' in it.html):
             out.append(it)
@@ -1752,14 +1946,7 @@ def mend_equations(items: list, page_path: "str | None",
             if offered is None:
                 theirs = _second.display_equations(second.reading(page_path) or "")
                 offered = [(t, _flat_tex(t)) for t in theirs]
-            best = (0.0, 0, 0)
-            for i in range(len(offered)):
-                for j in range(i, min(len(offered), i + 12)):
-                    if taken.intersection(range(i, j + 1)):
-                        break           # printed once already, for a block before
-                    like = _likeness(first, "".join(f for _, f in offered[i:j + 1]))
-                    if like > best[0]:
-                        best = (like, i, j)
+            best = best_run(first, offered, taken)
             run = offered[best[1]:best[2] + 1]
             theirs_flat = "".join(f for _, f in run)
             if best[0] < EQUATION_SAME_BLOCK \
@@ -1774,10 +1961,59 @@ def mend_equations(items: list, page_path: "str | None",
                                            _undotted(printed))
                 if off_theirs > EQUATION_NEARER * off_first:
                     return m.group(0)
-            elif not _differ_in_figures_alone(_undotted(first),
-                                              _undotted(theirs_flat)):
-                differ.append((first, theirs_flat))
-                return m.group(0)
+            else:
+                voted = third_run(it, first)
+                if voted is not None:
+                    third_flat = "".join(f for _, f, _ in voted)
+                    flats = [_undotted(first), _undotted(theirs_flat),
+                             _undotted(third_flat)]
+                    k = majority_reading(flats)
+                    figures = lambda f: sum(ch.isdigit() for ch in f)
+                    if k == 2 and not all(_stands_alone(t) for t, _, _ in voted):
+                        k = None        # its own, and not fit to print
+                    if k is None and _differ_in_figures_alone(flats[0], flats[1]):
+                        # three readings and no two alike: the third has
+                        # settled nothing, and what the second reader was
+                        # trusted with before it came is still its to give
+                        changed.append((first, theirs_flat))
+                        taken.update(range(best[1], best[2] + 1))
+                        return "".join(
+                            f'<math display="block">{html.escape(t, quote=False)}</math>'
+                            for t, _ in run)
+                    if k is None:
+                        differ.append((first, theirs_flat,
+                                       f"the third reads {third_flat}"))
+                        return m.group(0)
+                    if k == 0:
+                        differ.append((first, theirs_flat,
+                                       "the third reader sides with the first"))
+                        return m.group(0)
+                    if figures(flats[k]) < figures(flats[0]):
+                        differ.append((first, theirs_flat,
+                                       "two readers have it otherwise, with "
+                                       "fewer figures than the first"))
+                        return m.group(0)
+                    if k == 2:
+                        changed.append((first, third_flat,
+                                        "the third reader's own: the first and "
+                                        "the second each have part of it"))
+                        rows_used[id(it)].update(n for _, _, n in voted)
+                        body = voted[0][0] if len(voted) == 1 else (
+                            "\\begin{aligned} "
+                            + " \\\\ ".join(t for t, _, _ in voted)
+                            + " \\end{aligned}")
+                        return ('<math display="block">'
+                                + html.escape(body, quote=False) + "</math>")
+                    changed.append((first, theirs_flat,
+                                    "the third reader sides with the second"))
+                    taken.update(range(best[1], best[2] + 1))
+                    return "".join(
+                        f'<math display="block">{html.escape(t, quote=False)}</math>'
+                        for t, _ in run)
+                if not _differ_in_figures_alone(_undotted(first),
+                                                _undotted(theirs_flat)):
+                    differ.append((first, theirs_flat))
+                    return m.group(0)
             changed.append((first, theirs_flat))
             taken.update(range(best[1], best[2] + 1))
             return "".join(f'<math display="block">{html.escape(t, quote=False)}</math>'
@@ -1980,6 +2216,7 @@ class SecondOpinion:
         self.asked = 0              # pages read in this run
         self.consulted: set = set() # pages it was asked about, read or remembered
         self.tables = self.equations = self.differ = 0
+        self.by_third = 0           # equations set as a third reader has them
         self.changed: list = []     # (page, what, as it was, as it is)
         self.listed: list = []      # (page, the first reading, the second)
         self.unanswered: set = set()    # pages it could not be asked about
@@ -2002,6 +2239,8 @@ class SecondOpinion:
                 + (f", {remembered} of them remembered" if remembered > 0 else "")
                 + (f"; {' and '.join(took)} set as it reads them"
                    if took else "; nothing was changed on its word")
+                + (f", and {self.by_third} equation(s) as the third reader "
+                   f"reads them" if self.by_third else "")
                 + (f"; {self.differ} equation(s) on which the readers "
                    f"differ are listed above for a look" if self.differ else "")
                 + (f"\n    [!] the second reader could not be asked about "
@@ -2017,7 +2256,12 @@ class SecondOpinion:
         page it could not be asked about is asked about again by the next
         build: a server that failed to start once must not leave every page
         of the book filed as having nothing to say."""
-        key = page_key(page_path)
+        return self._ask(page_key(page_path), lambda: Image.open(page_path))
+
+    def _ask(self, key: str, picture) -> "str | None":
+        """The reader's answer filed under `key`: remembered from this run
+        or an earlier one, or asked for now with the picture `picture()`
+        opens."""
         self.consulted.add(key)
         if key in self._read:
             return self._read[key]
@@ -2030,7 +2274,7 @@ class SecondOpinion:
             except KeyError:
                 pass
         try:
-            with Image.open(page_path) as im:
+            with picture() as im:
                 text = self.reader.read(im)
         except Exception as exc:
             self.unanswered.add(key)
@@ -2069,17 +2313,20 @@ class SecondOpinion:
                  "Pages are named as the book's files are: page_0034 is "
                  "page_0034.xhtml.", ""]
         if self.changed:
-            lines.append(f"Printed as the second reader has it ({len(self.changed)}):")
-            for page, what, was, now in self.changed:
+            lines.append(f"Printed otherwise than the first reader read it "
+                         f"({len(self.changed)}):")
+            for page, what, was, now, *why in self.changed:
                 lines += ["", f"  {page}  {what}", f"      was: {was}",
                           f"      now: {now}"]
+                lines += [f"      ({w})" for w in why]
             lines.append("")
         if self.listed:
             lines.append(f"The readers differ, and the first is printed "
                          f"({len(self.listed)}):")
-            for page, first, theirs in self.listed:
+            for page, first, theirs, *why in self.listed:
                 lines += ["", f"  {page}  equation", f"      first:  {first}",
                           f"      second: {theirs}"]
+                lines += [f"      ({w})" for w in why]
             lines.append("")
         try:
             with open(path, "w", encoding="utf-8") as fh:
@@ -2097,9 +2344,41 @@ class SecondOpinion:
             pass
 
 
+class ThirdOpinion(SecondOpinion):
+    """A third reader's formula for one block of a page, asked for the
+    first time two readers differ on it and kept beside the first reader's
+    cache under the page's name and the block's box."""
+
+    def formula(self, page_path: str, box) -> "str | None":
+        """The block's equation as TeX, or None where the reader gave none
+        or could not be asked."""
+        from . import third as _third
+
+        def crop():
+            with Image.open(page_path) as im:
+                return im.convert("RGB").crop(_third.crop_box(im.size, box))
+        key = page_key(page_path) + "@" + ",".join(f"{v:.4f}" for v in box)
+        return _third.formula(self._ask(key, crop))
+
+    def summary(self) -> "str | None":
+        if not self.consulted:
+            return None
+        n = len(self.consulted)
+        remembered = n - self.asked - len(self.unanswered)
+        return (f"third reader: asked about {n} equation(s) on which the "
+                f"first two differ"
+                + (f", {remembered} of them remembered" if remembered > 0 else "")
+                + (f"\n    [!] the third reader could not be asked about "
+                   f"{len(self.unanswered)} of them ({self.why_unanswered}); "
+                   f"those were settled without it, and the next build will "
+                   f"ask again" if self.unanswered else ""))
+
+
 # Set by the command line (--second-reader), like WITNESS_WAIVED: a build
-# either has a second reader for the whole of its run or has none.
+# either has a second reader for the whole of its run or has none. A third
+# is there where one is installed beside it.
 SECOND_OPINION: "SecondOpinion | None" = None
+THIRD_OPINION: "ThirdOpinion | None" = None
 
 # A rebuilt table is questioned where it holds less than this share of the
 # figures the PDF prints in its place, and the second reader's table is
@@ -8902,29 +9181,38 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
                          "classical reader is installed to ask")
                       + " — left out rather than printed as invention")
             items, _mended = mend_tables(items, path, SECOND_OPINION)
-            items, _eqs, _differ = mend_equations(items, path, SECOND_OPINION)
+            items, _eqs, _differ = mend_equations(items, path, SECOND_OPINION,
+                                                  THIRD_OPINION)
             if SECOND_OPINION is not None:
                 _page = os.path.splitext(os.path.basename(path))[0]
                 SECOND_OPINION.tables += len(_mended)
-                SECOND_OPINION.equations += len(_eqs)
+                _own = sum(1 for _e in _eqs if len(_e) > 2
+                           and _e[2].startswith("the third reader's own"))
+                SECOND_OPINION.equations += len(_eqs) - _own
+                SECOND_OPINION.by_third += _own
                 SECOND_OPINION.differ += len(_differ)
-                SECOND_OPINION.changed += [(_page, "equation", _w, _n)
-                                           for _w, _n in _eqs]
+                SECOND_OPINION.changed += [(_page, "equation", *_e)
+                                           for _e in _eqs]
                 SECOND_OPINION.changed += [
                     (_page, "table", f"held {_w} of the {_p} figures the PDF "
                      f"prints in its place", f"holds {_n}"
                      + (f"; also prints {', '.join(_o)}, which the PDF does "
                         f"not" if _o else ""))
                     for _p, _w, _n, _o in _mended]
-                SECOND_OPINION.listed += [(_page, _a, _b) for _a, _b in _differ]
-            for _was, _now in _eqs:
-                print(f"    [+] {os.path.basename(path)}: an equation the "
-                      f"second reader reads otherwise is set as it reads it: "
-                      f"{_was[:60]} → {_now[:60]}")
-            for _one, _other in _differ:
+                SECOND_OPINION.listed += [(_page, *_d) for _d in _differ]
+            for _was, _now, *_why in _eqs:
+                print(f"    [+] {os.path.basename(path)}: an equation "
+                      + (f"is set by a vote of three readers ({_why[0]})"
+                         if _why else
+                         "the second reader reads otherwise is set as it "
+                         "reads it")
+                      + f": {_was[:60]} → {_now[:60]}")
+            for _one, _other, *_why in _differ:
                 print(f"    [?] {os.path.basename(path)}: the two readers "
-                      f"differ on an equation and nothing on the page says "
-                      f"which is right — the first is kept; worth a look:\n"
+                      f"differ on an equation"
+                      + (f" ({_why[0][:120]})" if _why else
+                         " and nothing on the page says which is right")
+                      + f" — the first is kept; worth a look:\n"
                       f"          first:  {_one[:110]}\n"
                       f"          second: {_other[:110]}")
             for _printed, _was, _now, _odd in _mended:
@@ -9154,6 +9442,8 @@ def build_epub(
     if SECOND_OPINION is not None:
         if SECOND_OPINION.summary():
             print("    " + SECOND_OPINION.summary())
+        if THIRD_OPINION is not None and THIRD_OPINION.summary():
+            print("    " + THIRD_OPINION.summary())
         # also when it was asked nothing: an earlier build's account would
         # otherwise stay beside a book it no longer describes
         _sheet = SECOND_OPINION.write_sheet()
@@ -12739,7 +13029,11 @@ def main(argv: "list[str] | None" = None) -> None:
                              "in figures alone and it has no fewer of them, "
                              "and every other difference is listed for a "
                              "look, in the log and in a .second.txt beside "
-                             "the cache. Needs the model's two .gguf "
+                             "the cache. Where a third reader is installed "
+                             "too (third.py), a scan's equation on which the "
+                             "two differ is put to it and the reading two of "
+                             "the three have at every point is printed. "
+                             "Needs the model's two .gguf "
                              "files in ~/.cache/codicology/second/ (see "
                              "second.py); its readings are cached beside "
                              "--ocr-cache")
@@ -12835,6 +13129,17 @@ def _convert(args, parser) -> None:
         globals()["SECOND_OPINION"] = _opinion
         import atexit
         atexit.register(_opinion.close)
+        from . import third as _third
+        if _third.available():
+            # Not asked for by name: it has no say but in what the second
+            # reader raises, so it comes with it where it is installed.
+            _vote = ThirdOpinion(
+                _third.ThirdReader(),
+                _second.SecondCache(_second.SecondCache.beside(
+                    args.ocr_cache, ".third.gz"), tag=_third.NAME)
+                if args.ocr_cache else None)
+            globals()["THIRD_OPINION"] = _vote
+            atexit.register(_vote.close)
 
     if args.pages_from or args.from_images:
         # Neither mode reads a video, so a lone positional is the output PDF.

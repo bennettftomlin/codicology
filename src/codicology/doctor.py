@@ -172,6 +172,17 @@ def _second_reader():
             "looked_in": second.DEFAULT_DIR}
 
 
+def _third_reader():
+    """The third reader votes on a scan's equations where the first two
+    differ (third.py). It is asked only with the second reader, and like it
+    is optional and not part of this package."""
+    from . import second, third
+    files = third.model_files()
+    return {"present": files is not None and second.server_binary() is not None,
+            "name": third.NAME, "model": files[0] if files else None,
+            "looked_in": third.DEFAULT_DIR}
+
+
 def _llama_server():
     override = os.environ.get("LLAMA_CPP_BINARY")
     if override and os.path.exists(override):
@@ -215,6 +226,7 @@ def report(full=False, ocr="surya", langs=("en",)):
         "llama_server": _llama_server(),
         "vision": _vision(),
         "second_reader": _second_reader(),
+        "third_reader": _third_reader(),
         "nvidia": _nvidia(),
     }
 
@@ -393,6 +405,13 @@ def _human(rep):
         f"{sr.get('name')} ({sr.get('model')}) — asked with --second-reader"
         if sr.get("present") else
         f"none (its two .gguf files go in {sr.get('looked_in')}) — "
+        "optional; builds are unaffected"))
+    tr = rep.get("third_reader", {})
+    print("  third reader: " + (
+        f"{tr.get('name')} ({tr.get('model')}) — votes on a scan's equations "
+        "with --second-reader"
+        if tr.get("present") else
+        f"none (its two .gguf files go in {tr.get('looked_in')}) — "
         "optional; builds are unaffected"))
     n = rep["nvidia"]
     print(f"  nvidia: {', '.join(n['gpus']) if n.get('gpus') else ('present' if n['present'] else 'none')}")

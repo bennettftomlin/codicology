@@ -362,7 +362,7 @@ def test_changes_and_differences_are_written_out_beside_the_readings(tmp_path):
                            "(Abpa+Bbpb)(1+r)=Bpb"))
     path = opinion.write_sheet()
     said = open(path, encoding="utf-8").read()
-    assert "Printed as the second reader has it (1):" in said
+    assert "Printed otherwise than the first reader read it (1):" in said
     assert "page_0034  equation" in said and "now: (1+20/100)" in said
     assert "The readers differ, and the first is printed (1):" in said
     assert "second: (Abpa+Bbpb)(1+r)=Bpb" in said

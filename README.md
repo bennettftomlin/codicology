@@ -103,6 +103,24 @@ invent too, so its word alone settles very little. What it is used for:
   three, each rightly, and listed fourteen.
 - **Disputed words**, in `adjudicate --second-reader`: see below.
 
+On a scan that leaves most differences listed and not settled. A third
+reader settles them where one is installed:
+[GLM-OCR](https://huggingface.co/zai-org/GLM-OCR), its two `.gguf` files
+(about 1.4 GB at Q8, from
+[ggml-org/GLM-OCR-GGUF](https://huggingface.co/ggml-org/GLM-OCR-GGUF)) in
+`~/.cache/codicology/third/`. It reads regions, not pages, so it is shown
+the one block the first two readers differ on and asked for the formula,
+which takes under a second. The equation printed is then the reading that
+has another reader on its side at every point where it differs: the
+second's, the third's own, or the first's as it stood. On the fourteen
+equations of Sraffa's *Production of Commodities* on which the first two
+readers differ, that is the page in twelve (eleven changed, one kept), and
+the other two stay as the first reader had them, both still wrong, because
+two readers misread the same mark. A reading with fewer figures than the
+first reader's is never printed on a vote. It has no flag of its own: it
+is asked with `--second-reader`, and `codicology doctor` says whether it
+is there.
+
 It reads only the pages it is asked about, about twelve seconds each on an
 M1 Pro, and its readings are kept beside the OCR cache, so a rebuild does
 not read them again.
