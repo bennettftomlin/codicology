@@ -2210,8 +2210,20 @@ class SuryaBackend(OCRBackend):
 
     def run_items(self, images: list[Image.Image]) -> list[list[PageItem]]:
         pages: list[list[PageItem]] = []
+        # Per page of this call: the blocks that were sent to be read and
+        # came back with nothing, in error or simply empty. A picture is
+        # never sent, so a page that is all picture counts none. When the
+        # server behind recognition stops answering, this is the only trace
+        # it leaves: the layout still comes back, the pictures are still
+        # cut out, and every block of text is quietly missing.
+        self.last_unread_blocks: list[int] = []
         for image, pred in zip(images, self._predict(images)):
             blocks = getattr(pred, "blocks", None) or []
+            unread = sum(1 for b in blocks
+                         if not getattr(b, "skipped", False)
+                         and (getattr(b, "error", False)
+                              or not getattr(b, "html", "")))
+            self.last_unread_blocks.append(unread)
 
             items: list[PageItem] = []
             tops: list[float] = []          # each item's top edge, for box placement
@@ -7862,6 +7874,7 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
     as a bundle."""
     from ebooklib import epub
     warmed = False           # the backend has proved it can read
+    _read_pages_resiliently.silent.clear()      # a run belongs to one book
     bodies: list[str] = []
     page_figures: list[list[str]] = []  # figure files each page put in the book
     figure_data: dict[str, bytes] = {}  # their bytes, for spotting repeats
@@ -10228,17 +10241,56 @@ def _read_pages_resiliently(paths: list[str], images: list,
                     or (it.html and _strip_tags(it.html).strip()))
                    for it in items if not it.is_furniture)
 
+    def has_words(items):
+        return any(it.html and _strip_tags(it.html).strip()
+                   for it in items if not it.is_furniture)
+
+    def unread_blocks(k=0):
+        counts = getattr(backend, "last_unread_blocks", None) or []
+        return counts[k] if k < len(counts) else 0
+
     out: dict[str, list[PageItem]] = {}
-    for path, img, items in zip(paths, images, backend.run_items(images)):
+    batch = backend.run_items(images)
+    unread = [unread_blocks(k) for k in range(len(images))]
+    for k, (path, img, items) in enumerate(zip(paths, images, batch)):
         # Whether what we end up with came from the READER, or from the
         # page's own layer because the reader failed. A restore is the right
         # thing to ship and the wrong thing to keep: see the cache write.
         provisional = False
-        if not has_text(items) and figure_has_content(img):
+        # The page came back without its words although words were sent to
+        # be read: the recogniser failed, whatever else it returned.
+        silent = False
+        if unread[k] and not has_words(items):
+            retry = backend.run_items([img])[0]
+            if has_words(retry):
+                items = retry
+            else:
+                # Its pictures, and none of its text. A picture counts as a
+                # reading below, so such a page used to be kept and cached
+                # as one: Where There Is No Doctor shipped 64 pages as
+                # their drawings alone, 19,866 words gone, and every rebuild
+                # replayed them. The pictures are still worth having. The
+                # text comes from the page's own layer where there is one,
+                # and nothing is cached, so the page is read again.
+                silent = provisional = True
+                restored = _native_layer_body(path)
+                if restored:
+                    items = list(items) + restored
+                print(f"    [!] {os.path.basename(path)}: "
+                      f"{unread[k]} block(s) sent to be read came back "
+                      f"with nothing, twice — "
+                      + ("its text restored from the page's own "
+                         "born-digital layer" if restored else
+                         "left without its text")
+                      + "; not cached")
+        elif not has_text(items) and figure_has_content(img):
             retry = backend.run_items([img])[0]
             if has_text(retry):
                 items = retry
             else:
+                # Words by any witness on a page we read nothing from is
+                # the other way a recogniser that has stopped looks.
+                silent = (_witnessed_words(path) or 0) >= SILENT_PAGE_WORDS
                 # Twice empty on an inked page. On a scan that stays empty —
                 # honest, and rereadable later since nothing is cached. On a
                 # born-digital page the book's own text is at hand, and a
@@ -10316,6 +10368,29 @@ def _read_pages_resiliently(paths: list[str], images: list,
                     _read_pages_resiliently.refused.append(path)
 
         out[path] = items
+        # One such page is a hard page. Three running is a recogniser that
+        # has stopped, and it is asked to prove otherwise before the book
+        # goes on being made of what it did not read.
+        if silent:
+            _read_pages_resiliently.silent.append(path)
+            if len(_read_pages_resiliently.silent) >= SILENT_RUN:
+                why = warm_backend(backend)
+                if why is not None:
+                    if cache is not None:
+                        cache.save()
+                    first = os.path.basename(_read_pages_resiliently.silent[0])
+                    sys.exit(
+                        f"the {backend.name} backend has stopped reading: "
+                        f"{len(_read_pages_resiliently.silent)} pages "
+                        f"running came back without their text, from "
+                        f"{first} on, and asked for a synthetic page of "
+                        f"known words it {why}.\nNo book was written. "
+                        f"Every page read before that is in the cache, and "
+                        f"none of these is, so running this again once the "
+                        f"backend is healthy carries on from {first}.")
+                _read_pages_resiliently.silent.clear()   # hard pages, then
+        elif has_words(items):
+            _read_pages_resiliently.silent.clear()
         if provisional:
             # The guard above already refuses to cache an EMPTY read, for
             # exactly this reason — but a page restored from its own layer
@@ -10338,6 +10413,33 @@ def _read_pages_resiliently(paths: list[str], images: list,
 
 _read_pages_resiliently.refused = []
 _read_pages_resiliently.restored = []
+_read_pages_resiliently.silent = []     # the run of pages now without text
+
+
+# A build used to finish whatever the recogniser did. Where There Is No
+# Doctor was built on a day the server behind recognition stopped answering
+# after page 119 of 503: 318 pages were laid down from the PDF's own text as
+# one paragraph each, 64 more kept their drawings and lost their words, the
+# build said so in one line at the end, and the book was installed.
+#
+# The first build to run under this was the repair of that book. Two hours
+# and forty minutes in, at page 492, the server stopped again. The build
+# stopped with it, and run again it read the eight pages that were left.
+SILENT_RUN = 3          # pages running without their text before the proof
+SILENT_PAGE_WORDS = 40  # words a witness finds on a page we read none from
+
+
+def _witnessed_words(page_path: str) -> "int | None":
+    """How many words the page's own layer holds, or a classical reader
+    finds, on a page the recogniser returned nothing for."""
+    try:
+        with open(page_path + ".layer.txt", encoding="utf-8") as fh:
+            n = len(re.findall(r"[^\W\d_]{2,}", fh.read()))
+        if n:
+            return n
+    except OSError:
+        pass
+    return _classical_word_count(page_path)
 
 
 # How one word can be set two ways: the publisher's curly quotes and primes
