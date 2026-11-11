@@ -1682,6 +1682,81 @@ def _typeset_boxes_already_read(items: list, ruled: list, page_path: str
     return gone
 
 
+# A table of figures is where a generative reader does its worst work and
+# shows it least: a column slides one cell left, a row is filed under the
+# wrong country, a third of the cells are dropped, and what is left still
+# looks like a table. Table 12 of Burning Up kept four of its six columns.
+# On a typeset page the PDF says what the table prints, so the count can at
+# least be checked: of 910 rebuilt tables on such pages with six figures or
+# more, 49 hold under nine tenths of the figures printed in their place and
+# 10 under six tenths. Below seven tenths, with ten figures or more printed,
+# the table is named when the book is built. It is not replaced: the eight
+# such tables on the shelf have not each been looked at, and two of them are
+# indexes the layout took for tables.
+TABLE_MIN_FIGURES = 10
+TABLE_FIGURES_HELD = 0.7
+_FIGURE = re.compile(r"\d[\d,.]*\d|\d")
+
+
+def _figures(text: str) -> "Counter[str]":
+    return Counter(n.replace(",", "").rstrip(".") for n in _FIGURE.findall(text))
+
+
+def _typeset_text_in(page_path: "str | None"):
+    """A function giving the PDF's own text inside a box (in fractions of
+    the page), for a typeset page; None for a scan, or with no page to ask."""
+    if not page_path:
+        return None
+    try:
+        with open(page_path + ".source.json") as fh:
+            src = json.load(fh)
+        if src.get("facsimile") or src.get("scan"):
+            return None
+        import pypdfium2 as pdfium
+        page = pdfium.PdfDocument(src["pdf"])[src["page"]]
+        pw, ph = page.get_size()
+        textpage = page.get_textpage()
+    except Exception:
+        return None
+
+    def text_in(box) -> str:
+        x0, y0, x1, y1 = box
+        try:
+            return textpage.get_text_bounded(left=x0 * pw, bottom=(1 - y1) * ph,
+                                             right=x1 * pw, top=(1 - y0) * ph)
+        except Exception:
+            return ""
+    return text_in
+
+
+def _share_held(printed: "Counter[str]", held: "Counter[str]") -> float:
+    total = sum(printed.values())
+    return sum(min(n, held.get(w, 0)) for w, n in printed.items()) / total \
+        if total else 1.0
+
+
+def tables_short_of_figures(items: list, page_path: "str | None"
+                            ) -> "list[tuple[int, int]]":
+    """(figures printed, figures held) for each rebuilt table on a typeset
+    page that holds too few of the figures the PDF prints in its box."""
+    tables = [it for it in items if it.html and it.box and it.figure is None
+              and "<table" in it.html and not it.is_furniture]
+    text_in = _typeset_text_in(page_path) if tables else None
+    if text_in is None:
+        return []
+    short = []
+    for it in tables:
+        printed = _figures(text_in(it.box))
+        total = sum(printed.values())
+        if total < TABLE_MIN_FIGURES:
+            continue
+        held = _figures(_strip_tags(it.html))
+        got = sum(min(n, held.get(w, 0)) for w, n in printed.items())
+        if got < TABLE_FIGURES_HELD * total:
+            short.append((total, got))
+    return short
+
+
 def drop_doubled_boxes(items: list, page_path: "str | None" = None
                        ) -> "tuple[list, int, list]":
     """Return items without the pictures that only repeat what the page
@@ -8399,6 +8474,10 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
                          "which the page's text layer does not hold, and no "
                          "classical reader is installed to ask")
                       + " — left out rather than printed as invention")
+            for _printed, _held in tables_short_of_figures(items, path):
+                print(f"    [?] {os.path.basename(path)}: a table holds "
+                      f"{_held} of the {_printed} figures the PDF prints in "
+                      f"its place — left as read; worth a look")
             # Furniture is set aside, never merely deleted: its text is the
             # folio audit's evidence, already recognised at full resolution.
             page_furniture.append([_strip_tags(it.html) for it in items

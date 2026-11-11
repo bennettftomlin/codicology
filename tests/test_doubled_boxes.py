@@ -351,6 +351,33 @@ def test_a_scan_is_left_to_the_rule_it_had(tmp_path):
     assert vtb.drop_doubled_boxes(items, page) == (items, 0, [])
 
 
+# ── a table that lost its figures ────────────────────────────────────────────
+
+def test_a_table_that_holds_too_few_of_its_figures_is_named(tmp_path):
+    """Burning Up, Table 12: four of six columns. The page is typeset, so
+    the PDF can be asked how many figures stand where the table stands."""
+    page = _problem_page(tmp_path)
+    heading, asks, table, _ = _problem_blocks()
+    assert vtb.tables_short_of_figures([heading, asks, table], page) == []
+    thin = table._replace(html=(
+        "<table><tr><th>Wage per day</th><th>Number of workers</th></tr>"
+        "<tr><td>0</td><td>0</td></tr><tr><td>8</td><td>1</td></tr></table>"))
+    short = vtb.tables_short_of_figures([heading, asks, thin], page)
+    assert len(short) == 1 and short[0][0] == 18 and short[0][1] < 0.7 * 18
+
+
+def test_a_table_on_a_scan_is_not_judged_this_way(tmp_path):
+    import json
+    page = _problem_page(tmp_path)
+    with open(page + ".source.json") as fh:
+        src = json.load(fh)
+    src["scan"] = True
+    with open(page + ".source.json", "w") as fh:
+        json.dump(src, fh)
+    thin = _problem_blocks()[2]._replace(html="<table><tr><td>0</td></tr></table>")
+    assert vtb.tables_short_of_figures([thin], page) == []
+
+
 # ── through a build ──────────────────────────────────────────────────────────
 
 class _Reads:
