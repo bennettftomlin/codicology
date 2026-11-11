@@ -2852,6 +2852,93 @@ def review_pages(texts: list[str], window: int = DUPE_WINDOW) -> list[PageVerdic
     return [verdicts[i] for i in range(len(texts))]
 
 
+# ── what a page's reading is filed under ─────────────────────────────────────
+#
+# A reading was filed under the SHA-256 of the page's file. For a page
+# rendered from a PDF that file is a PNG this pipeline encoded itself, so
+# the name was a fact about Pillow's zlib as much as about the page. A warm
+# rebuild of Kill or Get Killed spent 107 of its 202 seconds encoding 440
+# PNGs it would otherwise barely open, to learn names it had worked out the
+# day before. And the day the encoder changes — Pillow 11.1 moved its wheels
+# to zlib-ng, and only Surya's pillow<11 holds that off — every rendered
+# page of every book would have gone unrecognised and been read again.
+#
+# A PNG is now filed under what it shows: its mode, its size, its pixels.
+# Anything else — a JPEG lifted whole out of a PDF, a photograph — is filed
+# under its bytes as before: those bytes were given to us, not made, and a
+# JPEG does not decode to the same pixels on every machine.
+#
+# A cache written before this still holds its readings under the old names.
+# Each is refiled the first time its page is asked for: the page's old name
+# is worked out once more (the loader does it in its workers when the cache
+# needs it), the reading is moved, and nothing is read again.
+PAGE_KEYING = 2
+_PAGE_KEY = re.compile(r"[0-9a-f]{64}")
+
+
+def _pixel_key(im: Image.Image) -> str:
+    """A name for an image that depends on nothing but what it shows."""
+    if im.mode not in ("1", "L", "RGB"):
+        im = im.convert("RGB")
+    digest = hashlib.sha256(
+        f"codicology page {im.mode} {im.width}x{im.height}\n".encode("ascii"))
+    digest.update(im.tobytes())
+    return digest.hexdigest()
+
+
+def _key_beside(page_path: str, suffix: str) -> "str | None":
+    """A key the page loader left in a sidecar, if it left one."""
+    try:
+        with open(page_path + suffix, encoding="ascii") as fh:
+            said = fh.read().strip()
+    except (OSError, ValueError):
+        return None
+    return said if _PAGE_KEY.fullmatch(said) else None
+
+
+def _bytes_key(page_path: str) -> str:
+    with open(page_path, "rb") as fh:
+        return hashlib.sha256(fh.read()).hexdigest()
+
+
+def page_key(page_path: str) -> str:
+    """The name a page's reading is filed under."""
+    said = _key_beside(page_path, ".key")
+    if said:
+        return said
+    if page_path.lower().endswith(".png"):
+        try:
+            with Image.open(page_path) as im:
+                return _pixel_key(im)
+        except Exception:
+            pass            # not a picture after all: it has only its bytes
+    return _bytes_key(page_path)
+
+
+def _as_formerly_written(im: Image.Image) -> bytes:
+    """The PNG the loader used to write for a rendered page, whose bytes
+    were the page's name."""
+    buf = io.BytesIO()
+    im.convert("RGB").save(buf, "PNG", dpi=(300, 300))
+    return buf.getvalue()
+
+
+def former_page_key(page_path: str) -> str:
+    """The name a page's reading had when readings were filed under bytes."""
+    said = _key_beside(page_path, ".key1")
+    if said:
+        return said
+    try:
+        with open(page_path + ".source.json") as fh:
+            rendered = not json.load(fh).get("facsimile", True)
+    except (OSError, ValueError):
+        rendered = False
+    if rendered:        # the file on disk is no longer the one that was hashed
+        with Image.open(page_path) as im:
+            return hashlib.sha256(_as_formerly_written(im)).hexdigest()
+    return _bytes_key(page_path)
+
+
 class OCRCache:
     """
     Remembers what the OCR engine made of each page, so a second opinion about
@@ -2863,7 +2950,7 @@ class OCRCache:
     which the reader struck out, how the book is assembled — is cheap to redo
     and is exactly what gets iterated on.
 
-    Keyed on the bytes of the page image together with the engine, so a
+    Keyed on the page image (see page_key) together with the engine, so a
     re-crop or a different backend misses rather than serving a stale read.
     The languages join the engine in the tag only where they steer the
     reading. They used to be there always, and a tag that does not match
@@ -2880,6 +2967,10 @@ class OCRCache:
         self.tag = (backend_name if blind
                     else f"{backend_name}|{','.join(langs)}")
         self.entries: dict[str, list[dict]] = {}
+        # the entries still filed under a file's bytes: all of them, in a
+        # cache written before pages were named for their pixels
+        self.by_bytes: set[str] = set()
+        self.refiled = 0
         self._key_memo: dict = {}
         self.hits = 0
         self.stale = 0
@@ -2893,7 +2984,15 @@ class OCRCache:
                 was = stored.get("tag") or ""
                 if was == self.tag or (
                         blind and was.split("|", 1)[0] == backend_name):
+                    # The file keeps the tag it came with. A build made
+                    # before the languages left the tag reads nothing from
+                    # a file tagged any other way, and then writes over it.
+                    self.tag = was
                     self.entries = stored.get("pages", {})
+                    self.by_bytes = (
+                        set(stored.get("by_bytes", ())) & set(self.entries)
+                        if stored.get("keying") == PAGE_KEYING
+                        else set(self.entries))
             except (OSError, ValueError, KeyError):
                 pass  # an unreadable cache is a cold cache, never an error
 
@@ -2907,13 +3006,45 @@ class OCRCache:
         memo = self._key_memo.get(page_path)
         if memo and memo[0] == (st.st_mtime_ns, st.st_size):
             return memo[1]
-        with open(page_path, "rb") as fh:
-            digest = hashlib.sha256(fh.read()).hexdigest()
+        digest = page_key(page_path)
         self._key_memo[page_path] = ((st.st_mtime_ns, st.st_size), digest)
         return digest
 
+    @staticmethod
+    def filed_by_bytes(path: str) -> bool:
+        """Whether the cache at `path` predates pixel names altogether, so
+        that every page's old name will be wanted. Read from the first few
+        bytes, not by loading it."""
+        try:
+            with gzip.open(path, "rt", encoding="utf-8") as fh:
+                head = fh.read(200)
+        except (OSError, ValueError, EOFError):
+            return False
+        return bool(head) and '"keying"' not in head
+
+    def _entry(self, page_path: str):
+        """The page's entry, refiled under its present name if it was still
+        under its old one."""
+        key = self._key(page_path)
+        entry = self.entries.get(key)
+        if entry is not None:
+            if key in self.by_bytes:    # its bytes are its name still
+                self.by_bytes.discard(key)
+                self.dirty = True
+            return entry
+        if not self.by_bytes:
+            return None
+        was = former_page_key(page_path)
+        if was not in self.by_bytes:
+            return None
+        entry = self.entries[key] = self.entries.pop(was)
+        self.by_bytes.discard(was)
+        self.refiled += 1
+        self.dirty = True
+        return entry
+
     def get(self, page_path: str) -> list[PageItem] | None:
-        entry = self.entries.get(self._key(page_path))
+        entry = self._entry(page_path)
         if entry is None:
             return None
         # A page read before the pipeline recorded layout labels is not a
@@ -2946,7 +3077,7 @@ class OCRCache:
 
     def knows_furniture(self, page_path: str) -> bool:
         """Whether this entry was written by a version that keeps running heads."""
-        return isinstance(self.entries.get(self._key(page_path)), dict)
+        return isinstance(self._entry(page_path), dict)
 
     def put(self, page_path: str, items: list[PageItem]) -> None:
         raw = []
@@ -2984,7 +3115,9 @@ class OCRCache:
         self.unsaved = 0
         tmp = self.path + ".tmp"
         with gzip.open(tmp, "wt", encoding="utf-8") as fh:
-            json.dump({"tag": self.tag, "pages": self.entries}, fh)
+            json.dump({"tag": self.tag, "keying": PAGE_KEYING,
+                       "by_bytes": sorted(self.by_bytes),
+                       "pages": self.entries}, fh)
         os.replace(tmp, self.path)  # never leave a half-written cache behind
         # clean now: without this, every later checkpoint rewrote the whole
         # gzip even when nothing had changed since the previous save (A3)
@@ -6908,7 +7041,7 @@ def relabel_cache(cache_path: str, pdf_path: str, backend_name: str = "surya",
     foundation model, so the inference server must be free, and it is
     auto-started the way a build starts it. Pages are
     regenerated through the same extraction path the original build used,
-    so their bytes and therefore their cache keys reproduce exactly; a page
+    so their cache keys reproduce exactly; a page
     whose key misses is reported and skipped, never guessed at. The text is
     left byte-identical, which keeps every dispute record and decisions
     file valid."""
@@ -6916,7 +7049,8 @@ def relabel_cache(cache_path: str, pdf_path: str, backend_name: str = "surya",
     langs = langs or ["en"]
     tmp = tempfile.mkdtemp(prefix="relabel_")
     try:
-        page_paths = load_pages_from_pdf(pdf_path, tmp)
+        page_paths = load_pages_from_pdf(
+            pdf_path, tmp, former_keys=OCRCache.filed_by_bytes(cache_path))
         cache = OCRCache(cache_path, backend_name, langs)
         if not cache.entries:
             print(f"  [!] cache is cold or tagged differently: {cache_path}")
@@ -6946,8 +7080,7 @@ def relabel_cache(cache_path: str, pdf_path: str, backend_name: str = "surya",
             return dict(st)
         dry_streak = 0
         for pp in page_paths:
-            key = cache._key(pp)
-            entry = cache.entries.get(key)
+            entry = cache._entry(pp)
             if entry is None:
                 st["page_miss"] += 1
                 continue
@@ -6993,6 +7126,66 @@ def relabel_cache(cache_path: str, pdf_path: str, backend_name: str = "surya",
         return dict(st)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def rekey_cache(cache_path: str, pdf_path: str, backend_name: str = "surya",
+                langs: "list[str] | None" = None) -> dict:
+    """Refile every reading in a cache under the name its page has now.
+
+    A build does this for itself, page by page, the first time it meets a
+    cache written before pages were named for their pixels (see page_key).
+    This does a whole book at once without building it, which is the way to
+    bring a shelf of caches over while the encoder that wrote their old
+    names is still the one installed: once it changes, a reading that was
+    never refiled can only be read again.
+
+    Nothing is read and no reading is altered. The entries after are
+    checked to be the entries before, one for one, and the file is left
+    untouched if they are not.
+    """
+    from collections import Counter as _Counter
+
+    def fingerprints(entries: dict) -> "_Counter":
+        return _Counter(hashlib.sha256(
+            json.dumps(e, sort_keys=True).encode("utf-8")).hexdigest()
+            for e in entries.values())
+
+    cache = OCRCache(cache_path, backend_name, langs or ["en"])
+    st = {"entries": len(cache.entries), "pages": 0, "found": 0,
+          "refiled": 0, "missing": 0, "left": len(cache.by_bytes)}
+    if not cache.entries:
+        print(f"  [!] cache is cold or tagged differently: {cache_path}")
+        return st
+    if not cache.by_bytes:
+        print(f"  rekey: all {st['entries']} reading(s) in {cache_path} are "
+              f"already filed under their pages' present names")
+        return st
+    before = fingerprints(cache.entries)
+    tmp = tempfile.mkdtemp(prefix="rekey_")
+    try:
+        page_paths = load_pages_from_pdf(pdf_path, tmp, former_keys=True)
+        st["pages"] = len(page_paths)
+        for pp in page_paths:
+            if cache._entry(pp) is None:
+                st["missing"] += 1
+            else:
+                st["found"] += 1
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    st["refiled"], st["left"] = cache.refiled, len(cache.by_bytes)
+    if fingerprints(cache.entries) != before:
+        print(f"  [!] rekey: the readings after are not the readings before; "
+              f"{cache_path} is left as it was")
+        st["refiled"] = 0
+        return st
+    cache.save()
+    print(f"  rekey: {st['found']} of {st['pages']} page(s) have a reading; "
+          f"{st['refiled']} refiled under the page's pixels"
+          + (f"; {st['missing']} page(s) of this PDF are not in the cache"
+             if st["missing"] else "")
+          + (f"; {st['left']} reading(s) match no page of this PDF and stay "
+             f"under their old names" if st["left"] else ""))
+    return st
 
 
 PAGE_HYPHEN = re.compile(r"([A-Za-z]+)-((?:\s*</[^>]+>)*\s*)$")
@@ -7936,6 +8129,10 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
                            if cache and cache.hits else "")
 
     if cache:
+        if cache.refiled:
+            print(f"  OCR cache: {cache.refiled} reading(s) refiled under "
+                  f"their pages' pixels; a later build finds them without "
+                  f"the old encoding")
         cache.save()
     return ReadPages(bodies, page_figures, figure_data, page_furniture,
                      furniture_known, n_figures, n_blank_figures,
@@ -9157,8 +9354,10 @@ def _scanned_pages(doc) -> set:
 # already read) spent 126 of its 202 seconds here, one page at a time, on a
 # machine with ten cores: 107 of them in the PNG encoder. Each worker opens
 # the PDF for itself, because pdfium is not safe to share, and writes the
-# same files the one-at-a-time loop wrote, byte for byte, so nothing keyed
-# on a page's bytes moves.
+# same files the one-at-a-time loop writes, byte for byte. On five books
+# (1,862 pages) loading went from 545 seconds to 81 with every file
+# identical; naming pages for their pixels (see page_key) then took the
+# slow encoder out of what was left.
 #
 # The workers are plain subprocesses handed their pages on stdin, not a
 # multiprocessing pool. A pool's workers begin by importing the caller's
@@ -9173,7 +9372,7 @@ _PDF_WORKER = (
 
 
 def _load_pdf_page(doc, i: int, pdf_path: str, pages_dir: str,
-                   is_scan: bool) -> str:
+                   is_scan: bool, former_keys: bool = False) -> str:
     """Write page `i` of an open PDF as the image the recogniser will read,
     with its sidecars, and return the image's path."""
     import pypdfium2 as pdfium
@@ -9232,6 +9431,18 @@ def _load_pdf_page(doc, i: int, pdf_path: str, pages_dir: str,
                 extracted = out is not None
             except Exception:
                 out = None
+            # A JPEG or JPEG 2000 comes out as the PDF's own bytes, and
+            # those are the page's name. Anything else pdfium decodes and
+            # Pillow encodes again, so it is named for its pixels like a
+            # page rendered here (see page_key).
+            if out and not out.lower().endswith((".jpg", ".jpeg", ".jp2")):
+                try:
+                    with Image.open(out) as im:
+                        key = _pixel_key(im)
+                    with open(out + ".key", "w", encoding="ascii") as fh:
+                        fh.write(key)
+                except Exception:
+                    pass
     if out is None:
         # A page this script did not write, or one built from several images,
         # is safer to render whole than to pick apart.
@@ -9244,10 +9455,18 @@ def _load_pdf_page(doc, i: int, pdf_path: str, pages_dir: str,
         # plate it is larger, and that costs scratch space in a
         # directory this run deletes when it ends.
         out = stem + ".png"
-        page.render(scale=300 / 72,
-                    draw_annots=False).to_pil().convert("RGB").save(
-            out, "PNG", dpi=(300, 300)
-        )
+        im = page.render(scale=300 / 72,
+                         draw_annots=False).to_pil().convert("RGB")
+        # Named before it is written, from the pixels, so the encoder is
+        # free to be quick: level 1 where the name used to demand the
+        # default, a sixth of the time for a file a third larger, in a
+        # directory this run deletes.
+        with open(out + ".key", "w", encoding="ascii") as fh:
+            fh.write(_pixel_key(im))
+        if former_keys:
+            with open(out + ".key1", "w", encoding="ascii") as fh:
+                fh.write(hashlib.sha256(_as_formerly_written(im)).hexdigest())
+        im.save(out, "PNG", dpi=(300, 300), compress_level=1)
     # The page's own text layer rides along as a sidecar. It is never used
     # as content — this pipeline reads the ink — but it is a witness: a
     # recognition that shares almost no vocabulary with what the page says
@@ -9323,7 +9542,8 @@ def _load_pdf_share(job: dict) -> dict:
     scanned = set(job["scanned"])
     try:
         return {str(i): os.path.basename(
-                    _load_pdf_page(doc, i, job["pdf"], job["dir"], i in scanned))
+                    _load_pdf_page(doc, i, job["pdf"], job["dir"], i in scanned,
+                                   job.get("former_keys", False)))
                 for i in job["pages"]}
     finally:
         try:
@@ -9333,7 +9553,8 @@ def _load_pdf_share(job: dict) -> dict:
 
 
 def _load_pdf_pages_in_workers(pdf_path: str, pages_dir: str, n_pages: int,
-                               scanned: set, workers: int) -> "list[str] | None":
+                               scanned: set, workers: int,
+                               former_keys: bool = False) -> "list[str] | None":
     """Render a PDF's pages across `workers` processes. None if any of them
     failed, and the caller renders the book itself."""
     import subprocess
@@ -9344,7 +9565,8 @@ def _load_pdf_pages_in_workers(pdf_path: str, pages_dir: str, n_pages: int,
     # run of them would leave one worker with all the slow pages.
     jobs = [json.dumps({"pdf": pdf_path, "dir": pages_dir,
                         "pages": list(range(k, n_pages, workers)),
-                        "scanned": sorted(scanned)})
+                        "scanned": sorted(scanned),
+                        "former_keys": former_keys})
             for k in range(workers)]
 
     def run(job: str) -> "dict | None":
@@ -9374,7 +9596,8 @@ def _pdf_pool_workers(n_pages: int) -> int:
     return max(1, min(PDF_POOL_WORKERS, os.cpu_count() or 1))
 
 
-def load_pages_from_pdf(pdf_path: str, pages_dir: str) -> list[str]:
+def load_pages_from_pdf(pdf_path: str, pages_dir: str,
+                        former_keys: bool = False) -> list[str]:
     """
     Take the page images straight back out of a PDF this script wrote earlier.
 
@@ -9382,6 +9605,11 @@ def load_pages_from_pdf(pdf_path: str, pages_dir: str) -> list[str]:
     start, which makes iterating on OCR settings painful for no reason: the pages
     were already chosen and cropped. Pulling the embedded JPEG out rather than
     re-rendering the page hands OCR the original image instead of a re-encode.
+
+    `former_keys` also leaves, beside each rendered page, the name its
+    reading had in a cache written before pages were named for their pixels
+    (see page_key). It costs the encoding that naming used to cost, so it is
+    asked for only when such a cache is about to be read.
     """
     try:
         import pypdfium2 as pdfium
@@ -9395,13 +9623,14 @@ def load_pages_from_pdf(pdf_path: str, pages_dir: str) -> list[str]:
     workers = _pdf_pool_workers(n_pages)
     if workers > 1:
         page_paths = _load_pdf_pages_in_workers(pdf_path, pages_dir, n_pages,
-                                                scanned, workers)
+                                                scanned, workers, former_keys)
         if page_paths is None:
             print("  [~] a page-rendering worker failed; rendering the pages "
                   "one at a time instead")
             workers = 1
     if workers == 1:
-        page_paths = [_load_pdf_page(doc, i, pdf_path, pages_dir, i in scanned)
+        page_paths = [_load_pdf_page(doc, i, pdf_path, pages_dir, i in scanned,
+                                     former_keys)
                       for i in range(n_pages)]
 
     if not page_paths:
@@ -10878,7 +11107,10 @@ def process_video(
     try:
         if pages_from:
             print(f"\n[1/2] Loading pages from {pages_from}…")
-            page_paths = load_pages_from_pdf(pages_from, pages_dir)
+            page_paths = load_pages_from_pdf(
+                pages_from, pages_dir,
+                former_keys=bool(ocr_cache)
+                and OCRCache.filed_by_bytes(ocr_cache))
             if dewarp_scans:
                 dewarp_scan_pages(page_paths, pages_dir)
             ids = page_map or load_page_map(pages_from)

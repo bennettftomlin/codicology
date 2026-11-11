@@ -1,4 +1,4 @@
-"""codicology — one command, seven verbs.
+"""codicology — one command, nine verbs.
 
     codicology convert …    build the PDF/EPUB (the pipeline; see convert -h)
     codicology verify EPUB PDF
@@ -23,6 +23,14 @@
                             book. The same file, left beside the OCR cache,
                             is picked up by the next rebuild via
                             convert --apply-decisions
+    codicology relabel CACHE PDF
+                            backfill layout labels into an OCR cache written
+                            before they were kept, without re-reading a word
+    codicology rekey CACHE PDF
+                            refile an OCR cache's readings under the names
+                            their pages have now. A build does it for itself
+                            on first meeting an older cache; this does a
+                            whole cache ahead of time
 
 The check subcommands take the book first and the source second, in every
 case — the old standalone scripts disagreed with each other about the
@@ -177,6 +185,19 @@ def main(argv: "list[str] | None" = None) -> "int | None":
                        help="language tag the cache was written under "
                             "(default: en)")
 
+    p_rekey = sub.add_parser(
+        "rekey",
+        help="refile an OCR cache's readings under the names their pages "
+             "have now, without building the book or reading a word. A "
+             "build does this for itself the first time it meets an older "
+             "cache; this brings one over ahead of time, while the encoder "
+             "its old names depend on is still installed")
+    p_rekey.add_argument("cache", help="the .ocr.gz cache to bring over")
+    p_rekey.add_argument("pdf", help="the source PDF its pages came from")
+    p_rekey.add_argument("--ocr", default="surya",
+                         help="backend the cache was written by "
+                              "(default: surya)")
+
     p_apply = sub.add_parser(
         "apply",
         help="feed a review sheet's exported decisions back into the EPUB: "
@@ -220,6 +241,10 @@ def main(argv: "list[str] | None" = None) -> "int | None":
         from . import pipeline
         pipeline.relabel_cache(args.cache, args.pdf, backend_name=args.ocr,
                                langs=args.lang.split(","))
+        return 0
+    if args.command == "rekey":
+        from . import pipeline
+        pipeline.rekey_cache(args.cache, args.pdf, backend_name=args.ocr)
         return 0
     return None
 

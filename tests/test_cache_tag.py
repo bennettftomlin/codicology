@@ -65,7 +65,9 @@ def test_saving_does_not_lose_the_pages_already_there(tmp_path):
     c.save()
 
     stored = _stored(path)
-    assert stored["tag"] == "surya"
+    # still the tag it came with: an older build would treat any other as
+    # somebody else's cache, read nothing from it, and write over it
+    assert stored["tag"] == "surya|en"
     assert len(stored["pages"]) == 2 and key in stored["pages"]
     assert vtb.OCRCache(path, "surya", ["en"]).get(old) is not None
 
@@ -89,3 +91,11 @@ def test_an_engine_the_languages_steer_keeps_them_in_its_tag(tmp_path):
                         ["de"]).get(page) is None
     assert vtb.OCRCache(path, "an-engine-that-takes-languages",
                         ["en"]).get(page) is not None
+
+
+def test_a_new_cache_is_tagged_with_the_engine_alone(tmp_path):
+    path, page = str(tmp_path / "c.ocr.gz"), _png(tmp_path)
+    c = vtb.OCRCache(path, "surya", ["en", "de"])
+    c.put(page, [vtb.PageItem(html="<p>new</p>")])
+    c.save()
+    assert _stored(path)["tag"] == "surya"

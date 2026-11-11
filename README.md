@@ -65,7 +65,7 @@ start. `--without-witness` overrides that and reports at the end how many
 pages went unexamined. Its word boxes also position the searchable PDF text
 layer far more precisely than layout blocks can.
 
-## One command, seven verbs
+## One command, nine verbs
 
 ```bash
 # build — from a PDF (the usual case), photographs, or video.
@@ -93,7 +93,18 @@ codicology apply book.epub book-disputes.decisions.json
 ```
 
 (`codicology doctor` is the seventh — it checks the environment, and is
-documented under Install above.)
+documented under Install above. The last two look after an OCR cache
+without reading a word of the book again: `codicology relabel CACHE PDF`
+backfills layout labels into a cache written before they were kept, and
+`codicology rekey CACHE PDF` refiles one written before a page's reading
+was named for the page's pixels. A build does that refiling for itself the
+first time it meets such a cache; `rekey` brings a whole cache over ahead
+of time.)
+
+The cache is what makes a rebuild cheap, and it holds hours of reading, so
+it is keyed on the page and nothing else: a rendered page by its pixels, a
+page lifted out of the PDF as a JPEG by its bytes. The encoder that writes
+the working page files can change without a single page being read again.
 
 `codicology convert -h` documents the full flag set: page dropping and
 swapping by stable run ids, review sheets for human adjudication, cover

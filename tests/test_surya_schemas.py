@@ -139,7 +139,8 @@ def test_relabel_repairs_and_stays_guided(stock, monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "surya.layout",
                         _stub_predictor("surya.layout", "LayoutPredictor",
                                         seen, boxed))
-    monkeypatch.setattr(vtb, "load_pages_from_pdf", lambda pdf, d: [str(page)])
+    monkeypatch.setattr(vtb, "load_pages_from_pdf",
+                        lambda pdf, d, former_keys=False: [str(page)])
 
     class Cache:
         entries = {"elsewhere": []}
@@ -148,8 +149,12 @@ def test_relabel_repairs_and_stays_guided(stock, monkeypatch, tmp_path):
         def __init__(self, *a, **k):
             pass
 
-        def _key(self, p):
-            return "this page"
+        @staticmethod
+        def filed_by_bytes(path):
+            return False
+
+        def _entry(self, p):
+            return None                 # this page is not in the cache
     monkeypatch.setattr(vtb, "OCRCache", Cache)
     from surya.settings import settings
     monkeypatch.setattr(settings, "SURYA_GUIDED_LAYOUT", True)
