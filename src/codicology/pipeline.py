@@ -7736,6 +7736,88 @@ def _c1_repair_table() -> dict:
 C1_REPAIR = _c1_repair_table()
 
 
+# An address the recogniser opened and never closed. It writes a printed
+# web address as a link, and now and then leaves the quotation mark off the
+# end of it; the parser that makes its markup well-formed then takes
+# everything up to the next quotation mark on the page for the address.
+# What follows the address is no longer text (one book lost a whole entry
+# of its bibliography into an address nobody sees), and the pieces of the
+# next address become attributes named "04", "12", "2016", which is not XML:
+# a reading system that holds a book to its format shows an error where the
+# page should be.
+_XML_NAME = re.compile(r"[A-Za-z_][\w.\-]*(?::[A-Za-z_][\w.\-]*)?$")
+# (a name may be anything here, "<" included: these are the names the
+# parser made of whatever followed the quotation mark it took for the end)
+_A_TAG = re.compile(r"<a\b((?:\s+[^\s=>/]+(?:=\"[^\"<>]*\")?)*)\s*(/?)>")
+_AN_ATTR = re.compile(r"([^\s=>/]+)(?:=\"([^\"<>]*)\")?")
+_KEPT_IN_AN_ADDRESS = re.compile(r"&lt;(/?(?:i|b|em|strong|sup|sub))&gt;")
+
+
+def _swallowed(attrs: str) -> "tuple[str, bool] | None":
+    """What an <a> tag's address took in besides the address: (the address
+    and that text, as markup; whether the tag is one no XML allows), or
+    None for a link whose address is an address. The two signs that are
+    certain: an address holds no tags, and an attribute is named as XML
+    names one. An address with spaces in it is not a sign: printers break
+    long addresses over lines, and such a link is left alone."""
+    pairs = _AN_ATTR.findall(attrs)
+    href = next((v for k, v in pairs if k == "href"), None)
+    if href is None:
+        return None
+    said = html.unescape(href)
+    broken = not all(_XML_NAME.match(k) for k, _ in pairs)
+    if not broken and "<" not in said:
+        return None
+    # what the address ran into when it reached the next tag that has a
+    # quotation mark in it: the opening of that tag, which is not text
+    said = re.sub(r"<[A-Za-z][^<>]*$", "", said)
+    said = _KEPT_IN_AN_ADDRESS.sub(r"<\1>", html.escape(
+        re.sub(r"</?(?!(?:i|b|em|strong|sup|sub)\b)[A-Za-z][^<>]*>", " ",
+               said), quote=False))
+    for tag in ("i", "b", "em", "strong", "sup", "sub"):
+        if said.count(f"<{tag}>") != said.count(f"</{tag}>"):
+            said = re.sub(rf"</?{tag}>", "", said)
+    return said.strip(), broken
+
+
+def mend_swallowed_links(bodies: list) -> int:
+    """Give back the text a link's unclosed address took in.
+
+    The address and what it swallowed are printed as the text they are,
+    and the link is taken off: its address was never known, only where it
+    began. Where the link's own words already say all that the address
+    holds (the recogniser wrote the entry twice), nothing was lost and
+    nothing is added. Returns how many were mended."""
+    words = lambda t: re.findall(r"\w+", html.unescape(_strip_tags(t)).lower())
+    n = 0
+    for i, body in enumerate(bodies):
+        if "<a" not in body:
+            continue
+        out, pos = [], 0
+        for m in _A_TAG.finditer(body):
+            if m.start() < pos:
+                continue
+            got = _swallowed(m.group(1))
+            if got is None:
+                continue
+            said, broken = got
+            end = -1 if m.group(2) else body.find("</a>", m.end())
+            held = body[m.end():end] if end >= 0 else ""
+            took = words(said.split(None, 1)[1]) if " " in said else []
+            shown = set(words(held))
+            told = bool(took) and sum(w in shown for w in took) >= 0.8 * len(took)
+            # what the link held is in a paragraph already: the wrappers of
+            # a block the address ran into are not put inside it
+            held = re.sub(r"</?(?:p|div)\b[^<>]*>", " ", held)
+            out.append(body[pos:m.start()]
+                       + (held if told else (said + " " + held).strip()))
+            pos = end + len("</a>") if end >= 0 else m.end()
+            n += 1
+        if pos:
+            bodies[i] = "".join(out) + body[pos:]
+    return n
+
+
 def repair_c1_controls(bodies: list[str]) -> int:
     """Put back the punctuation a mis-decoded text layer turned into controls.
 
@@ -9423,6 +9505,12 @@ def build_epub(
      n_figures, n_blank_figures, n_label_rules, n_reattached, n_phantoms,
      n_forms, n_hand_figures, label_heads, toc_label_pages,
      n_doubled, foot_labelled) = rp
+    # Before anything reads the pages as text: what an unclosed address
+    # swallowed is text again from here on.
+    n_swallowed = mend_swallowed_links(bodies)
+    if n_swallowed:
+        print(f"    gave back the text {n_swallowed} link(s) had taken into "
+              f"an address the recogniser never closed")
     if n_figures:
         print(f"    extracted {n_figures} figures")
     if n_blank_figures:
