@@ -847,6 +847,17 @@ class _DeadServer:
         return [[] for _ in images]
 
 
+class _CannotReadThisPage(_DeadServer):
+    """A backend that is serving, and makes nothing of the page in hand:
+    it reads the page of known words it is asked to prove itself on."""
+
+    def run_items(self, images):
+        from codicology.doctor import _TEST_LINES
+        from codicology import pipeline
+        return [[pipeline.PageItem(html=f"<p>{' '.join(_TEST_LINES)}</p>")]
+                if im.size == (1400, 500) else [] for im in images]
+
+
 def _native_page(tmp_path, name, text):
     """A born-digital page: an image, its layer, and the native marker."""
     import numpy as np
@@ -882,12 +893,36 @@ def test_a_restored_page_is_never_cached(vtb, tmp_path):
 
     cache = Cache()
     vtb._read_pages_resiliently.restored = []
+    vtb._read_pages_resiliently.silent.clear()
     out = vtb._read_pages_resiliently(
-        [path], [Image.open(path)], _DeadServer(), cache)
+        [path], [Image.open(path)], _CannotReadThisPage(), cache)
     assert out[path], "the page must still ship, restored"
     assert "<p>" in out[path][0].html
     assert cache.kept == [], "a restore was written to the cache"
     assert vtb._read_pages_resiliently.restored == [path]
+
+
+def test_a_server_that_has_stopped_restores_nothing(vtb, tmp_path):
+    """A restore is for a page a working recogniser could not read. When
+    the recogniser itself has stopped, the build stops: one book went out
+    with 318 of its pages laid down this way."""
+    from PIL import Image
+    path = _native_page(tmp_path, "page_0000.png",
+                        "A page of the publisher's own words, " * 6)
+
+    class Cache:
+        saved = 0
+        def put(self, p, items): raise AssertionError("nothing to keep")
+        def save(self): self.saved += 1
+
+    cache = Cache()
+    vtb._read_pages_resiliently.silent.clear()
+    with pytest.raises(SystemExit) as stop:
+        vtb._read_pages_resiliently(
+            [path], [Image.open(path)], _DeadServer(), cache)
+    assert "has stopped reading" in str(stop.value)
+    assert cache.saved == 1, "what was read before is kept"
+    vtb._read_pages_resiliently.silent.clear()
 
 
 def test_a_real_reading_is_still_cached(vtb, tmp_path):

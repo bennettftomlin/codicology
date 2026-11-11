@@ -183,15 +183,20 @@ def test_a_still_empty_inked_page_is_not_poisoned_into_the_cache(vtb, tmp_path):
     img = Image.fromarray(inked).convert("RGB")
     p = str(tmp_path / "a.jpg"); img.save(p)
 
-    class Dead:
+    class Blind:
+        """Serving, and reads nothing from this page however it is asked."""
         name, batch_size, langs = "surya", 4, ["en"]
         def run_items(self, images):
-            return [[] for _ in images]              # down for good
+            from codicology.doctor import _TEST_LINES
+            return [[vtb.PageItem(html=f"<p>{' '.join(_TEST_LINES)}</p>")]
+                    if im.size == (1400, 500) else [] for im in images]
 
     cache = vtb.OCRCache(str(tmp_path / "c.gz"), "surya", ["en"])
-    out = vtb._read_pages_resiliently([p], [img], Dead(), cache)
+    vtb._read_pages_resiliently.silent.clear()
+    out = vtb._read_pages_resiliently([p], [img], Blind(), cache)
     assert out[p] == []                              # honest empty result
     assert cache.get(p) is None                      # but never cached
+    vtb._read_pages_resiliently.silent.clear()
 
 
 def test_decorated_folios_are_undressed_in_furniture(vtb):

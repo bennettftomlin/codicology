@@ -10288,9 +10288,10 @@ def _read_pages_resiliently(paths: list[str], images: list,
             if has_text(retry):
                 items = retry
             else:
-                # Words by any witness on a page we read nothing from is
-                # the other way a recogniser that has stopped looks.
-                silent = (_witnessed_words(path) or 0) >= SILENT_PAGE_WORDS
+                # Nothing at all from a page with ink on it is the other
+                # way a recogniser that has stopped looks: not even the
+                # layout came back.
+                silent = True
                 # Twice empty on an inked page. On a scan that stays empty —
                 # honest, and rereadable later since nothing is cached. On a
                 # born-digital page the book's own text is at hand, and a
@@ -10368,27 +10369,30 @@ def _read_pages_resiliently(paths: list[str], images: list,
                     _read_pages_resiliently.refused.append(path)
 
         out[path] = items
-        # One such page is a hard page. Three running is a recogniser that
-        # has stopped, and it is asked to prove otherwise before the book
-        # goes on being made of what it did not read.
+        # Such a page is a hard page or a recogniser that has stopped, and
+        # only the recogniser can say which. It is asked at the first one
+        # of a run, and again at every third, before the book goes on being
+        # made of what it did not read.
         if silent:
-            _read_pages_resiliently.silent.append(path)
-            if len(_read_pages_resiliently.silent) >= SILENT_RUN:
+            run = _read_pages_resiliently.silent
+            run.append(path)
+            if len(run) == 1 or len(run) % SILENT_RUN == 0:
                 why = warm_backend(backend)
                 if why is not None:
                     if cache is not None:
                         cache.save()
-                    first = os.path.basename(_read_pages_resiliently.silent[0])
+                    first = os.path.basename(run[0])
                     sys.exit(
                         f"the {backend.name} backend has stopped reading: "
-                        f"{len(_read_pages_resiliently.silent)} pages "
-                        f"running came back without their text, from "
-                        f"{first} on, and asked for a synthetic page of "
-                        f"known words it {why}.\nNo book was written. "
-                        f"Every page read before that is in the cache, and "
-                        f"none of these is, so running this again once the "
-                        f"backend is healthy carries on from {first}.")
-                _read_pages_resiliently.silent.clear()   # hard pages, then
+                        + (f"{first} came back without its text"
+                           if len(run) == 1 else
+                           f"{len(run)} pages running came back without "
+                           f"their text, from {first} on")
+                        + f", and asked for a synthetic page of known words "
+                        f"it {why}.\nNo book was written. Every page read "
+                        f"before that is in the cache, and none of these "
+                        f"is, so running this again once the backend is "
+                        f"healthy carries on from {first}.")
         elif has_words(items):
             _read_pages_resiliently.silent.clear()
         if provisional:
@@ -10425,21 +10429,15 @@ _read_pages_resiliently.silent = []     # the run of pages now without text
 # The first build to run under this was the repair of that book. Two hours
 # and forty minutes in, at page 492, the server stopped again. The build
 # stopped with it, and run again it read the eight pages that were left.
-SILENT_RUN = 3          # pages running without their text before the proof
-SILENT_PAGE_WORDS = 40  # words a witness finds on a page we read none from
-
-
-def _witnessed_words(page_path: str) -> "int | None":
-    """How many words the page's own layer holds, or a classical reader
-    finds, on a page the recogniser returned nothing for."""
-    try:
-        with open(page_path + ".layer.txt", encoding="utf-8") as fh:
-            n = len(re.findall(r"[^\W\d_]{2,}", fh.read()))
-        if n:
-            return n
-    except OSError:
-        pass
-    return _classical_word_count(page_path)
+#
+# It asked for the proof only after three such pages running, at first. The
+# same night a rebuild of The Knights of Industry met a server that was
+# refusing connections from its first live page. That book has two pages
+# its cache has never held, so two is all it read: one came back empty and
+# was dropped as blank, the page count fell by one, and the book's seven
+# reviewed corrections were refused as recorded against another count. The
+# proof is asked for at the first such page now.
+SILENT_RUN = 3          # in a run of such pages, how often the proof is asked
 
 
 # How one word can be set two ways: the publisher's curly quotes and primes

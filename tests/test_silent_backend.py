@@ -8,7 +8,7 @@ their drawings alone, cached as readings, and 19,866 words went missing;
 build said so in a line at the end and the book was installed.
 
 Now a page that comes back without its words, when words were sent to be
-read, is not a reading; and three such pages running make the backend
+read, is not a reading; and the first such page of a run makes the backend
 prove it can still read before the book goes on.
 """
 import os
@@ -156,8 +156,9 @@ def test_a_recogniser_that_stops_stops_the_build(tmp_path, pages, capsys):
         _build(tmp_path, paths, backend, cache)
     said = str(stop.value)
     assert "the surya backend has stopped reading" in said
-    assert "3 pages running came back without their text, from page_0002.png on" in said
+    assert "page_0002.png came back without its text" in said
     assert "read nothing at all" in said
+    assert "carries on from page_0002.png" in said
     assert "No book was written" in said
     assert not os.path.exists(tmp_path / "book.epub")
 
@@ -188,7 +189,12 @@ def test_hard_pages_do_not_stop_a_backend_that_still_reads(tmp_path, pages,
     cache = str(tmp_path / "c.ocr.gz")
     backend = Scripted(paths, ["words", "pictures", "pictures", "pictures",
                                "words"])
+    proofs = []
+    backend.run_items = (lambda images, real=backend.run_items:
+                         (proofs.append(1) if images[0].size == (1400, 500)
+                          else None, real(images))[1])
     z = _build(tmp_path, paths, backend, cache)
+    assert len(proofs) == 3, "before the build, at the first, at the third"
     log = capsys.readouterr().out
     assert log.count("came back with nothing, twice") == 3
     assert "restored from the page's own born-digital layer; not cached" in log
@@ -231,20 +237,50 @@ def test_a_page_that_is_all_picture_is_a_reading_and_is_kept(tmp_path, pages,
     assert all(kept.get(p) is not None for p in paths)
 
 
-def test_pages_read_as_nothing_at_all_count_when_a_witness_has_words(
-        tmp_path, pages):
-    """The other shape of a dead server: not even the layout comes back.
-    The page's own layer says there were words on it."""
+def test_a_page_read_as_nothing_at_all_asks_the_same_question(tmp_path, pages):
+    """The other shape of a dead server: not even the layout comes back."""
     paths = pages(5, born_digital=False)
     backend = _dying(Scripted(paths, ["words", "nothing", "nothing", "nothing",
                                       "nothing"]), 1)
     with pytest.raises(SystemExit) as stop:
         _build(tmp_path, paths, backend, str(tmp_path / "c.ocr.gz"))
-    assert "from page_0001.png on" in str(stop.value)
+    assert "page_0001.png came back without its text" in str(stop.value)
+
+
+def test_one_unread_page_is_enough_when_it_is_all_there_is_to_read(tmp_path,
+                                                                   pages):
+    """The Knights of Industry has two pages its cache has never held. A
+    rebuild met a server refusing connections, read those two as nothing,
+    dropped one as blank, and so had one page fewer than the book's
+    reviewed corrections were recorded against: all seven were refused.
+    Neither page has a layer worth the name, and there were never going to
+    be three of them."""
+    paths = pages(4, born_digital=False, layer=None)
+    cache = str(tmp_path / "c.ocr.gz")
+    _build(tmp_path, paths[:3], Scripted(paths[:3], ["words"] * 3), cache)
+
+    sick = _dying(Scripted(paths, ["words", "words", "words", "nothing"]), 3)
+    (tmp_path / "book.epub").unlink()
+    with pytest.raises(SystemExit) as stop:
+        _build(tmp_path, paths, sick, cache)
+    assert "page_0003.png came back without its text" in str(stop.value)
+    assert not (tmp_path / "book.epub").exists()
+    assert sick.read == [3, 3], "the page and its second look; the rest were cached"
+
+
+def test_a_long_run_of_hard_pages_is_asked_about_again(tmp_path, pages):
+    paths = pages(8)
+    backend = Scripted(paths, ["words"] + ["pictures"] * 7)
+    proofs = []
+    backend.run_items = (lambda images, real=backend.run_items:
+                         (proofs.append(1) if images[0].size == (1400, 500)
+                          else None, real(images))[1])
+    _build(tmp_path, paths, backend, str(tmp_path / "c.ocr.gz"))
+    assert len(proofs) == 4, "before the build, then at the first, third, sixth"
 
 
 def test_a_run_of_silence_ends_with_a_page_that_reads(tmp_path, pages):
-    """Two, a good page, then two more: never three running."""
+    """Two, a good page, then two more: two runs, each asked about once."""
     paths = pages(6)
     backend = Scripted(paths, ["words", "pictures", "pictures", "words",
                                "pictures", "pictures"])
@@ -253,4 +289,4 @@ def test_a_run_of_silence_ends_with_a_page_that_reads(tmp_path, pages):
                          (proofs.append(1) if images[0].size == (1400, 500)
                           else None, real(images))[1])
     _build(tmp_path, paths, backend, str(tmp_path / "c.ocr.gz"))
-    assert len(proofs) == 1, "only the proof every build begins with"
+    assert len(proofs) == 3, "the one every build begins with, and one a run"
