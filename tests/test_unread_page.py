@@ -96,3 +96,29 @@ def test_a_page_that_was_read_is_never_replaced_by_its_picture(tmp_path):
                    drop_blank=False)
     first = zipfile.ZipFile(out).read("EPUB/page_0000.xhtml").decode()
     assert "The firm has stood" in first and "as printed" not in first
+
+
+def test_a_printed_page_number_does_not_make_an_unread_page_look_read(
+        tmp_path, monkeypatch):
+    """With the page list on, the page's number is set at the head of its
+    body before the body is asked whether it has anything on it. It had its
+    number, so it was not empty, so the note was not shown: the one page
+    this rule was written for went blank when its book was rebuilt with
+    page numbers."""
+    paths = [_printed(tmp_path / "page_0000.png"),
+             _written(tmp_path / "page_0001.png"),
+             _part_title(tmp_path / "page_0002.png")]
+    monkeypatch.setattr(vtb, "fill_folio_gaps",
+                        lambda folios: ({0: 11, 1: 12, 2: 13}, [], []))
+    out = tmp_path / "book.epub"
+    vtb.build_epub(paths, str(out), _Silent(), "Knights", False, dedupe=False,
+                   drop_blank=False, check_folios=True)
+    z = zipfile.ZipFile(out)
+    note = z.read("EPUB/page_0001.xhtml").decode()
+    assert 'aria-label="12"' in note, "the page keeps its number"
+    assert 'alt="Page 2, as printed"' in note
+    assert note.index("pagebreak") < note.index("<img")
+    # and a page with a number and nothing else on it is still that
+    quiet = z.read("EPUB/page_0002.xhtml").decode()
+    assert 'aria-label="13"' in quiet and "<img" not in quiet
+

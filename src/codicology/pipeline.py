@@ -10020,8 +10020,15 @@ def build_epub(
 
         body += page_body
 
-        if not body.strip():
-            body = _page_as_itself(book, page_paths[i], i)
+        # A page's printed number is a mark on it and not its content: with
+        # the page list on, a page nothing was read from still had its mark,
+        # was taken for a page with something on it, and lost the picture a
+        # page without a number would have been given. The Knights of
+        # Industry's handwritten note was shown only until the book was
+        # built with page numbers.
+        mark = _PAGE_MARKS.match(body)
+        if not body[mark.end():].strip():
+            body = body[:mark.end()] + _page_as_itself(book, page_paths[i], i)
         if not body.strip():
             # A page can legitimately end up with nothing on it — a blank leaf
             # whose only "content" was the blank-page image just dropped. An
@@ -10207,6 +10214,7 @@ def build_epub(
 # titles and dedications reach 0.013 and the genuinely empty ones 0.003. The
 # note measures 0.138, which is the median of a full page of prose.
 UNREAD_PAGE_INK = 0.02
+_PAGE_MARKS = re.compile(r'(?:\s*<span epub:type="pagebreak"[^>]*>\s*</span>)*\s*')
 
 
 def _page_as_itself(book, page_path: str, i: int) -> str:
