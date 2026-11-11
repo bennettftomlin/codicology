@@ -14,6 +14,7 @@ could run honestly — which includes the witness: tesseract is required,
 for the same reasons convert refuses to start without it.
 """
 import importlib.metadata
+import importlib.util
 import json
 import os
 import platform
@@ -24,8 +25,17 @@ import sys
 
 from . import __version__
 
-PACKAGES = ("surya-ocr", "torch", "opencv-python", "numpy", "Pillow",
+PACKAGES = ("surya-ocr", "torch", "numpy", "Pillow",
             "pymupdf", "pypdfium2", "ebooklib", "img2pdf", "lxml")
+
+# OpenCV is asked for by what imports, not by what pip lists. Every one of
+# its wheels unpacks into the same cv2 directory, so two of them installed
+# together leave whichever pip wrote last, and `pip check` is satisfied with
+# both. This project used to ask for opencv-python while Surya pins
+# opencv-python-headless==4.11.0.86: both were installed, every book was
+# read on OpenCV 5.0.0, and nothing said so.
+OPENCV_WHEELS = ("opencv-python-headless", "opencv-python",
+                 "opencv-contrib-python-headless", "opencv-contrib-python")
 
 # What the smoke test's page says, and the overlap that counts as reading it.
 _TEST_LINES = ("CODICOLOGY DOCTOR", "the quick brown fox reads page 42")
@@ -46,6 +56,66 @@ def _pkg_version(name):
         return importlib.metadata.version(name)
     except importlib.metadata.PackageNotFoundError:
         return None
+
+
+def _surya_opencv_pin():
+    """The OpenCV release surya-ocr's own metadata pins, if it pins one."""
+    try:
+        requires = importlib.metadata.requires("surya-ocr") or []
+    except importlib.metadata.PackageNotFoundError:
+        return None
+    for req in requires:
+        m = re.match(r"opencv[-_.]python[-_.]headless\s*==\s*([\w.]+)", req,
+                     re.I)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _opencv():
+    """The OpenCV that `import cv2` would load, read from the version file
+    its wheel ships rather than by loading it."""
+    info = {"wheels": {w: v for w in OPENCV_WHEELS
+                       if (v := _pkg_version(w))},
+            "surya_pins": _surya_opencv_pin()}
+    try:
+        spec = importlib.util.find_spec("cv2")
+    except (ImportError, ValueError):
+        spec = None
+    info["present"] = bool(spec and spec.origin)
+    if info["present"]:
+        try:
+            with open(os.path.join(os.path.dirname(spec.origin), "version.py"),
+                      encoding="utf-8") as fh:
+                m = re.search(r'opencv_version\s*=\s*"([^"]+)"', fh.read())
+            if m:
+                info["version"] = m.group(1)
+        except OSError:
+            pass
+    return info
+
+
+def _opencv_warning(cv):
+    """What to say when the OpenCV that imports is not the one Surya pins,
+    or when two wheels are sharing the directory."""
+    wheels, pin, version = cv["wheels"], cv.get("surya_pins"), cv.get("version")
+    wrong = bool(pin and version and version != pin)
+    if len(wheels) < 2 and not wrong:
+        return None
+    listed = ", ".join(f"{w} {v}" for w, v in wheels.items()) or "none listed"
+    said = (f"{len(wheels)} OpenCV wheels are installed ({listed}) into the "
+            "one cv2 directory, and the last one written is what imports"
+            if len(wheels) > 1 else f"OpenCV is installed as {listed}")
+    if wrong:
+        said += f": cv2 is {version} where surya-ocr pins {pin}"
+    elif version:
+        said += f": cv2 is {version}"
+    others = [w for w in wheels if w != "opencv-python-headless"]
+    fix = "pip install --force-reinstall --no-deps opencv-python-headless" \
+          + (f"=={pin}" if pin else "")
+    if others:
+        fix = f"pip uninstall {' '.join(others)}, then " + fix
+    return f"{said} — {fix}"
 
 
 def _tesseract():
@@ -115,6 +185,7 @@ def report(full=False, ocr="surya", langs=("en",)):
         "executable": sys.executable,
         "machine": platform.machine(),
         "packages": {p: _pkg_version(p) for p in PACKAGES},
+        "opencv": _opencv(),
         "tesseract": _tesseract(),
         "llama_server": _llama_server(),
         "vision": _vision(),
@@ -148,9 +219,14 @@ def report(full=False, ocr="surya", langs=("en",)):
             "reads on CPU through llama.cpp — hours instead of minutes on a "
             "long book")
 
-    for pkg in ("opencv-python", "pymupdf", "pypdfium2", "ebooklib", "Pillow"):
+    for pkg in ("pymupdf", "pypdfium2", "ebooklib", "Pillow"):
         if not rep["packages"][pkg]:
             problems.append(f"{pkg} is not installed")
+    if not rep["opencv"]["present"]:
+        problems.append("OpenCV is not installed "
+                        "(pip install opencv-python-headless)")
+    elif (said := _opencv_warning(rep["opencv"])):
+        warnings.append(said)
 
     if full:
         rep["smoke"] = smoke(ocr, list(langs))
@@ -259,6 +335,10 @@ def _human(rep):
     print(f"  packages: {have or 'none found'}")
     if missing:
         print(f"  missing:  {', '.join(missing)}")
+    cv = rep["opencv"]
+    print("  opencv: " + (f"{cv.get('version', '?')} (from "
+                          + (", ".join(cv["wheels"]) or "an unlisted wheel")
+                          + ")" if cv["present"] else "NOT FOUND"))
     t = rep["tesseract"]
     if t["present"]:
         langs = t.get("langs") or []

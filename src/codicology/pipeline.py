@@ -6,7 +6,7 @@ photographs, or a PDF someone else made: a library scan, a born-digital
 manual, or a facsimile this pipeline wrote earlier.
 
 Dependencies (installed with the package):
-    opencv-python numpy Pillow img2pdf pypdfium2 pymupdf lxml ebooklib
+    opencv-python-headless numpy Pillow img2pdf pypdfium2 pymupdf lxml ebooklib
         pypdfium2   reading pages out of a PDF (--pages-from), and taking
                     figures from the source rather than from a re-render
         pymupdf     writing the searchable text layer (--pdf-text-layer)

@@ -11,7 +11,13 @@ requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Bennett Tomlin" }]
 dependencies = [
-    "opencv-python>=4.8",
+    # The headless wheel, because that is the one Surya pins
+    # (opencv-python-headless==4.11.0.86 at surya-ocr 0.22.1) and every
+    # OpenCV wheel unpacks into the same cv2 directory: asking for
+    # opencv-python here installed both, and the unpinned one won. Nothing
+    # in this package opens a window. `codicology doctor` reports which
+    # OpenCV actually imports.
+    "opencv-python-headless>=4.8",
     "numpy>=1.24",
     "Pillow>=10.0",
     "img2pdf>=0.5",

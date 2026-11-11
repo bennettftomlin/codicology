@@ -117,3 +117,87 @@ def test_human_mode_ends_with_a_verdict(capsys):
     cli.main(["doctor"])
     out = capsys.readouterr().out
     assert out.splitlines()[-1].startswith("VERDICT:")
+
+
+# ── which OpenCV imports ─────────────────────────────────────────────────────
+
+def _with_opencv(monkeypatch, tmp_path, wheels, version, pin):
+    """An environment whose cv2 directory was last written by `version`."""
+    monkeypatch.setattr(doctor.shutil, "which",
+                        lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(doctor, "_pkg_version",
+                        lambda name: wheels.get(name)
+                        or (None if name.startswith("opencv") else "1.0"))
+    monkeypatch.setattr(doctor, "_surya_opencv_pin", lambda: pin)
+    if version is None:
+        monkeypatch.setattr(doctor.importlib.util, "find_spec",
+                            lambda name: None)
+        return
+    cv2 = tmp_path / "cv2"
+    cv2.mkdir()
+    (cv2 / "version.py").write_text(f'opencv_version = "{version}"\n'
+                                    "headless = False\n")
+
+    class Spec:
+        origin = str(cv2 / "__init__.py")
+    monkeypatch.setattr(doctor.importlib.util, "find_spec", lambda name: Spec)
+
+
+def test_two_opencv_wheels_are_named_with_the_one_that_won(monkeypatch,
+                                                           tmp_path):
+    """The state this project's own dependency line produced: pip lists
+    Surya's pinned wheel as installed, and cv2 is the other one."""
+    _with_opencv(monkeypatch, tmp_path,
+                 {"opencv-python-headless": "4.11.0.86",
+                  "opencv-python": "5.0.0.93"},
+                 version="5.0.0.93", pin="4.11.0.86")
+    rep = doctor.report()
+    assert rep["ok"] is True                 # it reads; it is not what's pinned
+    assert rep["opencv"]["version"] == "5.0.0.93"
+    (said,) = [w for w in rep["warnings"] if "OpenCV" in w]
+    assert "cv2 is 5.0.0.93 where surya-ocr pins 4.11.0.86" in said
+    assert "pip uninstall opencv-python, then" in said
+    assert "opencv-python-headless==4.11.0.86" in said
+
+
+def test_the_pinned_headless_wheel_alone_says_nothing(monkeypatch, tmp_path):
+    _with_opencv(monkeypatch, tmp_path,
+                 {"opencv-python-headless": "4.11.0.86"},
+                 version="4.11.0.86", pin="4.11.0.86")
+    rep = doctor.report()
+    assert rep["ok"] is True
+    assert not [w for w in rep["warnings"] if "OpenCV" in w]
+
+
+def test_one_wheel_that_is_not_the_pinned_release_is_said(monkeypatch,
+                                                          tmp_path):
+    _with_opencv(monkeypatch, tmp_path, {"opencv-python-headless": "4.12.0.88"},
+                 version="4.12.0.88", pin="4.11.0.86")
+    (said,) = [w for w in doctor.report()["warnings"] if "OpenCV" in w]
+    assert "cv2 is 4.12.0.88 where surya-ocr pins 4.11.0.86" in said
+    assert "uninstall" not in said
+
+
+def test_without_surya_any_single_opencv_is_fine(monkeypatch, tmp_path):
+    _with_opencv(monkeypatch, tmp_path, {"opencv-python": "4.9.0.80"},
+                 version="4.9.0.80", pin=None)
+    assert not [w for w in doctor.report(ocr="tesseract")["warnings"]
+                if "OpenCV" in w]
+
+
+def test_no_cv2_is_a_problem(monkeypatch, tmp_path):
+    _with_opencv(monkeypatch, tmp_path, {}, version=None, pin="4.11.0.86")
+    rep = doctor.report()
+    assert rep["ok"] is False
+    assert any("OpenCV is not installed" in p for p in rep["problems"])
+
+
+def test_suryas_pin_is_read_from_its_own_metadata(monkeypatch):
+    monkeypatch.setattr(doctor.importlib.metadata, "requires",
+                        lambda name: ["pillow<11,>=10.2.0",
+                                      "opencv-python-headless==4.11.0.86",
+                                      "torch>=2.7"])
+    assert doctor._surya_opencv_pin() == "4.11.0.86"
+    monkeypatch.setattr(doctor.importlib.metadata, "requires",
+                        lambda name: ["pillow<11,>=10.2.0"])
+    assert doctor._surya_opencv_pin() is None
