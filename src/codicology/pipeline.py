@@ -8808,6 +8808,8 @@ def build_epub(
         body += page_body
 
         if not body.strip():
+            body = _page_as_itself(book, page_paths[i], i)
+        if not body.strip():
             # A page can legitimately end up with nothing on it — a blank leaf
             # whose only "content" was the blank-page image just dropped. An
             # empty body is not merely ugly: ebooklib parses every page when it
@@ -8978,6 +8980,41 @@ def build_epub(
                  f"was failing, not the pages. Nothing was cached for them; "
                  f"rebuild once it is healthy." if share >= 0.1 else
                  " Nothing was cached for them; a rebuild will retry."))
+
+
+# A page that is kept, and came through with nothing on it, was printed as
+# "[blank page N]". Most such pages are blank. One on the shelf is not: a
+# handwritten note reproduced in The Knights of Industry, which no reader
+# could make words of, and which shipped as a blank page where the facsimile
+# was the whole point of the leaf. What could not be read can still be shown.
+#
+# The floor is the ink of a page of text and not of that note. Of 348 pages
+# with forty words or more, sampled from 75 books, the least inked measures
+# 0.011; of the shelf's 171 kept pages with under five words, the part
+# titles and dedications reach 0.013 and the genuinely empty ones 0.003. The
+# note measures 0.138, which is the median of a full page of prose.
+UNREAD_PAGE_INK = 0.02
+
+
+def _page_as_itself(book, page_path: str, i: int) -> str:
+    """The body for a page nothing was read from: a picture of the page, if
+    there is as much ink on it as a page of text carries; else nothing."""
+    from ebooklib import epub
+    ink = _page_core_ink(page_path)
+    if ink is None or ink < UNREAD_PAGE_INK:
+        return ""
+    try:
+        with Image.open(page_path) as im:
+            data, ext, mime = encode_figure(_encodable(im))
+    except Exception:
+        return ""
+    name = f"images/unread_{i:04d}.{ext}"
+    book.add_item(epub.EpubImage(uid=f"unread{i}", file_name=name,
+                                 media_type=mime, content=data))
+    print(f"    [~] page {i + 1}: nothing was read from it and it is not "
+          f"blank — shown as a picture of the page")
+    return (f'<figure><img src="{name}" alt="Page {i + 1}, as printed" '
+            f'style="max-width:100%"/></figure>')
 
 
 # ── Main pipeline ─────────────────────────────────────────────────────────────
