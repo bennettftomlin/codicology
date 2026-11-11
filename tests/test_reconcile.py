@@ -465,3 +465,31 @@ def test_a_line_break_inside_the_paired_word_does_not_cost_its_run(vtb,
     assert vtb.reconcile_native_text(bodies, paths) == 1
     assert "Airborne Division’s" in bodies[0]
     assert "\x02" not in bodies[0]
+
+
+# ── a figure the layer has and the reading lacks ─────────────────────────────
+
+def test_a_figure_the_reading_dropped_is_reported_and_not_put_in(vtb, tmp_path):
+    """Where There Is No Doctor, page 413: "children 9 to 14 years: 1 ½
+    tablets" was read as "½ tablets". The layer has the 1. Words the layer
+    has and we lack are mostly a table read across its columns, so nothing
+    is inserted, but a figure in mid-sentence is listed for a person."""
+    lead = ("Give medicine each day, starting the day entering a malaria area "
+            "until 28 days after leaving the area.").split()
+    body = "<p>" + " ".join(lead) + "</p><p>children 9 to 14 years: ½ tablets (150 mg.)</p>"
+    layer = " ".join(lead) + " children 9 to 14 years: 1 ½ tablets (150 mg.)"
+    bodies, paths = _native(tmp_path, body, layer)
+    assert vtb.reconcile_native_text(bodies, paths) == 0
+    assert "years: ½ tablets" in bodies[0]
+    assert vtb.reconcile_native_text.unplaced == [(0, "14 years:", "1", "½ tablets")]
+
+
+def test_a_word_the_reading_lacks_is_not_reported(vtb, tmp_path):
+    lead = ("Give medicine each day, starting the day entering a malaria area "
+            "until 28 days after leaving the area.").split()
+    body = "<p>" + " ".join(lead) + "</p><p>adults: tablets each day</p>"
+    layer = " ".join(lead) + " adults: two tablets each day"
+    bodies, paths = _native(tmp_path, body, layer)
+    vtb.reconcile_native_text(bodies, paths)
+    assert vtb.reconcile_native_text.unplaced == []
+

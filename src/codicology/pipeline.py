@@ -8424,6 +8424,11 @@ def build_epub(
     if n_reconciled:
         print(f"    reconciled {n_reconciled} word(s) against the book's "
               f"own born-digital text")
+    for _pi, _before, _figure, _after in reconcile_native_text.unplaced:
+        print(f"    [?] page {_pi + 1}: the PDF's own text prints "
+              f"“{_figure}” between “{_before}” and “{_after}”, and the "
+              f"reading has no such figure there — left as read; worth "
+              f"a look")
     # Straight after reconciliation, because that is where they come in, and
     # before typography, because two of them ARE quote marks.
     n_c1 = repair_c1_controls(bodies)
@@ -10774,6 +10779,7 @@ def reconcile_native_text(bodies: list[str], page_paths: list[str]) -> int:
     import difflib
 
     changed = 0
+    reconcile_native_text.unplaced.clear()
     for pi, body in enumerate(bodies):
         if pi >= len(page_paths) or not body:
             continue
@@ -10803,6 +10809,17 @@ def reconcile_native_text(bodies: list[str], page_paths: list[str]) -> int:
         sm = difflib.SequenceMatcher(a=ours, b=layer_words, autojunk=False)
         subs: list[tuple[int, str]] = []
         for tag, a0, a1, b0, b1 in sm.get_opcodes():
+            if tag == "insert" and 0 < a0 < len(ours) and b1 - b0 <= 2 \
+                    and toks[a0 - 1][0] == toks[a0][0] \
+                    and any(ch.isdigit() or ch in _VULGAR_SIGNS
+                            for w in layer_words[b0:b1] for ch in w):
+                # A figure the publisher prints between two words we read
+                # one after the other. It is said and not acted on: see
+                # reconcile_native_text.unplaced.
+                reconcile_native_text.unplaced.append(
+                    (pi, " ".join(ours[max(0, a0 - 2):a0]),
+                     " ".join(layer_words[b0:b1]),
+                     " ".join(ours[a0:a0 + 2])))
             if tag != "replace" or (a1 - a0) != (b1 - b0) or (a1 - a0) > 3:
                 continue
             run = list(zip(range(a0, a1), layer_words[b0:b1]))
@@ -10864,6 +10881,22 @@ def reconcile_native_text(bodies: list[str], page_paths: list[str]) -> int:
             changed += 1
         bodies[pi] = "".join(parts)
     return changed
+
+
+# Figures the layer prints inside a run of text where we read none. Where
+# There Is No Doctor gives a dose as "children 9 to 14 years: 1 ½ tablets",
+# and the recogniser read "½ tablets". The layer has the 1, and the
+# reconciler only ever exchanges one word for another, so it stood.
+#
+# It is not put in. Across the 26,044 born-digital pages of 133 books, 111
+# such words sit between two words we read together, and one of them is that
+# dose: the rest are the layer reading a table across its columns, or a page
+# reference from the margin landing in mid-sentence ("soak 102 joint in cold
+# water"). Twenty of the 111 hold a figure, in seven books. A figure is the
+# word a reader acts on, so those are listed when the book is built, for
+# someone to look at.
+reconcile_native_text.unplaced = []
+_VULGAR_SIGNS = "½¼¾⅓⅔⅛⅜⅝⅞"
 
 
 def _collect_page_items(page_paths: list[str], backend: "OCRBackend",
