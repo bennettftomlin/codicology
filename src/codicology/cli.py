@@ -152,6 +152,14 @@ def main(argv: "list[str] | None" = None) -> "int | None":
                        help="also write the full record as JSON")
     p_adj.add_argument("--limit", type=int, default=None,
                        help="examine only the first N pages")
+    p_adj.add_argument("--second-reader", action="store_true",
+                       help="also put the disputes the ladder leaves open to "
+                            "the second reader (second.py), one reading of "
+                            "each page that has one. It and Apple Vision "
+                            "then settle a dispute as a count of readers: "
+                            "one with a view, or both agreeing, and never "
+                            "the two of them against each other. Its "
+                            "readings are kept beside --report")
     p_adj.add_argument("--calibrate", action="store_true",
                        help="score the witness engines AND the ladder's own "
                             "verdicts against this born-digital book's text "
@@ -258,11 +266,22 @@ def main(argv: "list[str] | None" = None) -> "int | None":
                            as_json=args.as_json)
     if args.command == "adjudicate":
         from . import adjudicate
+        second = None
+        if args.second_reader:
+            second = adjudicate.second_words_for(args.report)
+            if second is None:
+                from . import second as _second
+                print("[!] --second-reader was asked for and there is none "
+                      f"to ask: put the model's two .gguf files in "
+                      f"{_second.DEFAULT_DIR} and have llama-server on the "
+                      "PATH")
+                return 2
         if args.calibrate:
-            adjudicate.calibrate(args.pdf, epub=args.epub, limit=args.limit)
+            adjudicate.calibrate(args.pdf, epub=args.epub, limit=args.limit,
+                                 second=second)
             return 0
         return adjudicate.main(args.epub, args.pdf, report=args.report,
-                               limit=args.limit)
+                               limit=args.limit, second=second)
     if args.command == "review":
         from . import review
         return review.main(args.report, out=args.out, dpi=args.dpi,

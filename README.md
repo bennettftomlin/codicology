@@ -102,6 +102,7 @@ invent too, so its word alone settles very little. What it is used for:
   the first is kept. Tried on 118 pages with 247 equations, that changed
   three, each rightly, and listed fourteen.
 - **Disputed words**, in `adjudicate --second-reader`: see below.
+
 It reads only the pages it is asked about, about twelve seconds each on an
 M1 Pro, and its readings are kept beside the OCR cache, so a rebuild does
 not read them again.
@@ -298,6 +299,26 @@ Those go through a ladder, in order:
 born-digital books read both clean and artificially degraded: the book's
 own vocabulary is right 97.8% of the time, Vision 94.8%, the dictionary
 92.3%. Adjudication only ever writes a report; it never edits the book.
+
+With `--second-reader`, the second reader is one more reader of the same
+ink, and it changes two things. A dispute the ladder left open is settled
+as a count of readers: Vision or the second reader with a view makes two
+against one, both agreeing makes three against one, and the two of them on
+opposite sides leaves it open. And a verdict of the vocabulary or the
+dictionary that the second reader reads the other way is withdrawn and
+left open, because those two rule on what a word is and not on what the
+page says. Measured on 136 disputes from 207 born-digital pages, between
+Surya as it first read them and Tesseract: of the 47 the ladder left open,
+the count of readers settled 31, none wrongly (two could not be judged),
+where Vision alone settled 34 and four of them wrongly; and the second
+reader contradicted ten verdicts of the vocabulary and the dictionary, of
+which nine were wrong and the tenth could not be judged. On a scan of 122
+pages with 313 disputes, the ladder had proposed twelve changes to the
+book and with the second reader proposed five: the seven that went were
+each a misreading of damaged type offered for a right word ("barm" for
+harm, "caling" for calling), and the four real errors among the twelve
+were all still proposed. It reads every page that has a disputed word,
+which on that scan was 105 of them and took 22 minutes.
 
 `codicology review` renders that record as a single self-contained HTML
 sheet: the ink cropped beside every disputed word (geometry recorded at

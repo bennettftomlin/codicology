@@ -26,6 +26,15 @@ The ladder, in the order the design settled it:
                 an engine we operate and can calibrate, unlike the source's
                 embedded layer, which is a different unknown engine per book
                 and holds no vote (its witness role elsewhere is unchanged)
+    second      the second reader (second.py), where one is installed and
+                asked for: a generative reader of another family than the
+                first. It and Vision are two more readers of the same ink,
+                and what they settle they settle as a count of readers: one
+                of them with a view makes two against one, both agreeing
+                three against one, and the two of them on opposite sides is
+                two against two and stays open. It is also heard on what
+                the lexicon and the dictionary rule: a verdict of theirs
+                that it reads the other way is withdrawn and left open
     abstain     recorded, never guessed
 
 Each dispute row also records where the ink is: the witness token's bbox
@@ -561,6 +570,143 @@ def _dash_parts(word: str) -> int:
     return len([p for p in word.translate(_TYPO).split("-") if p])
 
 
+def _view(words: "set | None", fa: str, fb: str) -> "str | None":
+    """Which of two readings another reader has on the page: "a", "b", or
+    None where it has both, has neither, or was not asked."""
+    if words is None or (fa in words) == (fb in words):
+        return None
+    return "a" if fa in words else "b"
+
+
+def readers_verdict(a: str, b: str, vision_words: "set | None",
+                    second_words: "set | None") -> "dict | None":
+    """What the readers beyond the first two make of a dispute the ladder
+    left open, or None where neither has a view.
+
+    The first reader and tesseract are one against one. Each further reader
+    that has exactly one of the two words on the page is a vote for it.
+    Vision alone was the rung before there was a second reader, and is the
+    rung where there is none. With both, a verdict needs them not to
+    contradict each other: over the born-digital pages this was measured
+    on, Vision and the second reader took opposite sides five times, and
+    Vision was the one in the wrong in four. Two readers apiece is recorded
+    as that and not guessed."""
+    fa, fb = fold_word(a), fold_word(b)
+    v, s = _view(vision_words, fa, fb), _view(second_words, fa, fb)
+    if v and s and v != s:
+        return {"rung": "abstain", "winner": None, "note": "readers split"}
+    side = v or s
+    if side is None:
+        return None
+    return {"rung": "readers" if v and s else "vision" if v else "second",
+            "winner": a if side == "a" else b}
+
+
+# The lexicon and the dictionary rule on what a word is, not on what the
+# page says, and that is how they go wrong: "appertain" loses to "appear"
+# because the book says "appear" often, a price P with a subscript loses to
+# "PO" because P is not a word. A reader that has the page in front of it
+# can say so. Put to 136 disputes on 207 born-digital pages, between the
+# first reader as it read them and tesseract, with the publisher's text as
+# the answer: the second reader contradicted ten of these verdicts, nine of
+# them were wrong and the tenth could not be judged; the 58 it agreed with
+# held one wrong. So a verdict it contradicts is withdrawn. It is not
+# reversed: that would be the second reader's word alone against a rule
+# that is right nine times in ten, and an open row costs a look.
+OVERRULED = ("lexicon", "dictionary")
+
+
+def heard_by_the_readers(verdict: dict, a: str, b: str,
+                         vision_words, second_words) -> dict:
+    """The ladder's verdict on a dispute once the readers beyond the first
+    two have been heard. Each is given as a function that reads the page
+    when it is first needed and returns that reader's words, or None."""
+    rung = verdict.get("rung")
+    if rung in OVERRULED:
+        fa, fb = fold_word(a), fold_word(b)
+        side = _view(second_words(), fa, fb)
+        if side and (fa if side == "a" else fb) != fold_word(verdict["winner"]):
+            return {"rung": "abstain", "winner": None, "overruled": rung,
+                    "note": f"the second reader reads the word the {rung} "
+                            "ruled against"}
+        return verdict
+    if rung == "abstain" and not verdict.get("reviewer"):
+        return readers_verdict(a, b, vision_words(), second_words()) or verdict
+    return verdict
+
+
+class SecondWords:
+    """The second reader's words on the pages it is asked about. A page is
+    read once, the first time a dispute on it is put to the readers, and
+    the reading is kept under the page image's own bytes so that a later
+    run over the same PDF does not read it again."""
+
+    def __init__(self, reader, cache=None):
+        self.reader, self.cache = reader, cache
+        self.asked = 0
+        self.unanswered = 0
+        self.why_unanswered: "str | None" = None
+        self._words: dict = {}
+
+    def words(self, png: str) -> "set | None":
+        if png in self._words:
+            return self._words[png]
+        import hashlib
+        from . import second as _second
+        try:
+            with open(png, "rb") as fh:
+                key = "adjudicate:" + hashlib.sha1(fh.read()).hexdigest()
+        except OSError:
+            return None
+        text, known = None, False
+        if self.cache is not None:
+            try:
+                text, known = self.cache.get(key), True
+            except KeyError:
+                pass
+        if not known:
+            try:
+                from PIL import Image
+                with Image.open(png) as im:
+                    text = self.reader.read(im)
+            except Exception as exc:
+                # It could not be asked. That is not "it has nothing to
+                # say": the page has no view this run and is not filed, so
+                # a later run asks again.
+                self.unanswered += 1
+                self.why_unanswered = str(exc) or type(exc).__name__
+                self._words[png] = None
+                return None
+            self.asked += 1
+            if self.cache is not None:
+                self.cache.put(key, text)
+        got = None if text is None else \
+            {fold_word(w) for w in tokens(_second.plain_words(text))}
+        self._words[png] = got
+        return got
+
+    def close(self) -> None:
+        if self.cache is not None:
+            self.cache.save()
+        try:
+            self.reader.close()
+        except Exception:
+            pass
+
+
+def second_words_for(report: "str | None") -> "SecondWords | None":
+    """The installed second reader, with its readings kept beside the
+    dispute record, or None where there is none to ask."""
+    from . import second as _second
+    if not _second.available():
+        return None
+    cache = None
+    if report:
+        stem = report[:-len(".json")] if report.endswith(".json") else report
+        cache = _second.SecondCache(stem + ".second.gz")
+    return SecondWords(_second.SecondReader(), cache)
+
+
 def adjudicate_pair(a: str, b: str, lexicon: Counter,
                     attested_floor: int = 0) -> dict:
     """One dispute between two attested readings, through the ladder.
@@ -1055,7 +1201,8 @@ def _explains_witness(epub_folds: set, tess_folds: set) -> float:
 
 
 def main(epub: str, pdf: str, report: "str | None" = None,
-         scale: float = 200 / 72, limit: "int | None" = None) -> int:
+         scale: float = 200 / 72, limit: "int | None" = None,
+         second: "SecondWords | None" = None) -> int:
     from concurrent.futures import ThreadPoolExecutor
     if not _tesseract_present():
         print("[!] tesseract is not installed, and it is the witness every "
@@ -1069,14 +1216,17 @@ def main(epub: str, pdf: str, report: "str | None" = None,
     pool = ThreadPoolExecutor(
         max_workers=max(1, min(TESS_WORKERS, os.cpu_count() or 1)))
     try:
-        return _adjudicate(epub, pdf, report, scale, limit, tmp, pool)
+        return _adjudicate(epub, pdf, report, scale, limit, tmp, pool, second)
     finally:
         pool.shutdown(wait=True, cancel_futures=True)
         shutil.rmtree(tmp, ignore_errors=True)
+        if second is not None:
+            second.close()
 
 
 def _adjudicate(epub: str, pdf: str, report: "str | None", scale: float,
-                limit: "int | None", tmp: str, pool) -> int:
+                limit: "int | None", tmp: str, pool,
+                second: "SecondWords | None" = None) -> int:
     import pypdfium2 as pdfium
     pages = epub_page_texts(epub)
     doc = pdfium.PdfDocument(pdf)
@@ -1298,8 +1448,21 @@ def _adjudicate(epub: str, pdf: str, report: "str | None", scale: float,
 
     lexicon = build_lexicon(agreed)
     rungs = Counter()
+    n_overruled = 0
     for i, info in per_page.items():
-        vis_tok = None
+        heard: dict = {}        # each further reader reads a page once
+
+        def vision_words(info=info, heard=heard):
+            if not have_vision:
+                return None
+            if "vision" not in heard:
+                v = read_vision(info["png"])
+                heard["vision"] = {fold_word(w) for w in tokens(v or "")}
+            return heard["vision"]
+
+        def second_words(info=info):
+            return second.words(info["png"]) if second is not None else None
+
         for a, b, cbox, at in info.get("crop_pairs", []):
             verdict = adjudicate_pair(a, b, lexicon)
             if verdict["rung"] == "fold":
@@ -1318,15 +1481,9 @@ def _adjudicate(epub: str, pdf: str, report: "str | None", scale: float,
             verdict = adjudicate_pair(a, b, lexicon)
             if verdict["rung"] == "fold":
                 continue                    # policy, not a dispute
-            if verdict["rung"] == "abstain" and have_vision \
-                    and not verdict.get("reviewer"):
-                if vis_tok is None:
-                    v = read_vision(info["png"])
-                    vis_tok = {fold_word(w) for w in tokens(v or "")}
-                fa, fb = fold_word(a), fold_word(b)
-                if (fa in vis_tok) != (fb in vis_tok):
-                    verdict = {"rung": "vision",
-                               "winner": a if fa in vis_tok else b}
+            verdict = heard_by_the_readers(verdict, a, b, vision_words,
+                                           second_words)
+            n_overruled += "overruled" in verdict
             rungs[verdict["rung"]] += 1
             boxes, cboxes = info["boxes"], info["cboxes"]
             row = {"page": i, "pdf_page": pdf_of.get(i, i),
@@ -1335,6 +1492,10 @@ def _adjudicate(epub: str, pdf: str, report: "str | None", scale: float,
                    "winner": verdict.get("winner"),
                    "shipped": a,
                    "box": boxes[j] if j < len(boxes) else None}
+            if verdict.get("note"):
+                row["note"] = verdict["note"]
+            if verdict.get("overruled"):
+                row["overruled"] = verdict["overruled"]
             if j < len(cboxes) and cboxes[j] != row["box"]:
                 row["cbox"] = cboxes[j]
             # which of the page's instances of this word is in dispute:
@@ -1356,6 +1517,19 @@ def _adjudicate(epub: str, pdf: str, report: "str | None", scale: float,
         print(f"page-turn hyphens: {n_stitched} witness fragment(s) "
               f"stitched to match the built book's own joins")
     print(f"book lexicon: {len(lexicon)} recurring agreed words")
+    if second is not None:
+        print(f"second reader: {len(second._words)} page(s) with a dispute "
+              f"were put to it"
+              + (f" ({second.asked} read now, the rest remembered)"
+                 if second.asked != len(second._words) else "")
+              + (f"; {n_overruled} verdict(s) of the lexicon or the "
+                 f"dictionary withdrawn because it reads the other word"
+                 if n_overruled else ""))
+        if second.unanswered:
+            print(f"[!] the second reader could not be asked about "
+                  f"{second.unanswered} of those pages "
+                  f"({second.why_unanswered}); their disputes were settled "
+                  f"without it, and another run will ask again")
     print(f"disputes: {len(disputes)}"
           + (f"  ({', '.join(f'{k}:{v}' for k, v in rungs.most_common())})"
              if disputes else ""))
@@ -1403,7 +1577,8 @@ def _vision_present() -> bool:
 
 def calibrate(pdf: str, epub: "str | None" = None,
               limit: "int | None" = None, scale: float = 200 / 72,
-              degrade: bool = False) -> dict:
+              degrade: bool = False,
+              second: "SecondWords | None" = None) -> dict:
     """Score the engines — and the ladder itself — against a born-digital
     book's own text.
 
@@ -1421,13 +1596,16 @@ def calibrate(pdf: str, epub: "str | None" = None,
     """
     tmp = tempfile.mkdtemp(prefix="calibrate_")
     try:
-        return _calibrate(pdf, epub, limit, scale, degrade, tmp)
+        return _calibrate(pdf, epub, limit, scale, degrade, tmp, second)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+        if second is not None:
+            second.close()
 
 
 def _calibrate(pdf: str, epub: "str | None", limit: "int | None",
-               scale: float, degrade: bool, tmp: str) -> dict:
+               scale: float, degrade: bool, tmp: str,
+               second: "SecondWords | None" = None) -> dict:
     import pypdfium2 as pdfium
     doc = pdfium.PdfDocument(pdf)
     engines = {"tesseract": Counter(), "vision": Counter()}
@@ -1455,6 +1633,14 @@ def _calibrate(pdf: str, epub: "str | None", limit: "int | None",
         truth_f = Counter(fold_word(w) for w in truth)
         reads = {}
         vis_sets = {}
+        sec_sets = second.words(png) if second is not None else None
+        if sec_sets is not None:
+            # scored as a vocabulary, which is all a rung asks of it: its
+            # reading is a set of words here, not a count of them
+            c = engines.setdefault("second", Counter())
+            c["truth"] += len(truth_f)
+            c["got"] += len(sec_sets)
+            c["hit"] += len(set(truth_f) & sec_sets)
         for name, reader in (("tesseract", read_tesseract),
                              ("vision", read_vision)):
             got = reader(png)
@@ -1482,7 +1668,11 @@ def _calibrate(pdf: str, epub: "str | None", limit: "int | None",
             dispute_rows.append({
                 "page": i, "a": a, "b": b,
                 "ta": truth_f.get(fa, 0) > 0, "tb": truth_f.get(fb, 0) > 0,
-                "va": fa in vis_sets, "vb": fb in vis_sets})
+                "va": fa in vis_sets, "vb": fb in vis_sets,
+                "vision": "vision" in reads,
+                "sa": sec_sets is not None and fa in sec_sets,
+                "sb": sec_sets is not None and fb in sec_sets,
+                "second": sec_sets is not None})
 
     lexicon = build_lexicon(agreed)
 
@@ -1491,11 +1681,21 @@ def _calibrate(pdf: str, epub: "str | None", limit: "int | None",
         for r in rows:
             v = adjudicate_pair(r["a"], r["b"], lexicon,
                                 attested_floor=floor)
+            # the same hearing the adjudicator gives, on the same words
+            v = heard_by_the_readers(
+                v, r["a"], r["b"],
+                lambda: {fold_word(w) for w, has in ((r["a"], r["va"]),
+                                                     (r["b"], r["vb"])) if has}
+                if r.get("vision", True) else None,
+                lambda: {fold_word(w) for w, has in ((r["a"], r.get("sa")),
+                                                     (r["b"], r.get("sb"))) if has}
+                if r.get("second") else None)
             rung = v["rung"]
             winner = v["winner"]
-            if winner is None and rung == "abstain" and r["va"] != r["vb"]:
-                rung = "vision"
-                winner = r["a"] if r["va"] else r["b"]
+            if v.get("overruled"):
+                rung = f"{v['overruled']}, withdrawn"
+            elif v.get("note") == "readers split":
+                rung = "readers split"
             rs = table.setdefault(rung, Counter())
             if winner is None:
                 rs["settleable" if (r["ta"] != r["tb"]) else "truly_open"] += 1

@@ -479,3 +479,32 @@ def test_sheet_finds_the_epub_beside_the_report(vtb, tmp_path):
     report["_base_dir"] = str(tmp_path)
     sheet = review.render_sheet(report)
     assert "<mark>never developed a comprehensive</mark>" in sheet
+
+
+# ── the second reader's part in a row ────────────────────────────────────────
+
+def test_a_row_the_second_reader_left_open_says_which_rule_had_spoken(vtb):
+    tiers = review.build_tiers([dict(
+        _d(4, "appear", "appertain"), overruled="lexicon",
+        note="the second reader reads the word the lexicon ruled against")])
+    (row,) = tiers["open"]
+    assert '<span class="chip">abstain · lexicon withdrawn</span>' \
+        in review._row_html(row, {})
+
+
+def test_a_row_the_readers_split_on_says_so(vtb):
+    tiers = review.build_tiers([dict(_d(4, "quartz", "quarts"),
+                                     note="readers split")])
+    assert '<span class="chip">abstain · readers split</span>' \
+        in review._row_html(tiers["open"][0], {})
+
+
+def test_the_readers_catches_are_ranked_with_the_lexicons(vtb):
+    tiers = review.build_tiers([
+        _d(9, "beligerents", "belligerents", "dictionary", winner="belligerents"),
+        _d(8, "Kohler", "Köhler", "second", winner="Köhler"),
+        _d(7, "quartz", "quarts", "readers", winner="quarts"),
+    ])
+    assert [r["rung"] for r in tiers["catches"]] == ["readers", "second",
+                                                     "dictionary"]
+

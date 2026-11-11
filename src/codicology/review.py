@@ -75,7 +75,12 @@ from .adjudicate import (_TYPO, STRUCK, WORD, _is_word, body_span,
 # battery v3, 2026-08-22: 2,545 truth-scored disputes over six born-digital
 # books, clean + degraded renders, post apparatus/roman guards + seam gates
 RUNG_ACCURACY = {"lexicon": "97.8%", "vision": "94.8%", "dictionary": "92.3%"}
-RUNG_ORDER = {"lexicon": 0, "vision": 1, "dictionary": 2}
+# "readers" is Vision and the second reader agreeing, "second" the second
+# reader alone with a view. Neither has a figure yet: they were right on
+# all 31 disputes they settled between them, which is too few to print as
+# a percentage beside ones measured on thousands.
+RUNG_ORDER = {"lexicon": 0, "readers": 0, "vision": 1, "second": 1,
+              "dictionary": 2}
 
 SURYA_ONLY_TITLE = ("Words no other witness saw — surya read them, "
                     "tesseract found no trace")
@@ -385,6 +390,12 @@ def _row_html(r, crops) -> str:
     rung = r.get("rung") or "abstain"
     acc = RUNG_ACCURACY.get(rung)
     chip = f"{rung} {acc}" if acc else rung
+    if r.get("overruled"):
+        # left open because the second reader reads the word the rule
+        # ruled against: the reviewer should know a rule had spoken
+        chip = f"{rung} · {r['overruled']} withdrawn"
+    elif r.get("note") == "readers split":
+        chip = f"{rung} · readers split"
     crop = crops.get(r["idx"])
     ink = (f'<img class="ink" alt="ink" src="{crop}">' if crop
            else '<span class="noink">no crop — ink not located</span>')
