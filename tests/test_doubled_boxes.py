@@ -40,8 +40,8 @@ def test_a_table_that_was_read_is_not_also_a_picture():
                           label="Text", box=(0.1, 0.1, 0.9, 0.28)),
              vtb.PageItem(html=TABLE, label="Table", box=BOX),
              _ruled()]
-    kept, n = vtb.drop_doubled_boxes(items)
-    assert n == 1 and kept == items[:2]
+    kept, n, held = vtb.drop_doubled_boxes(items)
+    assert n == 1 and kept == items[:2] and held == [NEARLY]
 
 
 @pytest.mark.parametrize("label, html", [
@@ -52,7 +52,7 @@ def test_a_table_that_was_read_is_not_also_a_picture():
 ])
 def test_a_boxed_note_that_was_read_is_not_also_a_picture(label, html):
     items = [vtb.PageItem(html=html, label=label, box=BOX), _ruled()]
-    kept, n = vtb.drop_doubled_boxes(items)
+    kept, n, _ = vtb.drop_doubled_boxes(items)
     assert n == 1 and kept == items[:1]
 
 
@@ -62,8 +62,8 @@ def test_a_block_that_is_only_a_picture_waiting_to_be_cut_gives_way():
     waiting = vtb.PageItem(html="<table><tr><td><img/></td></tr></table>",
                            label="Table", box=BOX)
     cut = _ruled()
-    kept, n = vtb.drop_doubled_boxes([waiting, cut])
-    assert n == 1 and kept == [cut]
+    kept, n, held = vtb.drop_doubled_boxes([waiting, cut])
+    assert n == 1 and kept == [cut] and held == [BOX]
     assert vtb.recover_placeholder_figures(kept, "no-such-page.png") == [cut]
 
 
@@ -71,7 +71,7 @@ def test_a_picture_the_recogniser_named_is_never_dropped():
     cover = vtb.PageItem(figure=_art(), label="Picture", box=NEARLY)
     title = vtb.PageItem(html="<h1>A People's History</h1>",
                          label="SectionHeader", box=BOX)
-    kept, n = vtb.drop_doubled_boxes([title, cover])
+    kept, n, _ = vtb.drop_doubled_boxes([title, cover])
     assert n == 0 and kept == [title, cover]
 
 
@@ -82,8 +82,8 @@ def test_a_picture_the_recogniser_named_is_never_dropped():
 ])
 def test_a_ruled_box_that_is_not_the_blocks_box_is_kept(box):
     items = [vtb.PageItem(html=TABLE, label="Table", box=BOX), _ruled(box)]
-    kept, n = vtb.drop_doubled_boxes(items)
-    assert n == 0 and kept == items
+    kept, n, held = vtb.drop_doubled_boxes(items)
+    assert n == 0 and kept == items and held == []
 
 
 def test_a_drawing_no_block_covers_is_still_a_picture():
@@ -91,14 +91,14 @@ def test_a_drawing_no_block_covers_is_still_a_picture():
     items = [vtb.PageItem(html="<p>The structure is shown here.</p>",
                           label="Text", box=(0.1, 0.1, 0.9, 0.28)),
              _ruled()]
-    assert vtb.drop_doubled_boxes(items) == (items, 0)
+    assert vtb.drop_doubled_boxes(items) == (items, 0, [])
 
 
 def test_nothing_with_words_is_ever_dropped():
     items = [vtb.PageItem(html=TABLE, label="Table", box=BOX), _ruled(),
              vtb.PageItem(html="<p>Table 3.1 shows the schedule.</p>",
                           label="Caption", box=(0.12, 0.63, 0.88, 0.67))]
-    kept, _ = vtb.drop_doubled_boxes(items)
+    kept, _, _ = vtb.drop_doubled_boxes(items)
     said = lambda its: " ".join(vtb._strip_tags(i.html) for i in its if i.html)
     assert said(kept) == said(items)
 
@@ -121,6 +121,100 @@ def test_a_drawing_inside_a_chart_already_shipped_is_not_added_again(vtb,
         [vtb.PageItem(html="<p>Prose.</p>", box=(0.1, 0.05, 0.9, 0.2))], page)
     assert sum(1 for it in alone if it.figure is not None) == 1, \
         "with no chart round it, the drawing is recovered as before"
+
+
+# ── a box that is dropped is still accounted for ─────────────────────────────
+
+LEAF = (466, 704)
+RULES = (52, 314, 180, 612)             # the table as it is ruled, in points
+HEAD = "NUMERICAL PROBLEMS"
+ASKS = "Suppose a firm faces the following supply schedule for labor by unskilled workers:"
+WAGES = ("<table><tr><th>Wage per day</th><th>Number of workers</th></tr>"
+         + "".join(f"<tr><td>{8 * k}</td><td>{k}</td></tr>" for k in range(9))
+         + "</table>")
+
+
+def _problem_page(tmp_path):
+    """A banner with a heading on it, a tinted line of prose under that, and
+    a ruled table under that: sixteen drawn paths that touch one another,
+    and so one drawing to anything that groups paths by where they are."""
+    pymupdf = pytest.importorskip("pymupdf")
+    doc = pymupdf.open()
+    page = doc.new_page(width=LEAF[0], height=LEAF[1])
+    for k in range(14):
+        page.insert_text((52, 60 + 14 * k), "The publisher set this line in type.",
+                         fontsize=9)
+    page.draw_rect(pymupdf.Rect(52, 272, 412, 288), color=None, fill=(0.03, 0.39, 0.61))
+    page.insert_text((180, 284), HEAD, fontsize=10, color=(1, 1, 1))
+    page.draw_rect(pymupdf.Rect(64, 294, 392, 314), color=None, fill=(0.88, 0.93, 0.97))
+    page.insert_text((66, 308), ASKS, fontsize=8)
+    x0, y0, x1, y1 = RULES
+    rows = [y0 + k * (y1 - y0) / 10 for k in range(11)]
+    for y in rows:
+        page.draw_line((x0, y), (x1, y), width=1)
+    for x in (x0, (x0 + x1) / 2, x1):
+        page.draw_line((x, y0), (x, y1), width=1)
+    page.insert_text((56, rows[0] + 18), "Wage per day", fontsize=7)
+    page.insert_text((120, rows[0] + 18), "Number of workers", fontsize=6)
+    for k in range(9):
+        page.insert_text((80, rows[k + 1] + 18), str(8 * k), fontsize=8)
+        page.insert_text((146, rows[k + 1] + 18), str(k), fontsize=8)
+    pdf = tmp_path / "problems.pdf"
+    doc.save(str(pdf))
+    d = tmp_path / "pages"
+    d.mkdir()
+    return vtb.load_pages_from_pdf(str(pdf), str(d))[0]
+
+
+def _problem_blocks():
+    """The page as read: every part of it a block, and the table's rule
+    found as a box as well. The recogniser's box for the table sits a
+    little inside the rule, as it does on the page this is drawn from."""
+    x0, y0, x1, y1 = (RULES[0] / LEAF[0], RULES[1] / LEAF[1],
+                      RULES[2] / LEAF[0], RULES[3] / LEAF[1])
+    return [vtb.PageItem(html=f"<h2>{HEAD}</h2>", label="SectionHeader",
+                         box=(0.35, 0.388, 0.65, 0.408)),
+            vtb.PageItem(html=f"<p>{ASKS}</p>", label="Text",
+                         box=(0.137, 0.420, 0.80, 0.445)),
+            vtb.PageItem(html=WAGES, label="Table",
+                         box=(x0 + 0.008, y0 + 0.009, x1 - 0.006, y1 - 0.009)),
+            vtb.PageItem(figure=_art(), box=(x0, y0, x1, y1))]
+
+
+def test_a_table_whose_picture_was_dropped_is_not_then_found_as_a_drawing(tmp_path):
+    """Principles of Microeconomics, pages 372 and 716. The picture of the
+    table had been what told the artwork passes that the rules were spoken
+    for. Dropped, it left them looking like a drawing nobody had boxed:
+    banner, tinted line and table went in as one picture, and the heading
+    and the sentence went with it as the picture's labels."""
+    page = _problem_page(tmp_path)
+    items = _problem_blocks()
+    kept, n, held = vtb.drop_doubled_boxes(items)
+    assert n == 1 and kept == items[:3]
+
+    out = vtb.recover_orphan_artwork(kept, page, held)
+    out = vtb.recover_vector_artwork(out, page, held)
+    assert out == kept, "nothing cut, and nothing taken as a label"
+
+    # the passes do what they did while the picture stood there …
+    assert vtb.recover_vector_artwork(items, page) == items
+    # … and this is what they did once it was gone and they were not told
+    untold = vtb.recover_vector_artwork(kept, page)
+    assert any(it.figure is not None for it in untold)
+    assert items[0] not in untold and items[1] not in untold
+
+
+def test_a_stored_picture_under_a_dropped_box_is_not_recovered_either(tmp_path):
+    """The same, for a region the PDF holds as pixels."""
+    drawing = ("image", (160, 330, 300, 420), _png((280, 180), _plate))
+    (page,) = _load(vtb, tmp_path, [typeset_page() + [drawing]])
+    box = (160 / 466, 330 / 704, 300 / 466, 420 / 704)
+    table = vtb.PageItem(html=TABLE, label="Table", box=box)
+    kept, n, held = vtb.drop_doubled_boxes([table, _ruled(box)])
+    assert n == 1 and kept == [table]
+    assert vtb.recover_orphan_artwork(kept, page, held) == kept
+    assert sum(1 for it in vtb.recover_orphan_artwork(kept, page)
+               if it.figure is not None) == 1, "untold, it cuts the picture"
 
 
 # ── through a build ──────────────────────────────────────────────────────────
@@ -149,4 +243,20 @@ def test_a_built_page_carries_its_table_once(tmp_path, capsys):
                    dedupe=False, drop_blank=False)
     body = zipfile.ZipFile(out).read("EPUB/page_0000.xhtml").decode()
     assert "Price per bushel" in body and "<img" not in body
+    assert "left out 1 picture(s) of a ruled box" in capsys.readouterr().out
+
+
+class _ReadsProblems(_Reads):
+    def run_items(self, images):
+        return [_problem_blocks() for _ in images]
+
+
+def test_a_built_page_keeps_the_heading_over_its_table(tmp_path, capsys):
+    page = _problem_page(tmp_path)
+    out = tmp_path / "book.epub"
+    vtb.build_epub([page], str(out), _ReadsProblems(), "Problems", False,
+                   dedupe=False, drop_blank=False)
+    body = zipfile.ZipFile(out).read("EPUB/page_0000.xhtml").decode()
+    assert f"<h2>{HEAD}</h2>" in body and "following supply schedule" in body
+    assert "Number of workers" in body and "<img" not in body
     assert "left out 1 picture(s) of a ruled box" in capsys.readouterr().out

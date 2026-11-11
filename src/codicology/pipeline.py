@@ -1567,16 +1567,27 @@ def find_image_furniture(page_figures: list[list[str]],
 # another block covers the same box. Sixty of the 360 were looked at, the
 # tables with the least text for their size and all 28 of the others: every
 # one is the block's own content.
+#
+# The box that is dropped is still a region the page has accounted for, and
+# the passes that look for artwork nobody boxed are told so. They ask
+# whether a figure already covers what they have found, and with the
+# picture gone the answer changed on five pages of the sixteen books first
+# rebuilt under this rule. On three the same picture came straight back,
+# cut from the PDF instead. On two, in Principles of Microeconomics, a
+# table's rules, the banner over them and a tinted line between made one
+# drawing, which went in as a picture and took the banner's heading, and
+# once the line's sentence, with it as its labels. Told of the box, those
+# passes do exactly what they did while the picture stood there.
 DOUBLED_BOX_OVERLAP = 0.8
 
 
-def drop_doubled_boxes(items: list) -> "tuple[list, int]":
+def drop_doubled_boxes(items: list) -> "tuple[list, int, list]":
     """Return items without the pictures that only repeat a block the page
-    already has, and how many were dropped."""
+    already has, how many were dropped, and the boxes they stood in."""
     ruled = [it for it in items
              if it.figure is not None and it.label is None and it.box]
     if not ruled:
-        return items, 0
+        return items, 0, []
     gone = set()
     for fig in ruled:
         for it in items:
@@ -1588,7 +1599,8 @@ def drop_doubled_boxes(items: list) -> "tuple[list, int]":
                 gone.add(id(fig))   # the block says what the box holds
             elif PLACEHOLDER_IMG.search(it.html):
                 gone.add(id(it))    # the same picture, about to be cut again
-    return [it for it in items if id(it) not in gone], len(gone)
+    return ([it for it in items if id(it) not in gone], len(gone),
+            [it.box for it in items if id(it) in gone])
 
 
 def _lies_inside(box, other, share: float = 0.9) -> bool:
@@ -1630,7 +1642,8 @@ def recover_placeholder_figures(items: list, page_path: str) -> list:
     return out
 
 
-def recover_orphan_artwork(items: list, page_path: str) -> list:
+def recover_orphan_artwork(items: list, page_path: str,
+                           held: "list | tuple" = ()) -> list:
     """
     Artwork the layout never boxed at all.
 
@@ -1640,7 +1653,9 @@ def recover_orphan_artwork(items: list, page_path: str) -> list:
     it is absent: a first-aid manual lost the pressure-point diagram off
     thirteen pages while gaining the prose around it. The PDF still holds the
     picture, and its placement says exactly where it belongs, so anything the
-    emitted figures do not already cover can be taken directly.
+    emitted figures do not already cover can be taken directly. `held` is
+    the boxes of pictures left out because a block holds what they showed
+    (drop_doubled_boxes): covered, though no figure stands there.
     """
     try:
         with open(page_path + ".source.json") as fh:
@@ -1655,6 +1670,7 @@ def recover_orphan_artwork(items: list, page_path: str) -> list:
         return items
 
     covered = [it.box for it in items if it.figure is not None and it.box]
+    covered += list(held)
     orphans = []
     try:
         placements = []
@@ -1725,7 +1741,8 @@ def recover_orphan_artwork(items: list, page_path: str) -> list:
     return out
 
 
-def recover_vector_artwork(items: list, page_path: str) -> list:
+def recover_vector_artwork(items: list, page_path: str,
+                           held: "list | tuple" = ()) -> list:
     """
     Drawings made of ink rather than pixels.
 
@@ -1735,7 +1752,8 @@ def recover_vector_artwork(items: list, page_path: str) -> list:
     whole: one urban-operations figure of 1,048 paths left only its caption
     behind. The paths themselves say where the drawing is. Dense clusters of
     them that no emitted figure covers are rendered straight from the page,
-    which for vector art is the best possible copy.
+    which for vector art is the best possible copy. `held` is as in
+    recover_orphan_artwork.
     """
     try:
         with open(page_path + ".source.json") as fh:
@@ -1783,6 +1801,7 @@ def recover_vector_artwork(items: list, page_path: str) -> list:
         groups.setdefault(find(i), []).append(boxes[i])
 
     covered = [it.box for it in items if it.figure is not None and it.box]
+    covered += list(held)
     tabled = [it.box for it in items
               if it.html and "<table" in it.html and it.box]
     out = list(items)
@@ -8103,11 +8122,11 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
             n_phantoms += _sp
             if strip_furniture:
                 items = strip_running_heads(items)
-            items, _dbl = drop_doubled_boxes(items)
+            items, _dbl, _held = drop_doubled_boxes(items)
             n_doubled += _dbl
             items = recover_placeholder_figures(items, path)
-            items = recover_orphan_artwork(items, path)
-            items = recover_vector_artwork(items, path)
+            items = recover_orphan_artwork(items, path, _held)
+            items = recover_vector_artwork(items, path, _held)
             parts: list[str] = []
             current_figures: list[str] = []
             i = 0
