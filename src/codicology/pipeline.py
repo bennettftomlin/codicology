@@ -1344,7 +1344,13 @@ def _lines_to_text(lines: list[tuple[float, float, str]]) -> str:
     return "\n".join(text for _, _, text in lines if text)
 
 
-FIGURE_LABELS = frozenset({"Picture", "Figure"})
+# The blocks whose pixels are their content. These are the labels Surya does
+# not read (surya.recognition.SKIP_CANON_LABELS, less BlankPage): each comes
+# back skipped, with no HTML, so a label missing here is a block that leaves
+# no figure, no text and nothing in the cache to show it was there. Diagram
+# was missing. tests/test_surya_labels.py holds this set, and every other
+# label named in this package, against the table the installed Surya ships.
+FIGURE_LABELS = frozenset({"Picture", "Figure", "Diagram"})
 
 # A ruled box smaller than this fraction of the page is an initial or an
 # ornament; larger than the ceiling it is the page's own border.
@@ -2502,7 +2508,7 @@ def demote_mislabelled_heads(items: "list[PageItem]",
     # head ("IV. Collaboration", "CHAPTER 2"); three of one book's reached
     # the table of contents.
     has_head = any(not j.is_furniture and j.html
-                   and (j.label in ("SectionHeader", "Title")
+                   and (j.label == "SectionHeader"
                         or re.match(r"\s*<h[1-6]", j.html))
                    for j in items)
     out = []
@@ -4798,10 +4804,14 @@ def normalize_math(body: str) -> str:
         t = re.sub(r"\^\s*(?:\{\s*\\circ\s*\}|\\circ)", "°", t)
         t = t.replace("\\,", ",").replace("\\", "")
         return t
-    # Display math is exempt: a block the layout model LABELLED Formula is
-    # an equation, not a Greek letter in a chemical name, and flattening it
-    # to letters destroys structure a MathML-capable reader would show. The
-    # assembly loop stamps those blocks display="block" on the way in.
+    # Display math is exempt: an equation set on its own line is not a Greek
+    # letter in a chemical name, and its structure is all it has. The
+    # recogniser marks it display="block" itself, on 410 of the 419 blocks
+    # the layout labels Equation in the shelf's caches. The label is not
+    # consulted: the eight it would add are expressions run into a sentence
+    # ("In perfect competition, MRP = MP \times P"), which read better set
+    # as text. (The assembly loop used to stamp blocks labelled "Formula",
+    # a label Surya does not have, so it never stamped one.)
     return re.sub(r"<math(?![^>]*display=\"block\")[^>]*>(.*?)</math>",
                   clean, body, flags=re.S)
 
@@ -7854,7 +7864,7 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
                                    or (cache is not None and cache.knows_furniture(path)))
             page_no_for_labels = len(bodies)
             for it in items:
-                if it.label in ("SectionHeader", "Title") and it.html \
+                if it.label == "SectionHeader" and it.html \
                         and not it.is_furniture:
                     _t = re.sub(r"\s+", " ", _strip_tags(it.html)).strip()
                     _rk = re.match(r"\s*<h([1-6])", it.html)
@@ -7914,13 +7924,7 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
                         and not any(it.label == "Footnote" for it in items[:i]):
                     parts.append("<hr/>")
                     n_label_rules += 1
-                html_out = item.html
-                if item.label == "Formula" and "<math" in html_out:
-                    # the label's assertion, stamped so normalize_math keeps
-                    # its hands off real equations
-                    html_out = re.sub(r"<math(?![^>]*display)",
-                                      '<math display="block"', html_out)
-                parts.append(html_out)
+                parts.append(item.html)
                 i += 1
             bodies.append("".join(parts))
             page_figures.append(current_figures)
