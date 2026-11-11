@@ -341,3 +341,56 @@ def test_a_few_bare_numerals_under_a_notes_head_are_not_a_notes_section(vtb):
               "strapped together</p><p>3 A-frame method</p>"]
     assert vtb._bare_numbered(bodies, 1) is False
     assert vtb.parse_notes_section(bodies)[1] == []
+
+
+# ── a chapter whose first call was not read ──────────────────────────────────
+
+def _three_chapters(first_call_of_the_second=True):
+    """Three chapters of ten notes each, the notes headed by chapter."""
+    def prose(k, skip_first=False):
+        calls = "".join(f" Claim {n}.<sup>{n}</sup>" for n in range(1, 11)
+                        if not (skip_first and n == 1))
+        return f"<h1>Chapter {k}</h1><p>Opening of chapter {k}.{calls}</p>"
+    def notes(k):
+        return f"<h2>Chapter {k}</h2>" + "".join(
+            f"<p>{n}. Source {k}-{n}.</p>" for n in range(1, 11))
+    return [prose(1), prose(2, skip_first=not first_call_of_the_second),
+            prose(3), "<h1>Notes</h1>" + notes(1), notes(2) + notes(3)]
+
+
+def test_a_chapter_that_lost_its_first_call_is_still_its_own_chapter(vtb):
+    """Burning Up, chapter 10. Its call 1 was not read as a call, the numbers
+    went "…44, 45, 2, 3, 4", and nothing but a 1 could open a chapter: the
+    chapter's calls opened the ninth chapter's notes and every later chapter
+    was paired one group out. 104 of the book's 500 links went to the wrong
+    note of the right number."""
+    bodies = _three_chapters(first_call_of_the_second=False)
+    stats = vtb.link_notes(bodies, dropped=set())
+    assert stats["linked"] == 29
+    # chapter two's calls open chapter two's notes …
+    assert 'href="page_0004.xhtml#note-g1-2"' in bodies[1]
+    assert "#note-g0-" not in bodies[1]
+    # … and chapter three's are not pushed onto chapter two's
+    assert 'href="page_0004.xhtml#note-g2-1"' in bodies[2]
+    assert "#note-g1-" not in bodies[2]
+
+
+def test_the_same_book_with_every_call_read_links_as_it_always_did(vtb):
+    bodies = _three_chapters()
+    stats = vtb.link_notes(bodies, dropped=set())
+    assert stats["linked"] == 30
+    assert 'href="page_0004.xhtml#note-g1-1"' in bodies[1]
+
+
+def test_low_notes_cited_again_in_a_row_do_not_open_a_chapter(vtb):
+    """The notes section says how many chapters there are. Where the groups
+    already match it, a run that falls and climbs is the author going back
+    over notes 2, 3 and 4, and the reading without a headless chapter is
+    kept."""
+    bodies = _three_chapters()
+    bodies[0] = bodies[0].replace(
+        "</p>", " As said.<sup>2</sup> And.<sup>3</sup> And.<sup>4</sup></p>")
+    vtb.link_notes(bodies, dropped=set())
+    assert bodies[0].count("#note-g0-") == 13 and "#note-g1-" not in bodies[0]
+    assert 'href="page_0004.xhtml#note-g1-1"' in bodies[1]
+

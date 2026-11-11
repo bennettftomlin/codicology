@@ -5514,7 +5514,8 @@ def link_chapter_notes(bodies: list[str], dropped: set) -> dict:
 
 
 def find_body_marker_groups(bodies: list[str], stop: int,
-                            climbed: int = 1) -> list[list[tuple[int, int, int]]]:
+                            climbed: int = 1, headless: bool = False
+                            ) -> list[list[tuple[int, int, int]]]:
     """
     Superscript markers in the prose, split into chapters by their own resets.
 
@@ -5530,6 +5531,16 @@ def find_body_marker_groups(bodies: list[str], stop: int,
     apart — the marker after both readings is 2. So the caller tries both
     and lets the notes section, which knows how many chapters it has,
     decide; see `_best_body_groups`.
+
+    `headless` also opens a chapter where the numbers fall to 2 or 3 and
+    climb from there, with no 1 before them: a chapter whose first call was
+    not read as one. Burning Up's tenth chapter lost its 1, so the run went
+    "…44, 45, 2, 3, 4" and was read as chapter nine citing its early notes
+    again: forty-three calls opened the ninth chapter's notes, and every
+    chapter after it was paired one group out, 104 calls in all. A
+    re-citation falls and comes straight back ("…16, 17, 2, 18"); this
+    falls and stays down for two more calls. It is one more reading for the
+    notes section to choose between, not a rule.
     """
     # flatten first: the reset test needs one-marker lookahead
     stream: list[tuple[int, int, int]] = []
@@ -5559,6 +5570,12 @@ def find_body_marker_groups(bodies: list[str], stop: int,
         # plain — one book from none to 296 — puts not one link in the
         # wrong chapter, and costs a single marker in a single book.
         if n == 1 and prev >= climbed and (nxt is None or nxt <= 3):
+            if current:
+                groups.append(current)
+            current = []
+        elif headless and 1 < n <= 3 and prev >= n + 5 \
+                and k + 2 < len(stream) \
+                and n < nxt < stream[k + 2][1] <= n + 4:
             if current:
                 groups.append(current)
             current = []
@@ -6551,18 +6568,24 @@ def _best_body_groups(bodies, notes_start, n_notes):
     every group is a marker that cannot link.
     """
     best = None
-    for climbed in (1, 3):
-        raw = find_body_marker_groups(bodies, notes_start, climbed)
-        for smallest in (1, 2):
-            # A chapter may cite a single note, and then its body group is
-            # one marker long. Discarding every such group by default
-            # stranded those markers; keeping them by default invents a
-            # chapter out of any stray numeral. It is another thing the
-            # notes section can settle, so it is offered as a reading too.
-            groups = [g for g in raw if len(g) >= smallest]
-            rank = (abs(len(groups) - n_notes), -sum(len(g) for g in groups))
-            if best is None or rank < best[0]:
-                best = (rank, groups)
+    # The readings without a headless chapter come first and keep any tie,
+    # so a book whose groups already match its notes is read as before.
+    for headless in (False, True):
+        for climbed in (1, 3):
+            raw = find_body_marker_groups(bodies, notes_start, climbed,
+                                          headless)
+            for smallest in (1, 2):
+                # A chapter may cite a single note, and then its body group
+                # is one marker long. Discarding every such group by default
+                # stranded those markers; keeping them by default invents a
+                # chapter out of any stray numeral. It is another thing the
+                # notes section can settle, so it is offered as a reading
+                # too.
+                groups = [g for g in raw if len(g) >= smallest]
+                rank = (abs(len(groups) - n_notes),
+                        -sum(len(g) for g in groups))
+                if best is None or rank < best[0]:
+                    best = (rank, groups)
     return best[1]
 
 
