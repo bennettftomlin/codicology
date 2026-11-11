@@ -1741,6 +1741,30 @@ def recover_orphan_artwork(items: list, page_path: str,
     return out
 
 
+# A table the page prints is ruled, and its rules are paths like any
+# drawing's. recover_vector_artwork knew a group of paths for a table where
+# the two overlapped by 0.3, which holds while the rules are all the group
+# is. A textbook that sets a heading on a banner and a line of prose on a
+# tint above each table draws paths that touch the rules, and the group is
+# then three to five times the table. Principles of Microeconomics printed
+# banner, prose and table as one picture on pp. 205 and 899, and on p. 205
+# the heading and the table's only row went with it as the picture's
+# labels. Pages 372 and 716 were spared the same only while a picture of
+# the table stood there to overlap the group, by 0.3045 and 0.3103.
+#
+# So a path lying in a table the page prints is that table's, and is not
+# looked at; what else is drawn is judged without it. The rule a table is
+# drawn in runs a little outside the recogniser's box for the table: by a
+# median 0.007 of the page across the 343 ruled tables in the shelf's
+# caches, and within this reach on 333. Over the 1,738 cached pages that
+# hold a table the pass now differs on pp. 205 and 899 and nowhere else,
+# whether the reach is 0.01, 0.02 or 0.04. No page on the shelf sets a
+# drawing hard against a table; one that did had it grouped with the
+# rules, where it overlapped the table enough to be left out with them,
+# and it is found now.
+TABLE_RULE_REACH = 0.02
+
+
 def recover_vector_artwork(items: list, page_path: str,
                            held: "list | tuple" = ()) -> list:
     """
@@ -1753,7 +1777,8 @@ def recover_vector_artwork(items: list, page_path: str,
     behind. The paths themselves say where the drawing is. Dense clusters of
     them that no emitted figure covers are rendered straight from the page,
     which for vector art is the best possible copy. `held` is as in
-    recover_orphan_artwork.
+    recover_orphan_artwork. The rules of a table the page prints are not
+    counted among the paths (TABLE_RULE_REACH).
     """
     try:
         with open(page_path + ".source.json") as fh:
@@ -1767,6 +1792,8 @@ def recover_vector_artwork(items: list, page_path: str,
     except Exception:
         return items
 
+    tabled = [it.box for it in items
+              if it.html and "<table" in it.html and it.box]
     boxes = []
     try:
         for obj in page.get_objects():
@@ -1776,6 +1803,12 @@ def recover_vector_artwork(items: list, page_path: str,
             w, h = b[2] - b[0], b[3] - b[1]
             if w > 0.8 * pw and h < 3:
                 continue                        # the running head's rule
+            at = _pdf_box_to_normalized(b, pw, ph)
+            if any(at[0] >= t[0] - TABLE_RULE_REACH
+                   and at[1] >= t[1] - TABLE_RULE_REACH
+                   and at[2] <= t[2] + TABLE_RULE_REACH
+                   and at[3] <= t[3] + TABLE_RULE_REACH for t in tabled):
+                continue                        # a rule of a table we print
             boxes.append(b)
     except Exception:
         return items
@@ -1802,8 +1835,6 @@ def recover_vector_artwork(items: list, page_path: str,
 
     covered = [it.box for it in items if it.figure is not None and it.box]
     covered += list(held)
-    tabled = [it.box for it in items
-              if it.html and "<table" in it.html and it.box]
     out = list(items)
     for members in groups.values():
         if len(members) < 15:

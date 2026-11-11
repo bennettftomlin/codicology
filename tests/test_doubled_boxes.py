@@ -196,12 +196,51 @@ def test_a_table_whose_picture_was_dropped_is_not_then_found_as_a_drawing(tmp_pa
     out = vtb.recover_vector_artwork(out, page, held)
     assert out == kept, "nothing cut, and nothing taken as a label"
 
-    # the passes do what they did while the picture stood there …
-    assert vtb.recover_vector_artwork(items, page) == items
-    # … and this is what they did once it was gone and they were not told
+
+KIT = ["Compass", "Matches", "Knife", "Whistle", "Map", "Torch", "Cord", "Tarp",
+       "Water", "Salt", "Needle", "Thread", "Mirror", "Candle", "Flint", "Hooks"]
+KIT_BOX = (120, 300, 346, 430)          # the rule round the list, in points
+
+
+def _kit_page(tmp_path):
+    """A ruled box holding a list of sixteen things, each with a drawn square
+    to tick: seventeen paths in one place, and few words."""
+    pymupdf = pytest.importorskip("pymupdf")
+    doc = pymupdf.open()
+    page = doc.new_page(width=LEAF[0], height=LEAF[1])
+    for k in range(14):
+        page.insert_text((52, 60 + 14 * k), "The publisher set this line in type.",
+                         fontsize=9)
+    page.draw_rect(pymupdf.Rect(*KIT_BOX), width=1)
+    for k, thing in enumerate(KIT):
+        x, y = 132 + 110 * (k % 2), 310 + 14 * (k // 2)
+        page.draw_rect(pymupdf.Rect(x, y, x + 8, y + 8), width=0.7)
+        page.insert_text((x + 14, y + 8), thing, fontsize=9)
+    pdf = tmp_path / "kit.pdf"
+    doc.save(str(pdf))
+    d = tmp_path / "pages"
+    d.mkdir()
+    return vtb.load_pages_from_pdf(str(pdf), str(d))[0]
+
+
+def test_a_boxed_list_whose_picture_was_dropped_is_not_then_found_as_a_drawing(tmp_path):
+    """The squares are drawn, so the list is a drawing to anything that
+    groups paths, and its picture had been what said the region was spoken
+    for. A table's rules are known for what they are whoever asks; a list's
+    tick boxes are known only by the box that was dropped."""
+    page = _kit_page(tmp_path)
+    box = tuple(v / LEAF[k % 2] for k, v in enumerate(KIT_BOX))
+    listed = vtb.PageItem(
+        html="<ul>" + "".join(f"<li>{t}</li>" for t in KIT) + "</ul>",
+        label="ListGroup",
+        box=(box[0] + 0.01, box[1] + 0.008, box[2] - 0.01, box[3] - 0.008))
+    kept, n, held = vtb.drop_doubled_boxes([listed, _ruled(box)])
+    assert n == 1 and kept == [listed] and held == [box]
+
+    assert vtb.recover_vector_artwork(kept, page, held) == kept
     untold = vtb.recover_vector_artwork(kept, page)
-    assert any(it.figure is not None for it in untold)
-    assert items[0] not in untold and items[1] not in untold
+    assert sum(1 for it in untold if it.figure is not None) == 1, \
+        "not told of the box, the pass draws the list a second time"
 
 
 def test_a_stored_picture_under_a_dropped_box_is_not_recovered_either(tmp_path):

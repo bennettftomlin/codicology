@@ -103,3 +103,65 @@ def test_a_frame_drawn_around_prose_does_not_swallow_the_prose(vtb, tmp_path):
         box=(0.15, 0.3, 0.85, 0.7))
     out = vtb.recover_vector_artwork([prose], pages[0])
     assert prose in out, "the paragraph must survive"
+
+
+# ── a table's rules are the table's ──────────────────────────────────────────
+
+def test_a_tables_rules_and_its_trim_are_not_a_drawing(vtb, tmp_path):
+    """Principles of Microeconomics p. 205. A heading on a banner, a line of
+    prose on a tint and a ruled table beneath: the paths touch, so they
+    grouped as one drawing five times the size of the table, too large to
+    be taken for it. The drawing went in as a picture of all three, and the
+    heading and the table's one row went with it as its labels."""
+    from test_doubled_boxes import _problem_blocks, _problem_page
+    page = _problem_page(tmp_path)
+    heading, asks, table, _ = _problem_blocks()
+    items = [heading, asks, table]
+    assert vtb.recover_vector_artwork(items, page) == items
+
+    # the paths are a drawing where no table answers for them, which is what
+    # a diagram the layout read as text looks like
+    unclaimed = vtb.recover_vector_artwork([heading, asks], page)
+    assert sum(1 for it in unclaimed if it.figure is not None) == 1
+
+
+def _table_beside_a_drawing(tmp_path, gap):
+    """A ruled table, and `gap` points to its right a fan of twenty strokes."""
+    from test_doubled_boxes import LEAF, RULES
+    pymupdf = pytest.importorskip("pymupdf")
+    doc = pymupdf.open()
+    page = doc.new_page(width=LEAF[0], height=LEAF[1])
+    for k in range(14):
+        page.insert_text((52, 60 + 14 * k), "The publisher set this line in type.",
+                         fontsize=9)
+    x0, y0, x1, y1 = RULES
+    for k in range(11):
+        y = y0 + k * (y1 - y0) / 10
+        page.draw_line((x0, y), (x1, y), width=1)
+    for x in (x0, (x0 + x1) / 2, x1):
+        page.draw_line((x, y0), (x, y1), width=1)
+    left = x1 + gap
+    for k in range(20):
+        page.draw_line((left, y0 + 20), (left + 200, y0 + 20 + 12 * k), width=1)
+    pdf = tmp_path / "fan.pdf"
+    doc.save(str(pdf))
+    d = tmp_path / "pages"
+    d.mkdir()
+    from codicology import pipeline
+    return (pipeline.load_pages_from_pdf(str(pdf), str(d))[0],
+            (left / LEAF[0], (y0 + 20) / LEAF[1],
+             (left + 200) / LEAF[0], (y0 + 20 + 12 * 19) / LEAF[1]))
+
+
+@pytest.mark.parametrize("gap", [60, 4])
+def test_a_drawing_beside_a_table_is_still_a_drawing(vtb, tmp_path, gap):
+    """Set apart from the table it was always found. Set against it, the two
+    grouped as one, which overlapped the table enough to be taken for the
+    table, and the drawing was left out with the rules."""
+    from test_doubled_boxes import _problem_blocks
+    page, fan = _table_beside_a_drawing(tmp_path, gap)
+    table = _problem_blocks()[2]
+    out = vtb.recover_vector_artwork([table], page)
+    figs = [it for it in out if it.figure is not None]
+    assert len(figs) == 1 and table in out
+    assert figs[0].box == pytest.approx(fan, abs=0.01), "the fan, and not the table"
