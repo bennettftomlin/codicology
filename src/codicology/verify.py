@@ -61,6 +61,11 @@ if _WORDS is None:
     _WORDS = _Everything()
 
 
+# How the build marks a page it shows as itself (pipeline._page_as_itself,
+# and a page whose reading nobody would vouch for).
+AS_PRINTED = re.compile(r'<img\b[^>]*\balt="Page \d+, as printed"')
+
+
 def main(epub_path, pdf_path):
     # A crash must not impersonate a verdict: 0 is clean, 1 is "LOOK AT
     # THIS", and an uncaught exception used to exit 1 as well — a
@@ -96,6 +101,7 @@ def _main(epub_path, pdf_path):
     kind = "scan (its layer is another OCR)" if scanned > 6 else "born-digital"
 
     ours = {}
+    as_printed = set()      # pages the build chose to show as themselves
     for n in z.namelist():
         m = re.match(r".*page_(\d{4})\.xhtml$", n)
         if not m:
@@ -104,13 +110,15 @@ def _main(epub_path, pdf_path):
         body = re.sub(r"</body>.*$", "",
                       re.sub(r"^.*?<body[^>]*>", "", t, flags=re.S), flags=re.S)
         ours[int(m.group(1))] = WORD.findall(re.sub(r"<[^>]+>", " ", body))
+        if AS_PRINTED.search(body):
+            as_printed.add(int(m.group(1)))
 
     # What we hold, as sets of overlapping word-runs, so a page the book
     # shows twice can be recognised wherever we kept it.
     kept = [shingles(v) for v in ours.values() if len(v) >= 25]
 
     tot_o = tot_l = 0
-    holes, rescanned = [], []
+    holes, rescanned, shown = [], [], []
     for i in range(len(pdf)):
         lw = WORD.findall(pdf[i].get_textpage().get_text_bounded())
         ow = ours.get(i, [])
@@ -136,6 +144,14 @@ def _main(epub_path, pdf_path):
         elsewhere = covered_elsewhere(lw, kept)
         if elsewhere >= RESCAN_COVERAGE:
             rescanned.append((i, elsewhere))
+        elif scanned > 6 and i in as_printed:
+            # A scan's layer is another reader's attempt at the page, and
+            # the build has shown the page itself because no reading of it
+            # could be stood behind: a letter in facsimile, a ledger in a
+            # fourteenth-century hand. What that other reader made of it is
+            # not a loss. On a born-digital source the layer is the page's
+            # own text, and a page shown as a picture there is still a hole.
+            shown.append((i, len(lw)))
         else:
             holes.append((i, len(lw), " ".join(lw[:9])))
 
@@ -147,8 +163,13 @@ def _main(epub_path, pdf_path):
         print(f"   p{i}: {n} layer words :: {head!r}")
     if len(holes) > 12:
         print(f"   … and {len(holes) - 12} more")
-    # Reported, never hidden: this is the one exemption the hole check makes,
-    # so it says out loud which pages took it and how sure it was.
+    # Reported, never hidden: these are the exemptions the hole check makes,
+    # so it says out loud which pages took them.
+    if shown:
+        print(f"pages shown as pictures of themselves, where the scan's "
+              f"layer has words: {len(shown)} -> "
+              + ", ".join(f"p{i} ({n} layer words)" for i, n in shown[:12])
+              + (", …" if len(shown) > 12 else ""))
     if rescanned:
         print(f"pages the source captured twice, kept once: {len(rescanned)}"
               + " -> " + ", ".join(f"p{i} ({s:.2f} of it is elsewhere)"

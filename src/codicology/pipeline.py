@@ -1316,6 +1316,10 @@ class PageItem(NamedTuple):
     # kept, and every consumer must treat None as "label unknown",
     # never as "label Text".
     label: "str | None" = None
+    # The page itself, standing where its words would have: what a page is
+    # given when what was read from it is not fit to print. Never cached;
+    # it is decided each time the page is assembled.
+    whole_page: bool = False
 
 
 class OCRBackend:
@@ -8339,6 +8343,7 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
     n_phantoms = 0
     n_forms = 0
     n_doubled = 0
+    n_unvouched = 0
     foot_labelled: list = []    # per page: how much of its foot the layout
                                 # itself called footnotes (see link_footnotes)
     marker_seq_state: dict = {"last": None}
@@ -8418,7 +8423,12 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
         current_figures.append(name)
         n_figures += 1
 
-        img_tag = f'<img src="{name}" alt="Figure" style="max-width:100%"/>'
+        # A page shown as itself says so, in the words a page nothing was
+        # read from already uses: it is what a reader who cannot see the
+        # picture is told, and what verify knows such a page by.
+        alt = f"Page {nonlocal_page_i[0] + 1}, as printed" \
+            if item.whole_page else "Figure"
+        img_tag = f'<img src="{name}" alt="{alt}" style="max-width:100%"/>'
         if caption is None:
             return f"<figure>{img_tag}</figure>"
         # figcaption is valid as either the first or last child, so keep it on the
@@ -8478,6 +8488,41 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
                 print(f"    [?] {os.path.basename(path)}: a table holds "
                       f"{_held} of the {_printed} figures the PDF prints in "
                       f"its place — left as read; worth a look")
+            _unsure = unvouched_reading(items, path)
+            _ink = _page_core_ink(path) if _unsure is not None else None
+            if _unsure is not None and _ink is not None \
+                    and _ink < PHANTOM_CORE_INK:
+                # Words nobody vouches for on paper that holds no ink: the
+                # ghost of the leaf behind, read as a page (Citadel of Sin,
+                # a blank verso that came back as thirty-eight words). There
+                # is nothing to show a picture of.
+                _n = sum(len(_strip_tags(it.html).split()) for it in items
+                         if it.html and not it.is_furniture)
+                items = [it for it in items if it.is_furniture]
+                n_unvouched += 1
+                print(f"    [!] {os.path.basename(path)}: {_n} words the "
+                      f"recogniser scored {_unsure[0]:.2f}, no witness reads "
+                      f"more than {_unsure[1]:.0%} of them, and the paper "
+                      f"holds no ink — left empty rather than printed as "
+                      f"invention")
+            elif _unsure is not None:
+                _shown = _page_picture(path)
+                if _shown is not None:
+                    _n = sum(len(_strip_tags(it.html).split()) for it in items
+                             if it.html and not it.is_furniture)
+                    _kept = sum(len(_strip_tags(it.html).split())
+                                for it in _unsure[2])
+                    items = [it for it in items if it.is_furniture] \
+                        + [_shown] + _unsure[2]
+                    n_unvouched += 1
+                    print(f"    [!] {os.path.basename(path)}: {_n} words the "
+                          f"recogniser scored {_unsure[0]:.2f}, and no "
+                          f"witness reads more than {_unsure[1]:.0%} of them "
+                          f"on the page — shown as a picture of the page "
+                          f"rather than printed as invention"
+                          + (f", with the {_kept} words of {len(_unsure[2])} "
+                             f"block(s) a witness does read printed beneath it"
+                             if _unsure[2] else ""))
             # Furniture is set aside, never merely deleted: its text is the
             # folio audit's evidence, already recognised at full resolution.
             page_furniture.append([_strip_tags(it.html) for it in items
@@ -10486,6 +10531,109 @@ def _contradicts_layer(items, page_path: str) -> str | None:
             return None
         return "reads nothing like the page's own text layer"
     return None
+
+
+# The loop guard and the layer guard both need the reading to give itself
+# away, or the page to carry forty words of layer. A page of handwriting
+# does neither. The Knights of Industry reproduces seven letters in
+# facsimile, and each came back as fluent text that is not on the page ("I
+# should should I will there should / I should I / I should I"), in the wrong
+# language for a German hand, with no picture of the letter; an advertisement
+# set in three languages came back with twenty-five paragraphs about the
+# State of Virginia. A badly scanned page does the same in a smaller way: the
+# words that can be read are read and the rest of each line is supplied.
+#
+# The recogniser knows when it is doing this. It reports a confidence for
+# every page, which this pipeline has kept since it began and never used:
+# the median over 38,250 cached pages is 0.995, and the seven letters are the
+# seven lowest pages of their book, 0.75 to 0.84. On its own that number
+# accuses half-titles and library slips too, which are short, and a few
+# pages of honest print. So it only raises the question, and only of a page
+# with words enough to answer it; the answer is a witness's. Of the 38 pages
+# on the shelf under 0.93 with thirty words or more, the better of the page's
+# two witnesses finds under a third of the words on 24 (letters, manuscript
+# plates, two damaged scans, an engineer's drawing sheets), and seven tenths
+# or more on the 6 that are print. One manuscript plate reaches 0.55 on the
+# strength of its printed caption, and the line is drawn above it.
+#
+# Such a page is shown as a picture of itself. Nothing on it is lost that
+# way, and nothing is said that it does not say.
+#
+# What a witness does read on such a page is still printed, beneath the
+# picture: a block of four words or more that a witness has nine in ten of.
+# That is the printed caption under the manuscript plate, which is print and
+# was read right (and, being a caption, goes under the picture as one), and
+# the legible labels of an engineer's drawing; it is none of a letter in
+# facsimile, and on the two damaged pages of Lloyd's it is no paragraph at
+# all, since none of them came through whole.
+UNSURE_CONFIDENCE = 0.93
+UNSURE_MIN_WORDS = 30
+VOUCHED_SHARE = 0.6
+BLOCK_VOUCHED = 0.9
+BLOCK_MIN_WORDS = 4
+
+_WITNESS_WORD = re.compile(r"[a-z]{3,}")
+
+
+def _share_witnessed(text: str, witness: "str | None") -> float:
+    """How much of a reading, word for word, a witness also reads."""
+    ours = Counter(_WITNESS_WORD.findall(text.lower()))
+    total = sum(ours.values())
+    if not total or not witness:
+        return 0.0
+    theirs = Counter(_WITNESS_WORD.findall(witness.lower()))
+    return sum(min(n, theirs.get(w, 0)) for w, n in ours.items()) / total
+
+
+def unvouched_reading(items, page_path: "str | None"
+                      ) -> "tuple[float, float, list] | None":
+    """The recogniser's confidence, the best witness's share, and the blocks
+    a witness reads word for word, where a page's words are ones neither
+    will stand behind as a whole; None where they are vouched for, or there
+    is nothing to judge by."""
+    said = [it for it in items if it.html and not it.is_furniture]
+    confs = [it.conf for it in said if it.conf is not None]
+    if not confs or not page_path:
+        return None
+    conf = sum(confs) / len(confs)
+    if conf >= UNSURE_CONFIDENCE:
+        return None
+    text = " ".join(_strip_tags(it.html) for it in said)
+    if len(text.split()) < UNSURE_MIN_WORDS:
+        return None
+    layer = None
+    try:
+        with open(page_path + ".layer.txt", encoding="utf-8") as fh:
+            layer = fh.read()
+    except OSError:
+        pass
+    if not witness_available():
+        if not _layer_can_testify(page_path):
+            UNWITNESSED["fabrication"] += 1
+            return None                 # nobody to ask: not guilt
+        witnesses = [layer]
+    else:
+        witnesses = [layer, _classical_text(page_path)]
+    best = max(_share_witnessed(text, w) for w in witnesses)
+    if best >= VOUCHED_SHARE:
+        return None
+    borne_out = []
+    for it in said:
+        words = _strip_tags(it.html)
+        if len(_WITNESS_WORD.findall(words.lower())) >= BLOCK_MIN_WORDS and max(
+                _share_witnessed(words, w) for w in witnesses) >= BLOCK_VOUCHED:
+            borne_out.append(it)
+    return conf, best, borne_out
+
+
+def _page_picture(page_path: str) -> "PageItem | None":
+    """The whole page as the one picture on it."""
+    try:
+        with Image.open(page_path) as im:
+            return PageItem(figure=im.convert("RGB").copy(), label="Picture",
+                            box=(0.0, 0.0, 1.0, 1.0), whole_page=True)
+    except Exception:
+        return None
 
 
 def _native_layer_body(page_path: str) -> "list[PageItem] | None":
