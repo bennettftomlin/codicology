@@ -10604,12 +10604,33 @@ _SETTING = str.maketrans({
 _CONTROL = re.compile(r"[\x00-\x1f]")
 
 
+# The recogniser's own markup is setting as well. What it takes for
+# mathematics it writes the way TeX would: a command and the braces of its
+# argument (\text{rate}), the mark of a subscript or a power (S_3, r^n), a
+# backslash before a sign TeX keeps for itself (\$, \%). The page prints
+# none of it, and inside a page the layer's plain word is taken over it like
+# any other. At a page's edge it was a different word and stayed: three
+# economics textbooks ended 27 pages on "S_3." or "\$446,280.99" where the
+# rest of the page reads S3, and three display equations there kept the
+# closing brace of a \text{ the layer had already unwrapped. Those 28
+# words are all this admits. Of the shelf's 134 books with born-digital
+# pages, 59 have markup at the edge of any block; built as far as the
+# reconciler, they refuse 395 words at a page's edge, and the other 367
+# are still refused: a URL the layer breaks in two, a rule to write on, a
+# folio.
+_MARKUP = re.compile(r"\\[A-Za-z]+|[\\_^{}]")
+
+
 def _same_word(ours: str, layer: str) -> bool:
-    """Whether two readings are one word set differently — see _SETTING —
-    allowing the first letter's case, the sentence boundary the reconciler
-    already concedes to the layer."""
-    a, b = ours.translate(_SETTING), layer.translate(_SETTING)
-    return a[1:] == b[1:] and a[:1].lower() == b[:1].lower()
+    """Whether two readings are one word set differently — see _SETTING and
+    _MARKUP — allowing the first letter's case, the sentence boundary the
+    reconciler already concedes to the layer."""
+    b = layer.translate(_SETTING)
+    for a in (ours, _MARKUP.sub("", ours)):
+        a = a.translate(_SETTING)
+        if a and a[1:] == b[1:] and a[:1].lower() == b[:1].lower():
+            return True
+    return False
 
 
 def reconcile_native_text(bodies: list[str], page_paths: list[str]) -> int:

@@ -6,6 +6,8 @@ substitutes, and loosely aligned regions stay ours however wrong they look.
 """
 import os
 
+import pytest
+
 
 def _native_page(tmp_path, layer):
     p = str(tmp_path / "page_0000.jpg")
@@ -316,6 +318,71 @@ def test_the_same_word_set_differently_is_still_taken_at_the_edge(vtb,
     bodies, paths = _native(tmp_path, body, layer)
     assert vtb.reconcile_native_text(bodies, paths) == 1
     assert "‘frontier’" in bodies[0]
+
+
+LEAD = ("We see in the supply schedule that the quantity supplied falls at "
+        "each price, and the supply curve thus shifts from S1 to").split()
+
+
+@pytest.mark.parametrize("ours, layer", [
+    ("S_3.", "S3."),                            # a subscript
+    ("(MB_E).", "(MBE)."),
+    ("P_0=P_n(1+r)^n", "P0=Pn(1+r)n"),          # and a power
+    (r"\$446,280.99", "$446,280.99"),           # a sign TeX keeps for itself
+    (r"MUA\$1=MUO\$1", "MUA$1=MUO$1"),
+])
+def test_the_recognisers_markup_is_setting_too(vtb, tmp_path, ours, layer):
+    """What the recogniser takes for mathematics it writes as TeX, and the
+    page prints none of that. Inside a page the layer's plain word replaces
+    it like any other; at a page's last word it was a different word, and
+    three economics textbooks ended 27 pages on S_3. where every other
+    mention on the page reads S3."""
+    body = "<p>" + " ".join(LEAD) + f" {ours}</p>"
+    bodies, paths = _native(tmp_path, body, " ".join(LEAD) + f" {layer}")
+    assert vtb.reconcile_native_text(bodies, paths) == 1
+    assert bodies[0].endswith(f" {layer}</p>")
+
+
+def test_an_equation_that_ends_the_page_is_not_left_half_unwrapped(vtb,
+                                                                   tmp_path):
+    """The words of a display equation are taken from the layer one by one,
+    and the last of them was at the page's edge: \text{ went, and its
+    closing brace stayed."""
+    body = ("<p>" + " ".join(LEAD) + " S3.</p>"
+            r'<math display="block">\text{Exports (X)-imports (M)=net '
+            r"exports (Xn)}</math>")
+    layer = " ".join(LEAD) + " S3. Exports (X)-imports (M)=net exports (Xn)"
+    bodies, paths = _native(tmp_path, body, layer)
+    vtb.reconcile_native_text(bodies, paths)
+    assert bodies[0].endswith('<math display="block">Exports (X)-imports '
+                              "(M)=net exports (Xn)</math>")
+
+
+def test_a_whole_run_of_markup_at_the_edge_is_taken_together(vtb, tmp_path):
+    body = ("<p>" + " ".join(LEAD) + " S3.</p>"
+            r'<math display="block">\text{Inflation rate}=(2.073-2.016)/'
+            r"2.016=0.028=2.8\%</math>")
+    layer = (" ".join(LEAD)
+             + " S3. Inflation rate=(2.073-2.016)/2.016=0.028=2.8%")
+    bodies, paths = _native(tmp_path, body, layer)
+    vtb.reconcile_native_text(bodies, paths)
+    assert bodies[0].endswith('<math display="block">Inflation rate='
+                              "(2.073-2.016)/2.016=0.028=2.8%</math>")
+
+
+@pytest.mark.parametrize("ours, layer", [
+    ("Y_p.", "YP."),            # not the same letters under the markup
+    ("x_2", "y2"),
+    ("_____", "224"),           # a rule to write on, and a folio
+    ("{", "224"),
+    ("r^n", "248"),
+])
+def test_markup_does_not_make_another_word_the_same_word(vtb, tmp_path,
+                                                         ours, layer):
+    body = "<p>" + " ".join(LEAD) + f" {ours}</p>"
+    bodies, paths = _native(tmp_path, body, " ".join(LEAD) + f" {layer}")
+    assert vtb.reconcile_native_text(bodies, paths) == 0
+    assert bodies[0].endswith(f" {ours}</p>")
 
 
 def test_a_url_the_layer_breaks_in_two_is_not_cut_to_its_first_half(
