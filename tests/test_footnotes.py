@@ -222,3 +222,84 @@ def test_a_ruleless_page_with_no_superscript_feet_is_untouched(vtb):
             "<p>1. Could be a list item.</p>")
     bodies = [body]
     assert vtb.link_footnotes(bodies, allow_numbered=True)["ruleless"] == 0
+
+
+# ── a note that runs over the page ───────────────────────────────────────────
+
+PROSE = ("<p>The photograph was taken on the night shift and shows what the "
+         "report calls a stress position, held for some hours.<sup>3</sup> "
+         "It was printed everywhere within the week.<sup>4</sup></p>")
+FEET = ("<p>3 In my <i>Verfolgung und Trauma</i> I develop this.</p>"
+        "<p>4 Hoppe and Blasberg, “Photos from Abu Ghraib.”</p>")
+TAIL = ("<p>came a kind of slang condensation for Iraqis, so that they "
+        "reportedly began to refer to the Bagman himself (103–4).</p>")
+
+
+def _over_the_page(prev_last="the Hooded Man and the Statue of Liberty be-",
+                   tail=TAIL):
+    before = ("<p>The image went round the world.<sup>2</sup></p><hr/>"
+              f"<p>2 W.J.T. Mitchell notes the uncanny juxtaposition of {prev_last}</p>")
+    return [before, PROSE + "<hr/>" + tail + FEET]
+
+
+def test_a_page_whose_feet_open_with_the_end_of_the_last_pages_note_links(vtb):
+    """Kill Boxes, page 13. The foot of the page opens with the last lines of
+    note 2 from the page before, with no number, so the block did not open
+    with a foot and neither note 3 nor note 4 was linked. Twenty-seven pages
+    of that book, and every note on them."""
+    bodies = _over_the_page()
+    stats = vtb.link_footnotes(bodies, allow_numbered=True)
+    assert stats["numbered"] == 3
+    assert 'href="#fn-p1-n3"' in bodies[1] and 'id="fn-p1-n4"' in bodies[1]
+    assert TAIL in bodies[1], "the tail stays where it is, as it was read"
+
+
+def test_the_same_page_without_a_tail_links_as_before(vtb):
+    bodies = _over_the_page(tail="")
+    assert vtb.link_footnotes(bodies, allow_numbered=True)["numbered"] == 3
+
+
+def test_prose_under_a_rule_is_not_a_tail(vtb):
+    """A divider with a paragraph and a numbered list under it. The page
+    before finished its last note, and the paragraph begins a sentence."""
+    bodies = _over_the_page(
+        prev_last="the two figures.",
+        tail="<p>These remarks need three qualifications before they stand.</p>")
+    stats = vtb.link_footnotes(bodies, allow_numbered=True)
+    assert stats["numbered"] == 1 and "fn-p1-" not in bodies[1]
+
+
+def test_three_paragraphs_before_the_first_number_are_not_a_tail(vtb):
+    bodies = _over_the_page(tail=TAIL * 3)
+    vtb.link_footnotes(bodies, allow_numbered=True)
+    assert "fn-p1-" not in bodies[1]
+
+
+# ── a note of more than one paragraph ────────────────────────────────────────
+
+TWO_PARAS = ("<p>The thesis may seem unplausible.<sup>4</sup> It is not, and "
+             "the reasons are given at length in the essay that follows this "
+             "one, which takes the opposite view of the same ledgers.</p><hr/>"
+             "<p><sup>4</sup> W. Sombart, <i>Der Moderne Kapitalismus</i>, vol. 2, p. 119.</p>"
+             "<p>Sombart goes on to claim that one can see in double entry the "
+             "germs of the ideas of the force of gravity, the circulation of "
+             "the blood and the conservation of energy, all of them born of "
+             "the same spirit, and that the ledger is their common ancestor "
+             "in a sense no historian of science has yet thought to examine.</p>")
+
+
+def test_a_note_with_a_second_paragraph_links_where_the_layout_called_it_a_note(vtb):
+    """Studies in the History of Accounting, page 19. The second paragraph
+    of note 4 has no number, so the block was not feet throughout and the
+    call stayed plain. The layout had called both paragraphs footnotes."""
+    bodies = [TWO_PARAS]
+    stats = vtb.link_footnotes(bodies, allow_numbered=True, foot_labelled=[1.0])
+    assert stats["numbered"] == 1 and 'href="#fn-p0-n4"' in bodies[0]
+
+
+def test_without_the_layouts_word_the_shape_still_decides(vtb):
+    bodies = [TWO_PARAS]
+    assert vtb.link_footnotes(bodies, allow_numbered=True)["numbered"] == 0
+    assert vtb.link_footnotes(bodies, allow_numbered=True,
+                              foot_labelled=[0.4])["numbered"] == 0
+

@@ -6458,7 +6458,59 @@ def _foot_block_without_a_rule(body: str) -> int:
     return start
 
 
-def link_footnotes(bodies: list[str], allow_numbered: bool = False) -> dict:
+_ENDS_A_SENTENCE = re.compile(r"[.!?…:;][”’\"')\]]*\s*$")
+
+
+def _carried_over_tail(below: str, before: str) -> int:
+    """Where a page's own notes begin, past the end of a note the page
+    before could not finish; 0 if the foot block does not open that way.
+
+    A long footnote runs over the page, and its last lines are the first
+    thing under the next page's rule, with no number in front of them. A
+    foot block has to open with a foot, so that page was not a foot block,
+    and none of its calls or notes were linked: twenty-seven pages of Kill
+    Boxes, every note on them, and the same in the other books of its
+    series.
+
+    The tail is one or two paragraphs with no number. What makes it a tail
+    and not prose under a divider is the page before: its last note stops
+    without ending its sentence ("…the Statue of Liberty be-"), or the
+    paragraph itself starts in the middle of one.
+    """
+    paras = list(re.finditer(r"<p[^>]*>.*?</p>", below, re.S))
+    k = next((j for j, m in enumerate(paras) if FOOT_SHAPE.match(m.group(0))),
+             None)
+    if k is None or not 1 <= k <= 2:
+        return 0
+    if _strip_tags(below[:paras[0].start()]).strip() \
+            or re.search(r"<(?:h[1-6]|table|ul|ol|figure)\b",
+                         below[:paras[k].start()]):
+        return 0
+    first = _strip_tags(paras[0].group(0)).strip()
+    if not first:
+        return 0
+    last = [m.group(0) for m in re.finditer(r"<p[^>]*>.*?</p>",
+                                            before.split("<hr/>", 1)[-1], re.S)]
+    unfinished = bool(last) and "<hr/>" in before \
+        and not _ENDS_A_SENTENCE.search(_strip_tags(last[-1]).strip())
+    if not (unfinished or first[0].islower()):
+        return 0
+    return paras[k].start()
+
+
+# How much of what follows the rule the layout must have called footnotes
+# for its word to stand in for the block's shape.
+FOOT_LABELLED = 0.9
+
+
+def _opens_with_a_foot(below: str) -> bool:
+    first = re.search(r"<(p|ol|ul|table|figure|blockquote|h[1-6])[^>]*>", below)
+    return first is not None and first.group(1) == "p" \
+        and bool(FOOT_SHAPE.match(below[first.start():]))
+
+
+def link_footnotes(bodies: list[str], allow_numbered: bool = False,
+                   foot_labelled: "list | None" = None) -> dict:
     """
     Same-page footnotes, bound where the page itself settles the match.
 
@@ -6481,6 +6533,15 @@ def link_footnotes(bodies: list[str], allow_numbered: bool = False) -> dict:
     endnotes on the same pages, and is exactly who this flag protects.
     Every guard costs recall on a page laid out unusually, which is the side
     to err on — an unlinked marker is the page as printed.
+
+    One shape the guards refused is not unusual at all: a note of two
+    paragraphs, or one that ends in a list. Its second paragraph has no
+    number, so the block was no longer "feet nearly throughout", and no
+    note on the page was linked. `foot_labelled` is the layout's own word,
+    page by page: the share of the words from the first block it called a
+    footnote to the end of the page that it called footnotes. Where that
+    is nearly all of them and the block opens with a foot, the paragraphs
+    with no number are the notes going on, and the block stands.
     """
     stats = {"linked": 0, "numbered": 0, "skipped": 0, "ruleless": 0}
     for pi, body in enumerate(bodies):
@@ -6517,7 +6578,16 @@ def link_footnotes(bodies: list[str], allow_numbered: bool = False) -> dict:
 
         # numbered footnotes, once the symbols have taken their markers (a
         # linked one is no longer a bare <sup> and cannot be claimed twice)
-        if allow_numbered and _looks_like_foot_block(below):
+        tail = ""
+        if allow_numbered and not _looks_like_foot_block(below):
+            cut = _carried_over_tail(below, bodies[pi - 1] if pi else "")
+            if cut:
+                tail, below = below[:cut], below[cut:]
+                stats["carried"] = stats.get("carried", 0) + 1
+        labelled = bool(foot_labelled) and pi < len(foot_labelled) \
+            and foot_labelled[pi] >= FOOT_LABELLED \
+            and _opens_with_a_foot(below)
+        if allow_numbered and (_looks_like_foot_block(below) or labelled):
             mark_by_n: dict[int, list] = {}
             for m in re.finditer(r"<sup>\s*(\d{1,3})\s*</sup>", above):
                 mark_by_n.setdefault(int(m.group(1)), []).append(m)
@@ -6546,7 +6616,7 @@ def link_footnotes(bodies: list[str], allow_numbered: bool = False) -> dict:
             stats["linked"] += len(usable)
             stats["numbered"] += len(usable)
 
-        bodies[pi] = above + rule + below
+        bodies[pi] = above + rule + tail + below
     return stats
 
 
@@ -8064,6 +8134,7 @@ class ReadPages(NamedTuple):
     label_heads: list
     toc_label_pages: set
     n_doubled: int = 0
+    foot_labelled: "list | None" = None
 
 
 def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
@@ -8088,6 +8159,8 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
     n_phantoms = 0
     n_forms = 0
     n_doubled = 0
+    foot_labelled: list = []    # per page: how much of its foot the layout
+                                # itself called footnotes (see link_footnotes)
     marker_seq_state: dict = {"last": None}
     label_heads: list = []      # (page, rank, text) from SectionHeader
     toc_label_pages: set = set()
@@ -8243,6 +8316,15 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
                             for m in re.findall(r"\d{1,3}",
                                                 _strip_tags(it.html))}
             items = [it for it in items if not it.is_furniture]
+            _first = next((k for k, it in enumerate(items)
+                           if it.label == "Footnote"), None)
+            _after = sum(len(_strip_tags(it.html).split())
+                         for it in items[_first:] if it.html) \
+                if _first is not None else 0
+            foot_labelled.append(
+                sum(len(_strip_tags(it.html).split()) for it in items[_first:]
+                    if it.html and it.label == "Footnote") / _after
+                if _after else 0.0)
             _ra, _sp = reattach_orphan_markers(items, furn_numbers,
                                                marker_seq_state)
             n_reattached += _ra
@@ -8312,7 +8394,8 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
     return ReadPages(bodies, page_figures, figure_data, page_furniture,
                      furniture_known, n_figures, n_blank_figures,
                      n_label_rules, n_reattached, n_phantoms, n_forms,
-                     n_hand_figures, label_heads, toc_label_pages, n_doubled)
+                     n_hand_figures, label_heads, toc_label_pages, n_doubled,
+                     foot_labelled)
 
 
 def build_epub(
@@ -8372,7 +8455,7 @@ def build_epub(
     (bodies, page_figures, figure_data, page_furniture, furniture_known,
      n_figures, n_blank_figures, n_label_rules, n_reattached, n_phantoms,
      n_forms, n_hand_figures, label_heads, toc_label_pages,
-     n_doubled) = rp
+     n_doubled, foot_labelled) = rp
     if n_figures:
         print(f"    extracted {n_figures} figures")
     if n_blank_figures:
@@ -8723,7 +8806,8 @@ def build_epub(
         # that let it through was taken against already-linked copies, where
         # the pass had nothing left to claim and returned zero either way;
         # the shelf rebuild is what caught it.
-        fstats = link_footnotes(bodies, allow_numbered=(n_note_heads == 0))
+        fstats = link_footnotes(bodies, allow_numbered=(n_note_heads == 0),
+                                foot_labelled=foot_labelled)
         if fstats["linked"] or fstats["skipped"]:
             print(f"    footnotes: {fstats['linked']} same-page notes linked"
                   + (f" ({fstats['numbered']} numbered)"
