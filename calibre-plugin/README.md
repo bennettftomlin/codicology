@@ -45,6 +45,9 @@ path is left empty the plugin probes `~/.local/bin`, `/opt/homebrew/bin`,
    (a rebuild then costs minutes, not hours), doctor's warnings if any,
    and the options — languages, note linking, folio checking, embedded
    scans, blank pages, plus a free-text field for any other convert flag.
+   Where a second reader is installed (the codicology README says how),
+   a box asks it about tables and equations; it is off until ticked. Its
+   vote in the dispute record is a separate box in the plugin's settings.
 3. The job runs in Calibre's jobs list: page-by-page progress, a live
    log, and Cancel that actually kills the OCR process tree.
 4. On success the EPUB is added to the book and verify's verdict is

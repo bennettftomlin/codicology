@@ -230,6 +230,8 @@ class CodicologyOCRAction(InterfaceAction):
             argv.append('--link-index')
         if opts['check_folios']:
             argv.append('--check-folios')
+        if opts.get('second_reader'):
+            argv.append('--second-reader')
         if opts['embed_images']:
             argv.append('--embed-images')
         if opts['keep_blank_pages']:
@@ -255,6 +257,9 @@ class CodicologyOCRAction(InterfaceAction):
         adjudicate_argv = ([exe, 'adjudicate', out.name, pdf,
                             '--report', report_path]
                            if opts.get('adjudicate') else None)
+        if adjudicate_argv and prefs['second_reader_votes'] \
+                and ((doctor or {}).get('second_reader') or {}).get('present'):
+            adjudicate_argv.append('--second-reader')
         review_argv = ([exe, 'review', report_path]
                        if adjudicate_argv
                        and prefs['review_sheet_after_build'] else None)

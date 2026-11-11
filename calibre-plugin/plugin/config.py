@@ -25,6 +25,12 @@ prefs.defaults['link_citations'] = True
 prefs.defaults['typography'] = True
 prefs.defaults['link_index'] = True
 prefs.defaults['check_folios'] = True
+# Off until asked for: it needs a model the plugin does not install, and it
+# is the one option here that can change what a table or an equation says.
+prefs.defaults['second_reader'] = False
+# Its vote in the dispute record is a separate matter and a dearer one: a
+# page for every page with a disputed word, which on a scan is most of them.
+prefs.defaults['second_reader_votes'] = False
 prefs.defaults['embed_images'] = False
 prefs.defaults['keep_blank_pages'] = False
 prefs.defaults['extra_flags'] = ''
@@ -77,6 +83,20 @@ class ConfigWidget(QWidget):
             'EPUB. The record is saved beside the OCR cache.')
         self.adjudicate_box.setChecked(bool(prefs['adjudicate_after_build']))
         layout.addWidget(self.adjudicate_box)
+
+        self.second_votes_box = QCheckBox(
+            'Give the second reader a vote in the dispute record, where '
+            'one is installed')
+        self.second_votes_box.setToolTip(
+            'It settles a disputed word only as a count of readers, with '
+            'Apple Vision: one of them with a view, or both agreeing. A '
+            'verdict of the vocabulary or the dictionary that it reads the '
+            'other way is left open for you. It reads every page that has '
+            'a disputed word: allow about twenty minutes for each hundred '
+            'such pages, the first time. Does nothing where no second '
+            'reader is installed (Check environment says).')
+        self.second_votes_box.setChecked(bool(prefs['second_reader_votes']))
+        layout.addWidget(self.second_votes_box)
 
         self.review_sheet_box = QCheckBox(
             'Also render the dispute record as a review sheet '
@@ -138,6 +158,12 @@ class ConfigWidget(QWidget):
         llama = report.get('llama_server') or {}
         lines.append('llama-server: '
                      + (llama.get('path') or 'not found'))
+        second = report.get('second_reader') or {}
+        lines.append('second reader: '
+                     + (f"{second.get('name')} ({second.get('model')})"
+                        if second.get('present') else
+                        'none (optional; its two .gguf files go in '
+                        f"{second.get('looked_in') or '~/.cache/codicology/second'})"))
         for w in report.get('warnings', []):
             lines.append(f'⚠ {w}')
         for p in report.get('problems', []):
@@ -153,5 +179,6 @@ class ConfigWidget(QWidget):
         prefs['codicology_path'] = self.path_edit.text().strip()
         prefs['verify_after_build'] = self.verify_box.isChecked()
         prefs['adjudicate_after_build'] = self.adjudicate_box.isChecked()
+        prefs['second_reader_votes'] = self.second_votes_box.isChecked()
         prefs['review_sheet_after_build'] = self.review_sheet_box.isChecked()
         prefs['open_review_sheet'] = self.open_sheet_box.isChecked()

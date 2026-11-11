@@ -88,6 +88,24 @@ class PreflightDialog(QDialog):
         self.check_folios.setChecked(bool(prefs["check_folios"]))
         form.addRow(self.check_folios)
 
+        second = (doctor or {}).get("second_reader") or {}
+        self.second_reader = QCheckBox(
+            "Ask a second reader about tables and equations")
+        self.second_reader.setToolTip(
+            "A second model reads the pages whose tables or equations the "
+            "first is likeliest to have wrong. Its table or equation is "
+            "printed only where the PDF's own text prefers it, or on a scan "
+            "where the two differ in figures alone; every other difference "
+            "is listed in the build log. Adds about fifteen seconds for "
+            "each page it is asked about, the first time."
+            if second.get("present") else
+            "No second reader is installed: its two .gguf files go in "
+            + str(second.get("looked_in") or "~/.cache/codicology/second"))
+        self.second_reader.setEnabled(bool(second.get("present")))
+        self.second_reader.setChecked(bool(second.get("present"))
+                                      and bool(prefs["second_reader"]))
+        form.addRow(self.second_reader)
+
         self.embed_images = QCheckBox("Embed the page scans alongside the text")
         self.embed_images.setChecked(bool(prefs["embed_images"]))
         form.addRow(self.embed_images)
@@ -147,6 +165,11 @@ class PreflightDialog(QDialog):
         }
         for key, value in opts.items():
             prefs[key] = value
+        # kept as it was where the box could not be ticked: a machine
+        # without the model must not turn the preference off for good
+        opts["second_reader"] = self.second_reader.isChecked()
+        if self.second_reader.isEnabled():
+            prefs["second_reader"] = opts["second_reader"]
         # deliberately not persisted: a build that skipped the record
         # should not quietly make every later build skip it too
         opts["adjudicate"] = self.adjudicate.isChecked()
