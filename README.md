@@ -18,6 +18,17 @@ their markers, and publish the printed page numbers.
 pip install -e ".[surya]"
 ```
 
+Surya pins a few of its dependencies and leaves the rest open
+(`transformers` has a floor and no ceiling), so the same command a month
+later is a different environment. `constraints.txt` records the versions
+this was last built and tested with:
+
+```bash
+pip install -c constraints.txt -e ".[surya]"
+```
+
+`python tools/lock_env.py` rewrites it from an environment that works.
+
 Then install Tesseract, which pip cannot do for you:
 
 ```bash
