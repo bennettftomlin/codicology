@@ -1,7 +1,7 @@
 # codicology
 
 Turns scanned or photographed books into EPUBs, using Surya to read the
-page and Tesseract as a second reader to check it.
+page and Tesseract as a witness to check it.
 
 Input is a PDF, a folder of photographs, or video of someone turning
 pages. Output is an EPUB, and optionally a searchable PDF beside it.
@@ -67,6 +67,44 @@ Without it, both checks pass without examining anything, so a run refuses to
 start. `--without-witness` overrides that and reports at the end how many
 pages went unexamined. Its word boxes also position the searchable PDF text
 layer far more precisely than layout blocks can.
+
+### A second reader, where one is installed
+
+Surya is a generative model, and on some pages it writes what is likely
+where it should write what is there: a figure dropped from a fraction, a
+table that loses three of its six columns. Tesseract cannot check those. It
+does not read mathematics, and it reads a table as loose numbers.
+
+`--second-reader` asks a generative reader of another family,
+[LightOnOCR-2](https://huggingface.co/lightonai/LightOnOCR-2-1B), served by
+the same llama-server. It is not part of this package and nothing depends
+on it: put the model's two `.gguf` files (the model and its projector,
+about 1.1 GB at Q8, from
+[ggml-org/LightOnOCR-2-1B-GGUF](https://huggingface.co/ggml-org/LightOnOCR-2-1B-GGUF))
+in `~/.cache/codicology/second/` and `codicology doctor` reports it.
+
+It has no layout to give, so it replaces nothing wholesale, and it can
+invent too, so its word alone settles very little. What it is used for:
+
+- **Tables.** On a typeset page, a table that holds under 98% of the
+  figures the PDF prints in its place is put to the second reader, and its
+  table is printed where it holds nearly all of them and clearly more than
+  the first. On the 26 typeset pages of one shelf whose tables had lost the
+  most, Surya's reading held 78% of the 1,662 figures the PDF prints and
+  the second reader's 91%; six tables were replaced, none with a figure
+  the PDF does not print.
+- **Equations set on their own lines.** On a typeset page the PDF's own
+  symbols choose between the two readings. On a scan nothing can, so the
+  second reader's equation is taken only where the two differ in digits
+  alone and it has no fewer of them (`2/100` for a printed `20/100`: what
+  Surya does to a figure is drop it); every other difference is listed in
+  the build log, and in a file beside the cache, with both readings, and
+  the first is kept. Tried on 118 pages with 247 equations, that changed
+  three, each rightly, and listed fourteen.
+- **Disputed words**, in `adjudicate --second-reader`: see below.
+It reads only the pages it is asked about, about twelve seconds each on an
+M1 Pro, and its readings are kept beside the OCR cache, so a rebuild does
+not read them again.
 
 ## One command, ten verbs
 
@@ -235,6 +273,10 @@ Calibre plugin.
   quotes, collapsed double spaces. Letters are never touched, spaced
   ellipses stay as the book set them, and born-digital pages are never
   overwritten.
+- `--second-reader` — a second opinion on tables and equations, where a
+  second reader is installed (see above). The one flag here that can change
+  what a table or an equation says; each change is in the build log with
+  what it was.
 
 ## Where the readers disagree
 

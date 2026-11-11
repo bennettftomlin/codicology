@@ -231,3 +231,38 @@ def test_the_rectifier_is_reported_and_its_absence_is_not_a_problem(
 def test_the_rectifier_is_reported_when_it_is_there(monkeypatch, capsys):
     monkeypatch.setattr(doctor, "_pkg_version", lambda name: "1.0")
     assert doctor._rectifier() == {"present": True, "missing": []}
+
+
+# ── the second reader ────────────────────────────────────────────────────────
+
+def test_no_second_reader_is_neither_a_problem_nor_a_warning(monkeypatch, tmp_path,
+                                                            capsys):
+    """It is optional: an environment without the model is as ready as it
+    was, and says where the model would go."""
+    from codicology import second
+    monkeypatch.setattr(second, "DEFAULT_DIR", str(tmp_path / "none"))
+    monkeypatch.delenv(second.MODEL_ENV, raising=False)
+    monkeypatch.delenv(second.MMPROJ_ENV, raising=False)
+    rep = doctor.report()
+    assert rep["second_reader"]["present"] is False
+    assert not any("second" in s for s in rep["problems"] + rep["warnings"])
+    doctor._human(rep)
+    assert "second reader: none" in capsys.readouterr().out
+
+
+def test_a_second_reader_is_reported_with_its_model(monkeypatch, tmp_path, capsys):
+    from codicology import second
+    for name in ("reader-Q8_0.gguf", "mmproj-reader-Q8_0.gguf"):
+        (tmp_path / name).write_bytes(b"gguf")
+    monkeypatch.setattr(second, "DEFAULT_DIR", str(tmp_path))
+    monkeypatch.delenv(second.MODEL_ENV, raising=False)
+    monkeypatch.delenv(second.MMPROJ_ENV, raising=False)
+    monkeypatch.setattr(second, "server_binary", lambda: "/usr/bin/llama-server")
+    rep = doctor.report()
+    assert rep["second_reader"] == {
+        "present": True, "name": second.NAME,
+        "model": str(tmp_path / "reader-Q8_0.gguf"),
+        "looked_in": str(tmp_path)}
+    doctor._human(rep)
+    assert "asked with --second-reader" in capsys.readouterr().out
+

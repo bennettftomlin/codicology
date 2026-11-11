@@ -160,6 +160,18 @@ def _vision():
         return {"present": False}
 
 
+def _second_reader():
+    """The second reader is optional and is not part of this package: a
+    model of another family, asked about the tables and equations the
+    first reader gets wrong and about words the witnesses could not settle
+    (second.py). Absent, books build as they always have."""
+    from . import second
+    files = second.model_files()
+    return {"present": files is not None and second.server_binary() is not None,
+            "name": second.NAME, "model": files[0] if files else None,
+            "looked_in": second.DEFAULT_DIR}
+
+
 def _llama_server():
     override = os.environ.get("LLAMA_CPP_BINARY")
     if override and os.path.exists(override):
@@ -202,6 +214,7 @@ def report(full=False, ocr="surya", langs=("en",)):
         "tesseract": _tesseract(),
         "llama_server": _llama_server(),
         "vision": _vision(),
+        "second_reader": _second_reader(),
         "nvidia": _nvidia(),
     }
 
@@ -375,6 +388,12 @@ def _human(rep):
                                 if v.get("present") else
                                 "absent — review sheets will carry more "
                                 "open abstains; builds are unaffected"))
+    sr = rep.get("second_reader", {})
+    print("  second reader: " + (
+        f"{sr.get('name')} ({sr.get('model')}) — asked with --second-reader"
+        if sr.get("present") else
+        f"none (its two .gguf files go in {sr.get('looked_in')}) — "
+        "optional; builds are unaffected"))
     n = rep["nvidia"]
     print(f"  nvidia: {', '.join(n['gpus']) if n.get('gpus') else ('present' if n['present'] else 'none')}")
     s = rep.get("smoke")

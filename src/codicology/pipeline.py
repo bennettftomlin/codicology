@@ -1585,6 +1585,208 @@ def find_image_furniture(page_figures: list[list[str]],
 DOUBLED_BOX_OVERLAP = 0.8
 
 
+# Mathematics is what the first reader reads worst and what nothing
+# classical can check. In Sraffa's Production of Commodities it set
+# (1 + 2/100) three times where the page prints 20/100, gave a system of
+# equations subscripts that belong to no commodity, read a third as a half
+# and put an equals sign into a formula that has none. The second reader
+# read the same blocks, and where the two differ somebody has to be
+# believed.
+#
+# On a typeset page the PDF's own text says which symbols are printed, flat
+# as it is, and the reading nearer to it is kept.
+#
+# On a scan nothing says. The fourteen blocks of that book on which the two
+# readers differ in more than a row of dots were each looked at: the second
+# reader is the one as printed on nine, the first on two (a prime dropped
+# three times, a subscript g read as x), and on three each has one letter
+# right that the other has wrong. Asking the second reader again about the
+# equation alone, cut out and enlarged, was tried and reads worse than
+# either. Two readers cannot outvote each other, so only the difference
+# they have a record on is acted on: figures. Where the two readings of an
+# equation differ in nothing but digits the second reader's is taken (it
+# held 93% of the figures the PDFs print where the first held 75%, and has
+# both such equations in Sraffa as printed); any other difference is said,
+# with both readings, and the first reader's stands.
+#
+# What is compared is the symbols, not the TeX: the two write the same
+# equation differently (a system as one aligned block or a line each,
+# p'_a or p_a'), and neither way of writing is the page's.
+EQUATION_SAME_BLOCK = 0.75   # likeness of two readings of one block
+# A reading is preferred when it is at most this far from the PDF's symbols,
+# as a share of how far the other is. One wrong digit in a long equation is
+# a small distance, so the test is which is nearer and by what proportion,
+# not by how much.
+EQUATION_NEARER = 0.5
+_DISPLAY_MATH = re.compile(r'<math display="block">(.*?)</math>', re.S)
+_TEX_DOTS = {"ldots": "...", "dots": "...", "cdots": "...", "sum": "Σ"}
+
+
+def _tex_name(word: str) -> str:
+    """The character a TeX name stands for, or the name where it has none."""
+    return _TEX_DOTS.get(word) or GREEK.get(word) or MATH_SIGNS.get(word) \
+        or word
+
+
+def _flat_tex(tex: str) -> str:
+    """The symbols of an equation in the order they are printed, with what
+    says how to set them taken off."""
+    t = html.unescape(tex)
+    # p'_a and p_a' are one symbol written two ways
+    t = re.sub(r"('+)_(\{[^{}]*\}|[A-Za-z0-9])", r"_\2\1", t)
+    for _ in range(4):
+        t = re.sub(r"\\(?:text|mathrm|mathit|mathbf|operatorname|textbf|"
+                   r"textit)\s*\{([^{}]*)\}", r"\1", t)
+        t = re.sub(r"\\[dt]?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}", r"\1/\2", t)
+        t = re.sub(r"\\(?:bar|overline|hat|tilde)\s*\{([^{}]*)\}", r"\1", t)
+    t = re.sub(r"\\\\(?:\[[^\]]*\])?", "", t)                 # a row's end
+    t = re.sub(r"\\(?:begin|end)\{[a-z*]+\}(?:\{[^{}]*\})?", "", t)
+    t = re.sub(r"\\(?:left|right|displaystyle|quad|qquad|[,;!: ])", "", t)
+    t = t.replace("\\%", "%").replace("\\$", "$").replace("\\{", "(") \
+         .replace("\\}", ")")
+    t = re.sub(r"\\([A-Za-z]+)", lambda m: _tex_name(m.group(1)), t)
+    t = re.sub(r"[{}_^\\&\s]", "", t)
+    return t.replace("−", "-").replace("–", "-").replace("’", "'") \
+            .replace("′", "'").replace("·", ".").replace("⋅", ".")
+
+
+def _tex_words(tex: str) -> int:
+    """How many separate runs of letters an equation is written in. The
+    flat form cannot see two symbols run into one: the PDF's text has no
+    spaces to compare with, and a reading that sets "ΔL APL = Q/L TVC" as
+    "ΔLAPL = Q/LTVC" has every symbol of the page and is not the page."""
+    t = html.unescape(tex)
+    t = re.sub(r"\\(?:begin|end)\{[a-z*]+\}(?:\{[^{}]*\})?", " ", t)
+    t = re.sub(r"\\(?:text|mathrm|mathit|mathbf|operatorname|textbf|textit|"
+               r"left|right|frac|dfrac|tfrac|bar|overline|hat|tilde|"
+               r"displaystyle|quad|qquad)\b", " ", t)
+    t = re.sub(r"\\([A-Za-z]+)", lambda m: " " + _tex_name(m.group(1)) + " ", t)
+    return len(re.findall(r"[^\W\d_]+", t))
+
+
+def _flat_printed(text: str) -> str:
+    return re.sub(r"\s", "", text).replace("−", "-").replace("–", "-") \
+        .replace("’", "'").replace("′", "'").replace("·", ".").replace("⋅", ".")
+
+
+def _undotted(flat: str) -> str:
+    """Without the rows of dots that stand for "and so on", which each
+    reader writes its own way."""
+    return re.sub(r"vdots|ddots|\.+|…", "", flat)
+
+
+def _borne_out(first: str, printed: str) -> bool:
+    """Whether the PDF's symbols hold this reading whole. The box's text
+    may run on past the equation (its number, the line above), so it is
+    looked for inside it; but a reading that ends where a number goes on
+    ("x=10" in "x=100") or begins inside one has found a piece of what is
+    printed, which is the very thing it is being checked for."""
+    at = printed.find(first) if first else -1
+    while at >= 0:
+        end = at + len(first)
+        cut_short = (first[-1].isdigit() and end < len(printed)
+                     and printed[end].isdigit()) \
+            or (first[0].isdigit() and at > 0 and printed[at - 1].isdigit())
+        if not cut_short:
+            return True
+        at = printed.find(first, at + 1)
+    return False
+
+
+def _likeness(a: str, b: str) -> float:
+    if not a and not b:
+        return 1.0
+    return difflib.SequenceMatcher(None, a, b, autojunk=False).ratio()
+
+
+_FIGURES_ONLY = re.compile(r"[0-9]*")
+
+
+def _differ_in_figures_alone(a: str, b: str) -> bool:
+    """Whether the second flat reading is the first but for digits, and has
+    no fewer of them anywhere. What the first reader does to figures is
+    drop them (the 0 of 20/100, the 1 of a dose of 1 1/2, two columns of a
+    table), and a second reading that has a digit more, or another digit,
+    is the one worth taking. One that has a digit fewer is as likely to
+    have dropped it."""
+    ops = difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes()
+    return all(tag == "equal" or (_FIGURES_ONLY.fullmatch(a[a0:a1])
+                                  and _FIGURES_ONLY.fullmatch(b[b0:b1])
+                                  and b1 - b0 >= a1 - a0)
+               for tag, a0, a1, b0, b1 in ops)
+
+
+def mend_equations(items: list, page_path: "str | None",
+                   second: "SecondOpinion | None"
+                   ) -> "tuple[list, list[tuple[str, str]], list[tuple[str, str]]]":
+    """Items with a display equation the second reader reads otherwise set
+    as the second reader has it, where the PDF's own text prefers that
+    reading or, on a scan, where the two differ only in figures; then (as it
+    was, as it is) in symbols for each one changed, and (first, second) for
+    each on which the readers differ and the first was kept."""
+    if second is None or not any(
+            it.html and not it.is_furniture and 'display="block"' in it.html
+            for it in items):
+        return items, [], []
+    from . import second as _second
+    text_in = _typeset_text_in(page_path)
+    offered = None
+    taken: set = set()      # the second reader's equations already printed
+    out, changed, differ = [], [], []
+    for it in items:
+        if not (it.html and not it.is_furniture and 'display="block"' in it.html):
+            out.append(it)
+            continue
+
+        def judge(m: "re.Match") -> str:
+            nonlocal offered
+            first = _flat_tex(m.group(1))
+            printed = _flat_printed(text_in(it.box)) \
+                if text_in is not None and it.box else ""
+            if text_in is not None:
+                # typeset: only a reading the PDF's symbols do not bear out
+                # is worth the second reader's time
+                if len(printed) < 4 or _borne_out(_undotted(first),
+                                                  _undotted(printed)):
+                    return m.group(0)
+            if offered is None:
+                theirs = _second.display_equations(second.reading(page_path) or "")
+                offered = [(t, _flat_tex(t)) for t in theirs]
+            best = (0.0, 0, 0)
+            for i in range(len(offered)):
+                for j in range(i, min(len(offered), i + 12)):
+                    if taken.intersection(range(i, j + 1)):
+                        break           # printed once already, for a block before
+                    like = _likeness(first, "".join(f for _, f in offered[i:j + 1]))
+                    if like > best[0]:
+                        best = (like, i, j)
+            run = offered[best[1]:best[2] + 1]
+            theirs_flat = "".join(f for _, f in run)
+            if best[0] < EQUATION_SAME_BLOCK \
+                    or _undotted(theirs_flat) == _undotted(first):
+                return m.group(0)
+            if _tex_words(" ".join(t for t, _ in run)) < _tex_words(m.group(1)) - 1:
+                differ.append((first, theirs_flat))
+                return m.group(0)       # it runs the symbols together
+            if text_in is not None:
+                off_first = 1 - _likeness(_undotted(first), _undotted(printed))
+                off_theirs = 1 - _likeness(_undotted(theirs_flat),
+                                           _undotted(printed))
+                if off_theirs > EQUATION_NEARER * off_first:
+                    return m.group(0)
+            elif not _differ_in_figures_alone(_undotted(first),
+                                              _undotted(theirs_flat)):
+                differ.append((first, theirs_flat))
+                return m.group(0)
+            changed.append((first, theirs_flat))
+            taken.update(range(best[1], best[2] + 1))
+            return "".join(f'<math display="block">{html.escape(t, quote=False)}</math>'
+                           for t, _ in run)
+
+        out.append(it._replace(html=_DISPLAY_MATH.sub(judge, it.html)))
+    return out, changed, differ
+
+
 # One block with the box's own outline is the plain case. A box may also
 # hold two blocks (a WARNING and its sentence), or be one cell of a table
 # that is a single block, and then no block has its outline: FM 4-25 printed
@@ -1759,6 +1961,221 @@ def tables_short_of_figures(items: list, page_path: "str | None"
         if got < TABLE_FIGURES_HELD * total:
             short.append((total, got))
     return short
+
+
+# ── a second opinion ─────────────────────────────────────────────────────────
+#
+# What the second reader (second.py) is asked, and when its answer is taken.
+# It is never taken on its own word. It reads a page only where the first
+# reading has been found wanting by something that cannot invent, and its
+# answer replaces the first reader's only where that same witness prefers
+# it. On a typeset page the witness is the PDF's own text.
+
+class SecondOpinion:
+    """Second readings of a book's pages, read the first time each is asked
+    for and kept beside the first reader's cache."""
+
+    def __init__(self, reader, cache=None):
+        self.reader, self.cache = reader, cache
+        self.asked = 0              # pages read in this run
+        self.consulted: set = set() # pages it was asked about, read or remembered
+        self.tables = self.equations = self.differ = 0
+        self.changed: list = []     # (page, what, as it was, as it is)
+        self.listed: list = []      # (page, the first reading, the second)
+        self.unanswered: set = set()    # pages it could not be asked about
+        self.why_unanswered: "str | None" = None
+        self._read: dict = {}       # this run's readings, with or without a cache
+
+    def summary(self) -> "str | None":
+        """One line on what the second reader was asked and what came of
+        it, or None where it was never asked."""
+        if not self.consulted:
+            return None
+        n = len(self.consulted)
+        took = []
+        if self.tables:
+            took.append(f"{self.tables} table(s)")
+        if self.equations:
+            took.append(f"{self.equations} equation(s)")
+        remembered = n - self.asked - len(self.unanswered)
+        return (f"second reader: asked about {n} page(s)"
+                + (f", {remembered} of them remembered" if remembered > 0 else "")
+                + (f"; {' and '.join(took)} set as it reads them"
+                   if took else "; nothing was changed on its word")
+                + (f"; {self.differ} equation(s) on which the readers "
+                   f"differ are listed above for a look" if self.differ else "")
+                + (f"\n    [!] the second reader could not be asked about "
+                   f"{len(self.unanswered)} of those pages "
+                   f"({self.why_unanswered}); they are as the first reader "
+                   f"read them, and the next build will ask again"
+                   if self.unanswered else ""))
+
+    def reading(self, page_path: str) -> "str | None":
+        """The second reader's reading of the page: its text, or None where
+        it gave none or could not be asked. Only a reading it gave (or
+        declined to give, by running on without stopping) is remembered. A
+        page it could not be asked about is asked about again by the next
+        build: a server that failed to start once must not leave every page
+        of the book filed as having nothing to say."""
+        key = page_key(page_path)
+        self.consulted.add(key)
+        if key in self._read:
+            return self._read[key]
+        if key in self.unanswered:
+            return None
+        if self.cache is not None:
+            try:
+                self._read[key] = self.cache.get(key)
+                return self._read[key]
+            except KeyError:
+                pass
+        try:
+            with Image.open(page_path) as im:
+                text = self.reader.read(im)
+        except Exception as exc:
+            self.unanswered.add(key)
+            self.why_unanswered = str(exc) or type(exc).__name__
+            return None
+        self.asked += 1
+        self._read[key] = text
+        if self.cache is not None:
+            self.cache.put(key, text)
+        return text
+
+    def sheet_path(self) -> "str | None":
+        """Where this build's account of the second reader goes: beside its
+        readings, which are beside the first reader's cache."""
+        path = getattr(self.cache, "path", None)
+        if not path:
+            return None
+        stem = path[:-len(".second.gz")] if path.endswith(".second.gz") else path
+        return stem + ".second.txt"
+
+    def write_sheet(self) -> "str | None":
+        """What was changed on the second reader's word and what was only
+        listed, in full, where it outlasts the build's log. A build with
+        nothing to say takes an earlier build's sheet away: it would
+        describe a book that is no longer the one on the shelf."""
+        path = self.sheet_path()
+        if path is None:
+            return None
+        if not (self.changed or self.listed):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            return None
+        lines = ["What the second reader changed, and what it reads otherwise.",
+                 "Pages are named as the book's files are: page_0034 is "
+                 "page_0034.xhtml.", ""]
+        if self.changed:
+            lines.append(f"Printed as the second reader has it ({len(self.changed)}):")
+            for page, what, was, now in self.changed:
+                lines += ["", f"  {page}  {what}", f"      was: {was}",
+                          f"      now: {now}"]
+            lines.append("")
+        if self.listed:
+            lines.append(f"The readers differ, and the first is printed "
+                         f"({len(self.listed)}):")
+            for page, first, theirs in self.listed:
+                lines += ["", f"  {page}  equation", f"      first:  {first}",
+                          f"      second: {theirs}"]
+            lines.append("")
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(lines))
+        except OSError:
+            return None
+        return path
+
+    def close(self) -> None:
+        if self.cache is not None:
+            self.cache.save()
+        try:
+            self.reader.close()
+        except Exception:
+            pass
+
+
+# Set by the command line (--second-reader), like WITNESS_WAIVED: a build
+# either has a second reader for the whole of its run or has none.
+SECOND_OPINION: "SecondOpinion | None" = None
+
+# A rebuilt table is questioned where it holds less than this share of the
+# figures the PDF prints in its place, and the second reader's table is
+# taken where it holds nearly all of them, holds clearly more than the first,
+# and prints next to nothing the PDF does not print there. "There" is the
+# first reader's box and a little round it: a table that lost its last
+# column has a box that stops short of it too (Table 12 of Burning Up: the
+# box held 55 of the table's 69 figures, and its header row sat above it).
+#
+# Measured on the 26 typeset pages of the shelf whose tables had lost most:
+# the first reader's page held 78% of the 1,662 figures the PDF prints and
+# the second's 91%. The second held more on seventeen of those pages and
+# fewer on seven, which is why its table is taken only where the PDF's
+# figures say it is the better one: six tables there, none of them with a
+# figure the PDF does not print.
+TABLE_QUESTIONED = 0.98
+TABLE_TAKEN = 0.95
+TABLE_BETTER_BY = 0.1
+TABLE_REACH = 0.05          # round the first reader's box, of the page
+TABLE_UNPRINTED = 0.05      # of the figures the second reader's table holds
+
+
+def mend_tables(items: list, page_path: "str | None",
+                second: "SecondOpinion | None"
+                ) -> "tuple[list, list[tuple[int, int, int, list]]]":
+    """Items with a table that lost figures replaced by the second reader's
+    table of the same place, where the PDF's own text prefers it; and
+    (figures printed, held before, held now, figures it holds that the PDF
+    does not print) for each one replaced."""
+    if second is None:
+        return items, []
+    tables = [it for it in items if it.html and it.box and it.figure is None
+              and "<table" in it.html and not it.is_furniture]
+    text_in = _typeset_text_in(page_path) if tables else None
+    if text_in is None:
+        return items, []
+    out, mended, offered = list(items), [], None
+    for it in tables:
+        printed = _figures(text_in(it.box))
+        total = sum(printed.values())
+        if total < 6:
+            continue
+        first = _share_held(printed, _figures(_strip_tags(it.html)))
+        if first >= TABLE_QUESTIONED:
+            continue
+        if offered is None:
+            from . import second as _second
+            offered = _second.tables(second.reading(page_path) or "")
+        x0, y0, x1, y1 = it.box
+        near = _figures(text_in((x0 - TABLE_REACH, y0 - TABLE_REACH,
+                                 x1 + TABLE_REACH, y1 + TABLE_REACH)))
+        best = None
+        for cand in offered:
+            if _share_held(printed, _figures(_strip_tags(cand))) \
+                    < TABLE_TAKEN - TABLE_BETTER_BY:
+                continue                # another table of the page
+            held = _figures(_strip_tags(cand))
+            unprinted = sorted((held - near).elements())
+            share = _share_held(printed, held)
+            if share >= TABLE_TAKEN and share >= first + TABLE_BETTER_BY \
+                    and len(unprinted) <= max(1, TABLE_UNPRINTED
+                                              * sum(held.values())) \
+                    and (best is None or share > best[0]):
+                best = (share, cand, unprinted)
+        if best is None:
+            continue
+        html_ = _to_xhtml(best[1])
+        if "<table" not in html_:
+            continue
+        html_ = re.sub(r"<table(?![^>]*\bborder=)", '<table border="1"', html_,
+                       count=1)
+        k = next(j for j, x in enumerate(out) if x is it)
+        out[k] = it._replace(html=html_)
+        mended.append((total, round(first * total), round(best[0] * total),
+                       best[2]))
+    return out, mended
 
 
 def drop_doubled_boxes(items: list, page_path: "str | None" = None
@@ -8484,6 +8901,39 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
                          "which the page's text layer does not hold, and no "
                          "classical reader is installed to ask")
                       + " — left out rather than printed as invention")
+            items, _mended = mend_tables(items, path, SECOND_OPINION)
+            items, _eqs, _differ = mend_equations(items, path, SECOND_OPINION)
+            if SECOND_OPINION is not None:
+                _page = os.path.splitext(os.path.basename(path))[0]
+                SECOND_OPINION.tables += len(_mended)
+                SECOND_OPINION.equations += len(_eqs)
+                SECOND_OPINION.differ += len(_differ)
+                SECOND_OPINION.changed += [(_page, "equation", _w, _n)
+                                           for _w, _n in _eqs]
+                SECOND_OPINION.changed += [
+                    (_page, "table", f"held {_w} of the {_p} figures the PDF "
+                     f"prints in its place", f"holds {_n}"
+                     + (f"; also prints {', '.join(_o)}, which the PDF does "
+                        f"not" if _o else ""))
+                    for _p, _w, _n, _o in _mended]
+                SECOND_OPINION.listed += [(_page, _a, _b) for _a, _b in _differ]
+            for _was, _now in _eqs:
+                print(f"    [+] {os.path.basename(path)}: an equation the "
+                      f"second reader reads otherwise is set as it reads it: "
+                      f"{_was[:60]} → {_now[:60]}")
+            for _one, _other in _differ:
+                print(f"    [?] {os.path.basename(path)}: the two readers "
+                      f"differ on an equation and nothing on the page says "
+                      f"which is right — the first is kept; worth a look:\n"
+                      f"          first:  {_one[:110]}\n"
+                      f"          second: {_other[:110]}")
+            for _printed, _was, _now, _odd in _mended:
+                print(f"    [+] {os.path.basename(path)}: a table held {_was} "
+                      f"of the {_printed} figures the PDF prints in its "
+                      f"place; the second reader's holds {_now} and is "
+                      f"printed instead"
+                      + (f" (it also prints {', '.join(_odd)}, which the PDF "
+                         f"does not: worth a look)" if _odd else ""))
             for _printed, _held in tables_short_of_figures(items, path):
                 print(f"    [?] {os.path.basename(path)}: a table holds "
                       f"{_held} of the {_printed} figures the PDF prints in "
@@ -8701,6 +9151,15 @@ def build_epub(
     if n_phantoms:
         print(f"    suppressed {n_phantoms} phantom digit block(s) the "
               f"layout invented over prose — verified against the ink")
+    if SECOND_OPINION is not None:
+        if SECOND_OPINION.summary():
+            print("    " + SECOND_OPINION.summary())
+        # also when it was asked nothing: an earlier build's account would
+        # otherwise stay beside a book it no longer describes
+        _sheet = SECOND_OPINION.write_sheet()
+        if _sheet:
+            print(f"    second reader: its changes and the differences it "
+                  f"did not settle are written out in full: {_sheet}")
     if n_doubled:
         print(f"    left out {n_doubled} picture(s) of a ruled box that a "
               f"block of the page already holds — a table printed as a "
@@ -12268,6 +12727,22 @@ def main(argv: "list[str] | None" = None) -> None:
     parser.add_argument("--min-still-frames", type=int, default=3,
                         help="Frames a page must be held still to count. Raise if you get "
                              "spurious pages from mid-turn pauses (default: 3)")
+    parser.add_argument("--second-reader", action="store_true",
+                        help="Ask a second reader about what the first reads "
+                             "worst: tables of figures and equations set on "
+                             "their own lines. On a typeset page it is asked "
+                             "only where the PDF's own text does not bear the "
+                             "first reading out, and its table or equation is "
+                             "printed only where that text prefers it. On a "
+                             "scan nothing can say which reader is right, so "
+                             "its equation is taken only where the two differ "
+                             "in figures alone and it has no fewer of them, "
+                             "and every other difference is listed for a "
+                             "look, in the log and in a .second.txt beside "
+                             "the cache. Needs the model's two .gguf "
+                             "files in ~/.cache/codicology/second/ (see "
+                             "second.py); its readings are cached beside "
+                             "--ocr-cache")
     parser.add_argument("--without-witness", action="store_true",
                         help="Run even though tesseract is not installed. Two "
                              "checks depend on it and both then pass without "
@@ -12344,6 +12819,22 @@ def _convert(args, parser) -> None:
         print("[!] Running WITHOUT a witness. Pages with no text layer will "
               "pass the fabrication check unexamined, and pages deleted as "
               "blank will be deleted on this pipeline's word alone.")
+
+    if args.second_reader:
+        from . import second as _second
+        if not _second.available():
+            sys.exit("--second-reader was asked for and there is none to "
+                     f"ask: put the model's two .gguf files in "
+                     f"{_second.DEFAULT_DIR} (or name them in "
+                     f"${_second.MODEL_ENV} and ${_second.MMPROJ_ENV}), and "
+                     f"have llama-server on the PATH.")
+        _opinion = SecondOpinion(
+            _second.SecondReader(),
+            _second.SecondCache(_second.SecondCache.beside(args.ocr_cache))
+            if args.ocr_cache else None)
+        globals()["SECOND_OPINION"] = _opinion
+        import atexit
+        atexit.register(_opinion.close)
 
     if args.pages_from or args.from_images:
         # Neither mode reads a video, so a lone positional is the output PDF.
