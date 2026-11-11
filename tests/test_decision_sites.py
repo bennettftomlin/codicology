@@ -355,22 +355,26 @@ def test_a_bare_decision_lands_only_where_it_cannot_be_wrong(
 def test_a_bare_decision_does_not_double_what_the_page_already_reads(
         vtb, tmp_path):
     body = "<p>a dose of 5 μgs daily</p>"
-    assert _read(body)[3] == "gs", "the tokeniser never sees the μ"
+    with adj.tokens_as(None):       # a sheet from before words were Unicode
+        assert _read(body)[3] == "gs", "the old pattern never saw the μ"
     got, st = _both(vtb, tmp_path, body, [_bare(0, 0, "gs", "μgs")])
     assert (got, st) == (body, {"applied": 0, "stale": 1})
 
 
 def test_a_piece_of_a_longer_word_is_never_rewritten(vtb, tmp_path):
-    """The tokeniser stops at a letter outside its alphabet, so the page's
-    "diabolē" is read as "diabol" — and a correction to that token would
-    land inside the word, leaving "diaboléē". The page is left as read,
-    whichever way the decision was written, and whether the accent is its
-    own character or not."""
+    """The old pattern stopped at a letter outside Latin-1, so the page's
+    "diabolē" was read as "diabol" — and a correction to that token would
+    land inside the word, leaving "diaboléē". A decision made under that
+    pattern is still read with it, and the page is left as read, whichever
+    way the decision was written, and whether the accent is its own
+    character or not. (What a sheet made today does with the same word is
+    in test_tokens.py.)"""
     for tail, read in (("ē", "diabol"), ("e\u0304", "diabole")):
         body = f"<p>the Greek diabol{tail}, which is slander</p>"
-        assert _read(body)[2] == read
-        for row in (_fix(body, 2, "diabolé"),
-                    _bare(0, 0, read, "diabolé")):
+        with adj.tokens_as(None):
+            assert _read(body)[2] == read
+            rows = (_fix(body, 2, "diabolé"), _bare(0, 0, read, "diabolé"))
+        for row in rows:
             got, st = _both(vtb, tmp_path, body, [row])
             assert (got, st) == (body, {"applied": 0, "stale": 1})
 
@@ -423,8 +427,9 @@ def test_a_correction_that_repeats_its_surroundings_is_not_written(
              "already prints '[α]' against it"),
             ("<p>between 41^{circ} 0’ and 42^{circ} 2’ north</p>", 1, "0'",
              "already prints \"0'\" beside it")):
-        toks = _read(body)
-        rows = [_fix(body, k, new)]
+        with adj.tokens_as(None):   # these sheets were all the old kind
+            toks = _read(body)
+            rows = [_fix(body, k, new)]
         if toks.count(toks[k]) == 1:
             rows.append(_bare(0, 0, toks[k], new))
         for row in rows:
@@ -481,7 +486,8 @@ def test_a_change_of_type_is_not_a_space_between_what_is_printed(
     row = {"page": 0, "occurrence": 0, "old": "D", "new": "[α]D"}
     got, st = _both(vtb, tmp_path, body, [row])
     assert (got, st) == (body, {"applied": 0, "stale": 1})
-    _, (why,) = review.apply_page_decisions(body, [row])
+    with adj.tokens_as(None):
+        _, (why,) = review.apply_page_decisions(body, [row])
     assert why == "the page already reads '[α]D' there"
     # and through it the shared part is still trimmed, not refused
     body = "<p>a <b>£</b>5O note</p>"

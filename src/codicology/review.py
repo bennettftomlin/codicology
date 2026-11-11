@@ -65,6 +65,7 @@ import subprocess
 import tempfile
 import unicodedata
 
+from .adjudicate import tokens_as
 from .adjudicate import (_TYPO, STRUCK, WORD, _is_word, body_span,
                          epub_page_texts, fold_text, fold_word, hard_view,
                          page_words, tokens)
@@ -564,10 +565,15 @@ def render_sheet(report, crops=None) -> str:
     tiers = build_tiers(report["disputes"])
     name = re.sub(r"\.json$", "", os.path.basename(str(report.get("name")
                   or report.get("epub") or "book")))
-    meta = json.dumps({"name": name, "pdf": report.get("pdf", ""),
-                       "epub": report.get("epub", ""),
-                       "page_files": report.get("page_files"),
-                       "sheet": _fingerprint(report)})
+    meta = {"name": name, "pdf": report.get("pdf", ""),
+            "epub": report.get("epub", ""),
+            "page_files": report.get("page_files"),
+            "sheet": _fingerprint(report)}
+    if report.get("tokens") is not None:
+        # the generation of word pattern the rows are addressed in; the
+        # apply step reads the page the same way (adjudicate.tokens_as)
+        meta["tokens"] = report["tokens"]
+    meta = json.dumps(meta)
     parts = [
         "<!doctype html><meta charset='utf-8'>",
         f"<title>{html.escape(name)} — dispute review</title>",
@@ -1129,8 +1135,9 @@ def apply_decisions(epub_path, decisions_path, out=None) -> dict:
         if i not in by_page:
             continue
         rows = by_page.pop(i)
-        xhtml, outcomes = apply_page_decisions(
-            zin.read(name).decode("utf-8"), rows)
+        with tokens_as(dec.get("tokens")):
+            xhtml, outcomes = apply_page_decisions(
+                zin.read(name).decode("utf-8"), rows)
         for d, why in zip(rows, outcomes):
             if why is None:
                 applied.append(d)
@@ -1330,7 +1337,8 @@ def main(report_path, out=None, dpi=200, crops=True) -> int:
         print(f"ink located for {located} of {len(report['disputes'])} "
               f"disputes")
     out = out or re.sub(r"(\.json)?$", "", str(report_path), count=1) + ".html"
-    html_text = render_sheet(report, uris)
+    with tokens_as(report.get("tokens")):
+        html_text = render_sheet(report, uris)
     with open(out, "w") as f:
         f.write(html_text)
     tiers = build_tiers(report["disputes"])

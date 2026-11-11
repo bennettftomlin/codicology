@@ -42,6 +42,7 @@ through the reviewer's exported decisions, `codicology apply` and
 `convert --apply-decisions`. The reporting stays here; the rewriting is a
 human act.
 """
+import contextlib
 import html
 import json
 import os
@@ -51,6 +52,8 @@ import subprocess
 import tempfile
 import unicodedata
 from collections import Counter
+
+import regex
 
 # ── folding: policy differences are not disputes ─────────────────────────────
 
@@ -75,7 +78,57 @@ def fold_word(w: str) -> str:
                    if unicodedata.category(c) != "Mn")
 
 
-WORD = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿŒœ][A-Za-zÀ-ÖØ-öø-ÿŒœ'’\-]*")
+# ── what a word is ───────────────────────────────────────────────────────────
+#
+# A letter, then letters, combining marks, apostrophes and hyphens. Any
+# letter: the pattern used to be written out by hand as far as Latin-1, so a
+# word was cut at the first macron, háček or Greek letter in it, and the
+# sheet disputed the fragment — "Kenky" for Kenkyū, "techn" for technē. A
+# reviewer who typed the whole word against a fragment was offering a
+# correction the applier had to refuse. 1,406 of the shelf's 38,528 pages
+# tokenise differently, in 69 books; the two most changed are a history of
+# the ancient Greek world and a book of chemistry.
+#
+# A dispute record and a decisions file are addressed in tokens: which
+# instance of a word, and the words either side of it. So each says which
+# generation of the pattern it was made under (`tokens`), and anything made
+# under the old one is read with the old one, exactly as it always was
+# (tokens_as). Nothing already reviewed has to be addressed again.
+TOKENS = 2
+_WORD_LATIN1 = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿŒœ][A-Za-zÀ-ÖØ-öø-ÿŒœ'’\-]*")
+_WORD_ANY = regex.compile(r"\p{L}[\p{L}\p{M}'’\-]*")
+
+
+class _Words:
+    """The word pattern in force. One object, so that every module holding
+    it follows a change of generation together."""
+
+    def __init__(self, pattern) -> None:
+        self.pattern = pattern
+
+    def findall(self, text: str) -> list:
+        return self.pattern.findall(text)
+
+    def finditer(self, text: str):
+        return self.pattern.finditer(text)
+
+    def fullmatch(self, text: str):
+        return self.pattern.fullmatch(text)
+
+
+WORD = _Words(_WORD_ANY)
+
+
+@contextlib.contextmanager
+def tokens_as(generation):
+    """Tokenise as a record or decisions file of `generation` was made:
+    its `tokens` value, None for one from before there was such a thing."""
+    was = WORD.pattern
+    WORD.pattern = _WORD_ANY if generation == TOKENS else _WORD_LATIN1
+    try:
+        yield
+    finally:
+        WORD.pattern = was
 
 
 def tokens(text: str) -> list:
@@ -448,6 +501,61 @@ def _is_roman(orig: str) -> bool:
     return bool(_ROMAN.match(t.upper()))
 
 
+# ── what the witness cannot testify to ───────────────────────────────────────
+#
+# tesseract reads with an English model and Vision is little better: neither
+# has ō, ł or β in it. Shown one, each writes the nearest thing it does
+# have, so "chōra" comes back "chéra", "THβC" comes back "THBC", and a
+# Greek word comes back as whatever Latin letters it resembles ("μέρος",
+# "pépos"). That is not a second reading of the word. It is the witness
+# being unable to read it, which is how a diacritic it merely drops is
+# treated already (fold_word).
+#
+# With words cut at such letters none of this reached the ladder, because
+# the pieces never lined up one to one. With whole words it all does, and
+# the rungs rule on it: on a history of the ancient Greek world 777 new
+# disputes, 54 of them verdicts against the printed word; on a book of
+# chemistry 703, of which Vision crowned "THBC" over "THβC" and its kin 223
+# times. So where the two readings differ only at letters the witness has
+# no model of, there is no dispute, and a word it could not have read is
+# not counted against it when it is missing from its page. Adjudicated
+# again that way, both books have fewer disputes than the cut words gave
+# them, 1,392 against 1,464 and 1,085 against 1,350; fewer verdicts against
+# the printed word in the first, 92 against 130, and as many in the second;
+# and the first's runs of "words only we read", which were its Greek
+# quotations, fall from 36 to 4.
+_WITNESS_LETTER = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿŒœ]")
+
+
+def beyond_the_witness(word: str) -> bool:
+    """Whether a word holds a letter the witness engines have no model of."""
+    return any((ch.isalpha() and not _WITNESS_LETTER.fullmatch(ch))
+               or unicodedata.category(ch) == "Mn" for ch in word)
+
+
+def _letters(word: str) -> str:
+    return word.translate(_TYPO).lower().replace("-", "").replace("'", "")
+
+
+def _differs_only_where_blind(ours: str, theirs: str) -> bool:
+    """Whether the witness's reading is ours wherever it could read ours:
+    every difference sits on letters of ours that it has no model of."""
+    import difflib
+    a, b = _letters(ours), _letters(theirs)
+    blind = False
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(
+            None, a, b, autojunk=False).get_opcodes():
+        if tag == "equal":
+            continue
+        piece = a[i1:i2]
+        if not piece or any(_WITNESS_LETTER.fullmatch(ch) for ch in piece):
+            return False        # it read something we do not have, or
+        if j2 - j1 > 2 * (i2 - i1):     # differs at a letter it can read
+            return False
+        blind = True
+    return blind
+
+
 def _dash_parts(word: str) -> int:
     """How many pieces a dash joins in a token: 2 for well-nigh, 1 for nigh."""
     return len([p for p in word.translate(_TYPO).split("-") if p])
@@ -466,6 +574,8 @@ def adjudicate_pair(a: str, b: str, lexicon: Counter,
     fa, fb = fold_word(a), fold_word(b)
     if fa == fb:
         return {"rung": "fold", "winner": a}
+    if _differs_only_where_blind(a, b):
+        return {"rung": "fold", "winner": a, "note": "beyond the witness"}
     if _is_roman(a) or _is_roman(b):
         # a chapter numeral is apparatus: the book's common words and the
         # dictionary both outnumber every numeral, and eagle's lexicon
@@ -629,7 +739,10 @@ def surya_only_runs(s_tok: list, t_tok: list,
 
     for w in s_tok:
         f = fold_word(w)
-        if len(f) < 3:
+        # A word the witness could not have read says nothing by its
+        # absence from the witness's page, any more than a short one does:
+        # a Greek quotation is not three words nobody else saw.
+        if len(f) < 3 or beyond_the_witness(w):
             # Short words neither witness nor convict, but the run's TEXT
             # must be the page's verbatim span — a recorded run with its
             # "of"s and "a"s dropped is a sequence the page never printed,
@@ -1269,7 +1382,7 @@ def _adjudicate(epub: str, pdf: str, report: "str | None", scale: float,
               + (f" — {inkless} OVER BLANK PAPER" if inkless else ""))
     if report:
         record = {"epub": epub, "pdf": pdf, "pages": n_done,
-                  "page_files": len(pages),
+                  "page_files": len(pages), "tokens": TOKENS,
                   "lexicon_size": len(lexicon),
                   "rungs": dict(rungs), "disputes": disputes,
                   "surya_only": surya_only}

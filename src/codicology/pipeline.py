@@ -7328,6 +7328,7 @@ def apply_reviewer_decisions(bodies: list, decisions_path: str,
     decision is addressed to, deletions before swaps, and a decision that
     cannot be placed with certainty is stale — reported and left as read,
     never guessed at."""
+    from .adjudicate import tokens_as
     from .review import (apply_page_decisions, coerce_page, pages_guard,
                          retired_rows)
     try:
@@ -7358,7 +7359,9 @@ def apply_reviewer_decisions(bodies: list, decisions_path: str,
             continue
         by_page.setdefault(i, []).append(d)
     for i in sorted(by_page):
-        bodies[i], outcomes = apply_page_decisions(bodies[i], by_page[i])
+        # read the page the way the file's rows were addressed
+        with tokens_as(dec.get("tokens")):
+            bodies[i], outcomes = apply_page_decisions(bodies[i], by_page[i])
         for d, why in zip(by_page[i], outcomes):
             if why is None:
                 applied += 1
@@ -10233,7 +10236,10 @@ def _reads_as_empty(text: str) -> bool:
     if re.fullmatch(r"[0-9]{1,4}", text.strip()):
         return True
     unbracketed = re.sub(r"\[[^][]*\]", " ", text)
-    return not re.search(r"[A-Za-z0-9]", unbracketed)
+    # Any letter or digit, in any script. The test was for an ASCII one, so
+    # a page of Greek or Cyrillic read as empty: it became a candidate for
+    # deletion as blank and its PDF text layer was set aside.
+    return not any(ch.isalnum() for ch in unbracketed)
 
 
 @functools.lru_cache(maxsize=None)

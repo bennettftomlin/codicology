@@ -24,6 +24,10 @@ dependencies = [
     "pypdfium2>=4.0",
     "pymupdf>=1.24",
     "lxml>=4.9",
+    # The word pattern is written in Unicode properties (\p{L}\p{M}), which
+    # the standard library's re does not have. transformers brings this in
+    # already for anyone with the surya extra.
+    "regex>=2023.8.8",
     "ebooklib>=0.18",
 ]
 
