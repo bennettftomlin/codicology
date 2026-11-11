@@ -9152,6 +9152,228 @@ def _scanned_pages(doc) -> set:
     return found if 2 * len(found) > len(doc) else set()
 
 
+# Pages are rendered in worker processes once a book is long enough to repay
+# starting them. A warm rebuild of Kill or Get Killed (440 pages, every page
+# already read) spent 126 of its 202 seconds here, one page at a time, on a
+# machine with ten cores: 107 of them in the PNG encoder. Each worker opens
+# the PDF for itself, because pdfium is not safe to share, and writes the
+# same files the one-at-a-time loop wrote, byte for byte, so nothing keyed
+# on a page's bytes moves.
+#
+# The workers are plain subprocesses handed their pages on stdin, not a
+# multiprocessing pool. A pool's workers begin by importing the caller's
+# main module again, and a script that calls this without a __main__ guard
+# would be run a second time in each of them.
+PDF_POOL_MIN_PAGES = 24
+PDF_POOL_WORKERS = 8
+_PDF_WORKER = (
+    "import json, sys; sys.path.insert(0, sys.argv[1]); "
+    "from {module} import _load_pdf_share; "
+    "json.dump(_load_pdf_share(json.load(sys.stdin)), sys.stdout)")
+
+
+def _load_pdf_page(doc, i: int, pdf_path: str, pages_dir: str,
+                   is_scan: bool) -> str:
+    """Write page `i` of an open PDF as the image the recogniser will read,
+    with its sidecars, and return the image's path."""
+    import pypdfium2 as pdfium
+    page = doc[i]
+    stem = os.path.join(pages_dir, f"page_{i:04d}")
+    images = [o for o in page.get_objects() if isinstance(o, pdfium.PdfImage)]
+    pw_pt, ph_pt = page.get_size()
+    out: str | None = None
+    extracted = False
+    if len(images) == 1:
+        # The shortcut is only honest when the one image IS the page — the
+        # shape this script's own output has. A born-digital page holding a
+        # single small illustration also has exactly one image object, and
+        # taking the shortcut there discards every word of the page's
+        # vector text and keeps the illustration as "the page": a field
+        # manual lost forty-seven pages of procedure prose to it, silently,
+        # while its picture-free pages came through perfectly.
+        try:
+            # The image's size as the PDF records it. get_bitmap() gave the
+            # same two numbers by decoding the whole image to count them:
+            # 8.0 ms a page against 0.005.
+            bm_w, bm_h = images[0].get_px_size()
+            pw, ph = page.get_size()
+            covers = (bm_w * bm_h) >= 0.5 * (pw / 72 * 150) * (ph / 72 * 150)
+            # …and it must cover the page, not merely a lot of it. A
+            # facsimile IS the page and measures 1.00; a photograph with
+            # a caption beside it measures 0.80-0.89, and extracting it
+            # as "the page" threw the caption away on every plate in a
+            # book. Measured across four scans and one born-digital
+            # title, nothing legitimate falls between.
+            bounds = images[0].get_bounds()
+            placed = (((bounds[2] - bounds[0]) * (bounds[3] - bounds[1]))
+                      / max(1e-6, pw * ph))
+            covers = covers and placed >= 0.97
+            # A page facsimile has the page's own shape. A born-digital
+            # page can hold one LARGE figure — a chart wider than it is
+            # tall — and taking it as "the page" discards every word of
+            # vector text beside it; what surya then reads is a textless
+            # chart, and what it returned, four separate times, was an
+            # invented table. Coverage alone passed that chart; shape
+            # does not.
+            page_aspect = pw / max(1e-6, ph)
+            img_aspect = bm_w / max(1e-6, bm_h)
+            covers = covers and (
+                0.8 <= img_aspect / max(1e-6, page_aspect) <= 1.25)
+        except Exception:
+            covers = False
+        # A page placed by a flipping matrix must not be taken as its
+        # own bytes: the shortcut keeps the original encoding, which is
+        # its whole point, and re-encoding a turned copy would give
+        # that up. Render such a page instead — correct beats cheap.
+        if covers and native_orientation(images[0]) == []:
+            try:
+                images[0].extract(stem)  # keeps the original encoding
+                out = next(iter(sorted(glob.glob(stem + ".*"))), None)
+                extracted = out is not None
+            except Exception:
+                out = None
+    if out is None:
+        # A page this script did not write, or one built from several images,
+        # is safer to render whole than to pick apart.
+        # Lossless, always. This raster is what the recogniser reads and
+        # what a figure falls back to when it cannot be taken from the
+        # PDF directly, so any loss here is permanent and lands hardest
+        # on photographic plates — the very pages a size-based choice
+        # would have encoded as JPEG. On text and line art PNG is also
+        # the smaller file (631KB against 1182KB on a manual page); on a
+        # plate it is larger, and that costs scratch space in a
+        # directory this run deletes when it ends.
+        out = stem + ".png"
+        page.render(scale=300 / 72,
+                    draw_annots=False).to_pil().convert("RGB").save(
+            out, "PNG", dpi=(300, 300)
+        )
+    # The page's own text layer rides along as a sidecar. It is never used
+    # as content — this pipeline reads the ink — but it is a witness: a
+    # recognition that shares almost no vocabulary with what the page says
+    # about itself has invented something, and without the sidecar that
+    # comparison cannot be made at read time.
+    try:
+        layer = page.get_textpage().get_text_bounded().strip()
+    except Exception:
+        layer = ""
+    if layer:
+        with open(out + ".layer.txt", "w", encoding="utf-8") as fh:
+            fh.write(layer)
+        # Born-digital, or somebody else's OCR? The distinction decides
+        # whether this layer may correct our words, restore a page we
+        # could not read, or only bear witness — and getting it wrong
+        # imports a worse reading as if it were the truth. "The page was
+        # rendered rather than extracted" is not the test: a library scan
+        # stored as two MRC layers is rendered too, and forty-three pages
+        # of one were treated as a publisher's typesetting, pulling in
+        # sixty of Google's words and filling two blank endpapers with
+        # OCR of the embossed seal. What settles it is what sits behind
+        # the text: a scan has a picture of the whole page under it, and
+        # a born-digital page does not. A photographic plate covers at
+        # most about nine tenths of its page, leaving room for the
+        # caption; a facsimile covers all of it.
+        # The union of the images, not the largest of them. "Is there a
+        # picture of the whole page behind this text" is a question about
+        # coverage, and a scan does not have to answer it with one image:
+        # stored as two tiles, or as MRC layers, its largest piece can sit
+        # well under the threshold while the page is completely covered.
+        # One book's cover does exactly that — largest 0.71, union 1.0 —
+        # and was being handed to the reconciler as a publisher's
+        # typesetting. The error is not symmetric, which is why this
+        # errs upward: calling a born-digital page a scan costs a
+        # correction we could have made, while calling a scan
+        # born-digital lets somebody else's OCR rewrite the author.
+        boxes = []
+        for o in images:
+            try:
+                b = o.get_bounds()
+                boxes.append((min(b[0], b[2]), min(b[1], b[3]),
+                              max(b[0], b[2]), max(b[1], b[3])))
+            except Exception:
+                pass
+        behind = _union_fraction(boxes, pw_pt, ph_pt)
+        # …nor does the picture have to reach the page's edges. A scan
+        # set inside its margins covers seven tenths of the page and is
+        # no more typeset for it; what gives it away is the book.
+        if not extracted and behind < 0.9 and not is_scan:
+            open(out + ".native", "w").close()
+    # Where this page came from. A figure cut out of the page raster is a
+    # crop of a crop — the raster already resampled the artwork, at 3.12x
+    # on one manual's line drawings, and JPEG rang every hard edge it
+    # made. With the source in hand a figure can be taken from the PDF
+    # itself instead — which needs to know when the largest picture
+    # on the page is not a figure at all but the scan of the page.
+    try:
+        with open(out + ".source.json", "w") as fh:
+            json.dump({"pdf": os.path.abspath(pdf_path), "page": i,
+                       "facsimile": bool(extracted),
+                       "scan": is_scan}, fh)
+    except OSError:
+        pass
+
+    return out
+
+
+def _load_pdf_share(job: dict) -> dict:
+    """A worker's share of a PDF: the pages it was dealt, by index. Returns
+    each page's file name."""
+    import pypdfium2 as pdfium
+    doc = pdfium.PdfDocument(job["pdf"])
+    scanned = set(job["scanned"])
+    try:
+        return {str(i): os.path.basename(
+                    _load_pdf_page(doc, i, job["pdf"], job["dir"], i in scanned))
+                for i in job["pages"]}
+    finally:
+        try:
+            doc.close()
+        except Exception:
+            pass
+
+
+def _load_pdf_pages_in_workers(pdf_path: str, pages_dir: str, n_pages: int,
+                               scanned: set, workers: int) -> "list[str] | None":
+    """Render a PDF's pages across `workers` processes. None if any of them
+    failed, and the caller renders the book itself."""
+    import subprocess
+    from concurrent.futures import ThreadPoolExecutor
+    argv = [sys.executable, "-c", _PDF_WORKER.format(module=__name__),
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))]
+    # Dealt round, not cut into runs: a book's plates sit together, and a
+    # run of them would leave one worker with all the slow pages.
+    jobs = [json.dumps({"pdf": pdf_path, "dir": pages_dir,
+                        "pages": list(range(k, n_pages, workers)),
+                        "scanned": sorted(scanned)})
+            for k in range(workers)]
+
+    def run(job: str) -> "dict | None":
+        try:
+            done = subprocess.run(argv, input=job, capture_output=True,
+                                  text=True)
+            return json.loads(done.stdout) if done.returncode == 0 else None
+        except (OSError, ValueError):
+            return None
+
+    with ThreadPoolExecutor(max_workers=workers) as waiting:
+        shares = list(waiting.map(run, jobs))
+    names: dict = {}
+    for share in shares:
+        if share is None:
+            return None
+        names.update(share)
+    if len(names) != n_pages:
+        return None
+    return [os.path.join(pages_dir, names[str(i)]) for i in range(n_pages)]
+
+
+def _pdf_pool_workers(n_pages: int) -> int:
+    """How many processes to render with: one means stay in this one."""
+    if n_pages < PDF_POOL_MIN_PAGES:
+        return 1
+    return max(1, min(PDF_POOL_WORKERS, os.cpu_count() or 1))
+
+
 def load_pages_from_pdf(pdf_path: str, pages_dir: str) -> list[str]:
     """
     Take the page images straight back out of a PDF this script wrote earlier.
@@ -9168,139 +9390,19 @@ def load_pages_from_pdf(pdf_path: str, pages_dir: str) -> list[str]:
 
     doc = pdfium.PdfDocument(pdf_path)
     scanned = _scanned_pages(doc)
+    n_pages = len(doc)
     page_paths: list[str] = []
-    for i, page in enumerate(doc):
-        stem = os.path.join(pages_dir, f"page_{i:04d}")
-        images = [o for o in page.get_objects() if isinstance(o, pdfium.PdfImage)]
-        pw_pt, ph_pt = page.get_size()
-        out: str | None = None
-        extracted = False
-        if len(images) == 1:
-            # The shortcut is only honest when the one image IS the page — the
-            # shape this script's own output has. A born-digital page holding a
-            # single small illustration also has exactly one image object, and
-            # taking the shortcut there discards every word of the page's
-            # vector text and keeps the illustration as "the page": a field
-            # manual lost forty-seven pages of procedure prose to it, silently,
-            # while its picture-free pages came through perfectly.
-            try:
-                bm = images[0].get_bitmap()
-                pw, ph = page.get_size()
-                covers = (bm.width * bm.height) >= 0.5 * (pw / 72 * 150) * (ph / 72 * 150)
-                # …and it must cover the page, not merely a lot of it. A
-                # facsimile IS the page and measures 1.00; a photograph with
-                # a caption beside it measures 0.80-0.89, and extracting it
-                # as "the page" threw the caption away on every plate in a
-                # book. Measured across four scans and one born-digital
-                # title, nothing legitimate falls between.
-                bounds = images[0].get_bounds()
-                placed = (((bounds[2] - bounds[0]) * (bounds[3] - bounds[1]))
-                          / max(1e-6, pw * ph))
-                covers = covers and placed >= 0.97
-                # A page facsimile has the page's own shape. A born-digital
-                # page can hold one LARGE figure — a chart wider than it is
-                # tall — and taking it as "the page" discards every word of
-                # vector text beside it; what surya then reads is a textless
-                # chart, and what it returned, four separate times, was an
-                # invented table. Coverage alone passed that chart; shape
-                # does not.
-                page_aspect = pw / max(1e-6, ph)
-                img_aspect = bm.width / max(1e-6, bm.height)
-                covers = covers and (
-                    0.8 <= img_aspect / max(1e-6, page_aspect) <= 1.25)
-            except Exception:
-                covers = False
-            # A page placed by a flipping matrix must not be taken as its
-            # own bytes: the shortcut keeps the original encoding, which is
-            # its whole point, and re-encoding a turned copy would give
-            # that up. Render such a page instead — correct beats cheap.
-            if covers and native_orientation(images[0]) == []:
-                try:
-                    images[0].extract(stem)  # keeps the original encoding
-                    out = next(iter(sorted(glob.glob(stem + ".*"))), None)
-                    extracted = out is not None
-                except Exception:
-                    out = None
-        if out is None:
-            # A page this script did not write, or one built from several images,
-            # is safer to render whole than to pick apart.
-            # Lossless, always. This raster is what the recogniser reads and
-            # what a figure falls back to when it cannot be taken from the
-            # PDF directly, so any loss here is permanent and lands hardest
-            # on photographic plates — the very pages a size-based choice
-            # would have encoded as JPEG. On text and line art PNG is also
-            # the smaller file (631KB against 1182KB on a manual page); on a
-            # plate it is larger, and that costs scratch space in a
-            # directory this run deletes when it ends.
-            out = stem + ".png"
-            page.render(scale=300 / 72,
-                        draw_annots=False).to_pil().convert("RGB").save(
-                out, "PNG", dpi=(300, 300)
-            )
-        page_paths.append(out)
-        # The page's own text layer rides along as a sidecar. It is never used
-        # as content — this pipeline reads the ink — but it is a witness: a
-        # recognition that shares almost no vocabulary with what the page says
-        # about itself has invented something, and without the sidecar that
-        # comparison cannot be made at read time.
-        try:
-            layer = page.get_textpage().get_text_bounded().strip()
-        except Exception:
-            layer = ""
-        if layer:
-            with open(out + ".layer.txt", "w", encoding="utf-8") as fh:
-                fh.write(layer)
-            # Born-digital, or somebody else's OCR? The distinction decides
-            # whether this layer may correct our words, restore a page we
-            # could not read, or only bear witness — and getting it wrong
-            # imports a worse reading as if it were the truth. "The page was
-            # rendered rather than extracted" is not the test: a library scan
-            # stored as two MRC layers is rendered too, and forty-three pages
-            # of one were treated as a publisher's typesetting, pulling in
-            # sixty of Google's words and filling two blank endpapers with
-            # OCR of the embossed seal. What settles it is what sits behind
-            # the text: a scan has a picture of the whole page under it, and
-            # a born-digital page does not. A photographic plate covers at
-            # most about nine tenths of its page, leaving room for the
-            # caption; a facsimile covers all of it.
-            # The union of the images, not the largest of them. "Is there a
-            # picture of the whole page behind this text" is a question about
-            # coverage, and a scan does not have to answer it with one image:
-            # stored as two tiles, or as MRC layers, its largest piece can sit
-            # well under the threshold while the page is completely covered.
-            # One book's cover does exactly that — largest 0.71, union 1.0 —
-            # and was being handed to the reconciler as a publisher's
-            # typesetting. The error is not symmetric, which is why this
-            # errs upward: calling a born-digital page a scan costs a
-            # correction we could have made, while calling a scan
-            # born-digital lets somebody else's OCR rewrite the author.
-            boxes = []
-            for o in images:
-                try:
-                    b = o.get_bounds()
-                    boxes.append((min(b[0], b[2]), min(b[1], b[3]),
-                                  max(b[0], b[2]), max(b[1], b[3])))
-                except Exception:
-                    pass
-            behind = _union_fraction(boxes, pw_pt, ph_pt)
-            # …nor does the picture have to reach the page's edges. A scan
-            # set inside its margins covers seven tenths of the page and is
-            # no more typeset for it; what gives it away is the book.
-            if not extracted and behind < 0.9 and i not in scanned:
-                open(out + ".native", "w").close()
-        # Where this page came from. A figure cut out of the page raster is a
-        # crop of a crop — the raster already resampled the artwork, at 3.12x
-        # on one manual's line drawings, and JPEG rang every hard edge it
-        # made. With the source in hand a figure can be taken from the PDF
-        # itself instead — which needs to know when the largest picture
-        # on the page is not a figure at all but the scan of the page.
-        try:
-            with open(out + ".source.json", "w") as fh:
-                json.dump({"pdf": os.path.abspath(pdf_path), "page": i,
-                           "facsimile": bool(extracted),
-                           "scan": i in scanned}, fh)
-        except OSError:
-            pass
+    workers = _pdf_pool_workers(n_pages)
+    if workers > 1:
+        page_paths = _load_pdf_pages_in_workers(pdf_path, pages_dir, n_pages,
+                                                scanned, workers)
+        if page_paths is None:
+            print("  [~] a page-rendering worker failed; rendering the pages "
+                  "one at a time instead")
+            workers = 1
+    if workers == 1:
+        page_paths = [_load_pdf_page(doc, i, pdf_path, pages_dir, i in scanned)
+                      for i in range(n_pages)]
 
     if not page_paths:
         sys.exit(f"No pages found in {pdf_path}")

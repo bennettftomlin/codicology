@@ -263,3 +263,55 @@ def test_a_plate_with_its_caption_is_not_a_picture_of_itself(vtb, tmp_path):
     doc = pdfium.PdfDocument(p)
     assert [vtb._is_picture_of_itself(page) for page in doc] \
         == [False, True, False]
+
+
+# ── a long book is rendered by several processes ─────────────────────────────
+
+def _everything_in(d):
+    return {name: open(os.path.join(d, name), "rb").read()
+            for name in sorted(os.listdir(d))}
+
+
+def test_worker_processes_write_what_one_process_writes(vtb, tmp_path,
+                                                        monkeypatch):
+    """
+    Rendering was one page at a time on a ten-core machine: 126 of a 202
+    second warm rebuild. The cache is keyed on a page's bytes, so the
+    workers may not differ from the loop they replace by a single byte —
+    in the pages, their order, or any sidecar beside them.
+    """
+    plate = [("image", (60, 80, 400, 560), _png((340, 480), _plate))]
+    book = make_book(tmp_path / "book.pdf",
+                     [plate] + [typeset_page() for _ in range(4)]
+                     + [scan_page(layer=True)] + [typeset_page()])
+    alone, shared = tmp_path / "alone", tmp_path / "shared"
+    alone.mkdir(); shared.mkdir()
+
+    monkeypatch.setattr(vtb, "PDF_POOL_MIN_PAGES", 10 ** 9)
+    one = vtb.load_pages_from_pdf(book, str(alone))
+    monkeypatch.setattr(vtb, "PDF_POOL_MIN_PAGES", 2)
+    monkeypatch.setattr(vtb, "PDF_POOL_WORKERS", 3)
+    assert vtb._pdf_pool_workers(7) == min(3, os.cpu_count() or 1)
+    many = vtb.load_pages_from_pdf(book, str(shared))
+
+    assert [os.path.basename(p) for p in many] == \
+           [os.path.basename(p) for p in one] == \
+           [f"page_{i:04d}.png" for i in range(7)]
+    # the sidecar names the directory's own PDF, so the two trees can match
+    assert _everything_in(shared) == _everything_in(alone)
+
+
+def test_a_short_book_starts_no_workers(vtb):
+    assert vtb._pdf_pool_workers(vtb.PDF_POOL_MIN_PAGES - 1) == 1
+
+
+def test_a_failed_worker_costs_time_and_not_the_book(vtb, tmp_path,
+                                                     monkeypatch, capsys):
+    book = make_book(tmp_path / "book.pdf", [typeset_page() for _ in range(3)])
+    d = tmp_path / "pages"; d.mkdir()
+    monkeypatch.setattr(vtb, "PDF_POOL_MIN_PAGES", 2)
+    monkeypatch.setattr(vtb, "PDF_POOL_WORKERS", 2)
+    monkeypatch.setattr(vtb, "_PDF_WORKER", "import sys; sys.exit(3)")
+    pages = vtb.load_pages_from_pdf(book, str(d))
+    assert "a page-rendering worker failed" in capsys.readouterr().out
+    assert len(pages) == 3 and all(os.path.exists(p) for p in pages)
