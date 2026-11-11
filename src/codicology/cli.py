@@ -1,4 +1,4 @@
-"""codicology — one command, nine verbs.
+"""codicology — one command, ten verbs.
 
     codicology convert …    build the PDF/EPUB (the pipeline; see convert -h)
     codicology verify EPUB PDF
@@ -23,6 +23,10 @@
                             book. The same file, left beside the OCR cache,
                             is picked up by the next rebuild via
                             convert --apply-decisions
+    codicology decisions list|retire|file …
+                            look after decisions files: list one, take a
+                            row out of use, or file a newly exported one as
+                            the next round without losing the rounds before
     codicology relabel CACHE PDF
                             backfill layout labels into an OCR cache written
                             before they were kept, without re-reading a word
@@ -211,6 +215,36 @@ def main(argv: "list[str] | None" = None) -> "int | None":
     p_apply.add_argument("--out", metavar="EPUB",
                          help="write here instead of correcting in place")
 
+    p_dec = sub.add_parser(
+        "decisions",
+        help="look after a book's decisions files: list one, take a row "
+             "out of use, or file a newly exported one as the next round "
+             "of review without losing the rounds before it")
+    dsub = p_dec.add_subparsers(dest="what", required=True)
+    d_list = dsub.add_parser(
+        "list", help="print a decisions file a row to a line, numbered")
+    d_list.add_argument("file", help="a decisions JSON")
+    d_retire = dsub.add_parser(
+        "retire",
+        help="take rows out of use by their number in `decisions list`. "
+             "They stay in the file as retired, so a later round cannot "
+             "bring them back unnoticed")
+    d_retire.add_argument("file", help="a decisions JSON")
+    d_retire.add_argument("rows", nargs="+", type=int,
+                          help="row numbers, as `decisions list` prints them")
+    d_file = dsub.add_parser(
+        "file",
+        help="put an exported decisions file where a book's rebuilds find "
+             "it. The same sheet exported again replaces the round in "
+             "hand; a file from another sheet becomes a new round, and "
+             "the one in hand is kept beside it as an earlier one")
+    d_file.add_argument("exported", help="the file the review sheet saved")
+    d_file.add_argument("target",
+                        help="where the book's decisions live, for example "
+                             "book-disputes.decisions.json beside its cache")
+    d_file.add_argument("--json", action="store_true", dest="as_json",
+                        help="print what was done as one JSON object")
+
     args = parser.parse_args(argv)
     if args.command == "verify":
         from . import verify
@@ -241,6 +275,33 @@ def main(argv: "list[str] | None" = None) -> "int | None":
         from . import pipeline
         pipeline.relabel_cache(args.cache, args.pdf, backend_name=args.ocr,
                                langs=args.lang.split(","))
+        return 0
+    if args.command == "decisions":
+        import json
+        from . import review
+        try:
+            if args.what == "list":
+                review.list_decisions(args.file)
+            elif args.what == "retire":
+                for d in review.retire_decisions(args.file, args.rows):
+                    print(f"retired: p{d.get('page')} {d.get('old')!r} -> "
+                          f"{d.get('new')!r}")
+            else:
+                done = review.file_decisions(args.exported, args.target)
+                if args.as_json:
+                    print(json.dumps(done))
+                else:
+                    print(f"{done['rows']} decision(s) filed as round "
+                          f"{done['round']}"
+                          + (", in place of the same sheet's earlier export"
+                             if done["replaced"] else "")
+                          + (f"; {done['dropped_retired']} left out because "
+                             f"an earlier round retired them"
+                             if done["dropped_retired"] else "")
+                          + f": {args.target}")
+        except (OSError, ValueError) as exc:
+            print(f"[!] {exc}")
+            return 2
         return 0
     if args.command == "rekey":
         from . import pipeline

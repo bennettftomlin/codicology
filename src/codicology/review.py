@@ -36,6 +36,22 @@ the correction landed on the wrong word. A row without neighbours is
 therefore applied only where the two counts must agree — every instance
 of the word on the page accounted for by the file — and reported stale
 otherwise.
+
+Review happens in rounds: a book is reviewed, rebuilt with the corrections,
+adjudicated again, and reviewed again against the corrected text. Each
+round's file is addressed to the text the round before it left, so the
+rounds are kept apart and applied in order. Beside `book.decisions.json`,
+the round in hand, sit `book.decisions.r1.json`, `book.decisions.r2.json`
+and so on, the earlier ones, oldest first (decision_rounds). A file from
+the same sheet exported again takes the place of the round in hand; a
+file from another sheet becomes a new round (file_decisions). The file
+carries `sheet`, the fingerprint of the record its sheet was made from,
+and that is how the two are told apart.
+
+`retired` holds rows that must not be applied: a correction accepted in
+error, with the sheet that could un-stage it gone. A retired row is never
+applied, is carried from round to round, and is dropped from any later
+file that offers it again.
 """
 import base64
 import collections
@@ -246,14 +262,19 @@ def _run_crops(report, dpi=200, ctx_px=120, base_dir=None) -> dict:
     uris = {}
     for prow in rows:
         pno = prow["page"]
-        if pno >= len(doc):
+        # The page of the PDF, which is not the page of the book wherever a
+        # blank or a duplicate was dropped ahead of it. The word crops have
+        # always used it; these used the book's number, and showed the ink
+        # of the wrong page from the first dropped page on.
+        at = prow.get("pdf_page", pno)
+        if at >= len(doc):
             continue
         img = None
         for ri, r in enumerate(prow["runs"]):
             box = r.get("box")
             if img is None:
-                img = doc[pno].render(scale=dpi / 72,
-                                      draw_annots=False).to_pil()
+                img = doc[at].render(scale=dpi / 72,
+                                     draw_annots=False).to_pil()
             if box:
                 pad = 60 if r.get("approx") else 10
                 cx = 200 if r.get("approx") else ctx_px
@@ -545,7 +566,8 @@ def render_sheet(report, crops=None) -> str:
                   or report.get("epub") or "book")))
     meta = json.dumps({"name": name, "pdf": report.get("pdf", ""),
                        "epub": report.get("epub", ""),
-                       "page_files": report.get("page_files")})
+                       "page_files": report.get("page_files"),
+                       "sheet": _fingerprint(report)})
     parts = [
         "<!doctype html><meta charset='utf-8'>",
         f"<title>{html.escape(name)} — dispute review</title>",
@@ -1076,7 +1098,8 @@ def apply_decisions(epub_path, decisions_path, out=None) -> dict:
     import shutil
     import zipfile
 
-    dec = json.load(open(decisions_path))
+    with open(decisions_path) as fh:
+        dec = json.load(fh)
     zin = zipfile.ZipFile(epub_path)
     page_files = [n for n in zin.namelist()
                   if re.match(r".*page_(\d{4})\.xhtml$", n)]
@@ -1095,7 +1118,10 @@ def apply_decisions(epub_path, decisions_path, out=None) -> dict:
             continue
         by_page[i].append(d)
     out = out or epub_path
-    if out == epub_path:
+    if out == epub_path and not os.path.exists(epub_path + ".preapply"):
+        # The first original only. A second round applied in place used to
+        # overwrite this with the first round's result, and the book as it
+        # was built could no longer be had.
         shutil.copy2(epub_path, epub_path + ".preapply")
     changed = {}
     for name in page_files:
@@ -1114,24 +1140,181 @@ def apply_decisions(epub_path, decisions_path, out=None) -> dict:
     for i in sorted(by_page):
         stale += [(d, f"page {i} is not a page of this book")
                   for d in by_page[i]]
-    names = zin.namelist()
     with zipfile.ZipFile(out + ".tmp", "w") as zout:
-        for name in names:
-            data = changed.get(name, zin.read(name))
-            # the EPUB contract: mimetype first and stored, not deflated
-            zout.writestr(name, data,
-                          zipfile.ZIP_STORED if name == "mimetype"
-                          else zipfile.ZIP_DEFLATED)
+        for info in zin.infolist():
+            # Each entry goes back under its own record: its date, its
+            # mode, its compression (mimetype first and stored, as the
+            # EPUB contract has it). Written under a fresh one, every
+            # entry of the book differed from the original's, and "what
+            # did the corrections change" could not be read off the files.
+            zout.writestr(info, changed.get(info.filename,
+                                            zin.read(info.filename)))
     zin.close()
     os.replace(out + ".tmp", out)
     for d, why in stale:
         print(f"  stale: p{d.get('page')} {d.get('old')!r} -> "
               f"{d.get('new')!r} ({d.get('source', '?')}) — {why}; "
               f"kept as shipped")
+    retired = retired_rows(dec)
     print(f"applied {len(applied)} correction(s)"
           + (f", {len(stale)} stale" if stale else "")
+          + (f", {len(retired)} retired and left alone" if retired else "")
           + f": {out}")
     return {"applied": applied, "stale": [d for d, _ in stale]}
+
+
+# ── rounds, and rows taken out of use ────────────────────────────────────────
+
+def retired_rows(dec) -> list:
+    """The rows a decisions file holds but must not apply."""
+    rows = dec.get("retired") if isinstance(dec, dict) else None
+    return [d for d in rows if isinstance(d, dict)] \
+        if isinstance(rows, list) else []
+
+
+def _site(d) -> tuple:
+    """Which word of which page a row is addressed to."""
+    where = (tuple(d["before"]), tuple(d["after"])) \
+        if "before" in d and "after" in d else _occurrence(d)
+    return (coerce_page(d), d.get("kind", "swap"), d.get("old"), where)
+
+
+def _same_correction(a, b) -> bool:
+    return _site(a) == _site(b) and a.get("new") == b.get("new")
+
+
+def _earlier_rounds(path: str) -> list:
+    """(number, file) for each earlier round kept beside `path`."""
+    stem = path[:-len(".json")] if path.endswith(".json") else path
+    folder = os.path.dirname(path) or "."
+    named = re.compile(re.escape(os.path.basename(stem)) + r"\.r(\d+)\.json")
+    found = []
+    for name in os.listdir(folder):
+        m = named.fullmatch(name)
+        if m:
+            found.append((int(m.group(1)), os.path.join(folder, name)))
+    return sorted(found)
+
+
+def decision_rounds(path: str) -> list:
+    """Every round of decisions kept for a book, oldest first, ending with
+    `path`, the round in hand. Empty when `path` is not there."""
+    if not path or not os.path.exists(path):
+        return []
+    return [f for _, f in _earlier_rounds(path)] + [path]
+
+
+def _load_decisions(path: str) -> dict:
+    with open(path) as fh:
+        dec = json.load(fh)
+    if not isinstance(dec, dict) or not isinstance(dec.get("decisions"), list):
+        raise ValueError(f"{path} is not a review sheet's exported decisions")
+    return dec
+
+
+def _same_sheet(a: dict, b: dict) -> bool:
+    """Whether two decisions files were exported from one sheet. The sheet
+    says which record it was made from; a file from before it did is
+    judged by its rows, since a second round is about other words: the
+    first round's are no longer in dispute."""
+    if a.get("sheet") and b.get("sheet"):
+        return a["sheet"] == b["sheet"]
+    mine = {_site(d) for d in a["decisions"]}
+    return any(_site(d) in mine for d in b["decisions"])
+
+
+def file_decisions(src: str, target: str) -> dict:
+    """Put an exported decisions file where a book's rebuilds will find it.
+
+    Importing a second round's file used to replace the first's, and the
+    next rebuild came out without the first round's corrections: the cache
+    holds the reading as it was made, so every round has to be applied
+    again each time. A file from another sheet now becomes a new round and
+    the one in hand is kept as an earlier one. The same sheet exported
+    again replaces the round in hand, as it should: that is the reviewer
+    changing their mind.
+
+    Rows that any round has retired are taken out of the incoming file.
+    """
+    incoming = _load_decisions(src)
+    rounds = decision_rounds(target)
+    retired = []
+    for path in rounds:
+        try:
+            for d in retired_rows(_load_decisions(path)):
+                if not any(_same_correction(d, r) for r in retired):
+                    retired.append(d)
+        except (OSError, ValueError):
+            pass
+    replaced = False
+    if rounds:
+        try:
+            replaced = _same_sheet(_load_decisions(target), incoming)
+        except (OSError, ValueError):
+            replaced = True         # nothing there worth keeping as a round
+        if not replaced:
+            stem = target[:-len(".json")] if target.endswith(".json") \
+                else target
+            last = max((n for n, _ in _earlier_rounds(target)), default=0)
+            os.replace(target, f"{stem}.r{last + 1}.json")
+    dropped = [d for d in incoming["decisions"]
+               if any(_same_correction(d, r) for r in retired)]
+    if dropped:
+        incoming["decisions"] = [d for d in incoming["decisions"]
+                                 if not any(d is x for x in dropped)]
+    carried = retired_rows(incoming)
+    carried += [d for d in retired
+                if not any(_same_correction(d, r) for r in carried)]
+    if carried:
+        incoming["retired"] = carried
+    os.makedirs(os.path.dirname(os.path.abspath(target)), exist_ok=True)
+    with open(target + ".tmp", "w") as fh:
+        json.dump(incoming, fh, indent=1)
+    os.replace(target + ".tmp", target)
+    return {"rows": len(incoming["decisions"]),
+            "round": len(decision_rounds(target)),
+            "replaced": replaced, "dropped_retired": len(dropped),
+            "retired": len(carried)}
+
+
+def retire_decisions(path: str, numbers: list) -> list:
+    """Take rows out of use by their number in list_decisions' listing.
+    They stay in the file, under `retired`, so that the next round cannot
+    bring them back unnoticed. Returns the rows retired."""
+    dec = _load_decisions(path)
+    rows = dec["decisions"]
+    wanted = sorted(set(numbers))
+    if any(not 1 <= n <= len(rows) for n in wanted):
+        raise ValueError(f"{path} has rows 1 to {len(rows)}; asked for "
+                         f"{', '.join(str(n) for n in wanted)}")
+    gone = [rows[n - 1] for n in wanted]
+    dec["decisions"] = [d for k, d in enumerate(rows, 1) if k not in wanted]
+    dec["retired"] = retired_rows(dec) + gone
+    with open(path + ".tmp", "w") as fh:
+        json.dump(dec, fh, indent=1)
+    os.replace(path + ".tmp", path)
+    return gone
+
+
+def list_decisions(path: str) -> None:
+    """Print a decisions file a row to a line, numbered for retire."""
+    def line(d):
+        what = (f"delete {len(str(d.get('old', '')).split())} word(s) "
+                f"beginning {str(d.get('old', ''))[:40]!r}"
+                if d.get("kind") == "delete_run"
+                else f"{d.get('old')!r} -> {d.get('new')!r}")
+        return (f"p{d.get('page')} {what}  ({d.get('source', '?')}"
+                + (", addressed" if "before" in d else "") + ")")
+    dec = _load_decisions(path)
+    rounds = len(decision_rounds(path))
+    print(f"{path}: {len(dec['decisions'])} decision(s)"
+          + (f", the last of {rounds} rounds" if rounds > 1 else "")
+          + (f", recorded against {dec['page_files']} page file(s)"
+             if dec.get("page_files") is not None else ""))
+    for k, d in enumerate(dec["decisions"], 1):
+        print(f"  {k:>3}  {line(d)}")
+    for d in retired_rows(dec):
+        print(f"  ret  {line(d)}")
 
 
 def main(report_path, out=None, dpi=200, crops=True) -> int:

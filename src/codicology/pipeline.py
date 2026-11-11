@@ -7298,12 +7298,24 @@ def join_page_break_hyphens(bodies: list, dropped: "set[int]") -> dict:
 
 
 def _decision_rounds(decisions_path) -> list:
-    """The decisions files to apply, in order: none, one, or several."""
+    """The decisions files to apply, in order: none, one, or several.
+
+    A file named here brings its earlier rounds with it: the ones
+    `codicology decisions file` set aside beside it as book.decisions.r1.json
+    and so on (review.decision_rounds). Naming only the round in hand is
+    what the Calibre plugin does, and it used to mean the rounds before it
+    were not applied at all."""
+    from .review import decision_rounds
     if not decisions_path:
         return []
     if isinstance(decisions_path, (str, bytes, os.PathLike)):
-        return [decisions_path]
-    return [p for p in decisions_path if p]
+        decisions_path = [decisions_path]
+    out: list = []
+    for given in (p for p in decisions_path if p):
+        for path in decision_rounds(os.fspath(given)) or [given]:
+            if not any(_same_file(path, seen) for seen in out):
+                out.append(path)
+    return out
 
 
 def apply_reviewer_decisions(bodies: list, decisions_path: str,
@@ -7316,7 +7328,8 @@ def apply_reviewer_decisions(bodies: list, decisions_path: str,
     decision is addressed to, deletions before swaps, and a decision that
     cannot be placed with certainty is stale — reported and left as read,
     never guessed at."""
-    from .review import apply_page_decisions, coerce_page, pages_guard
+    from .review import (apply_page_decisions, coerce_page, pages_guard,
+                         retired_rows)
     try:
         with open(decisions_path) as fh:
             dec = json.load(fh)
@@ -7324,6 +7337,10 @@ def apply_reviewer_decisions(bodies: list, decisions_path: str,
     except (OSError, ValueError) as exc:
         print(f"    [!] decisions file unreadable, ignored: {exc}")
         return {"applied": 0, "stale": 0}
+    if retired_rows(dec):
+        print(f"    {len(retired_rows(dec))} decision(s) in "
+              f"{os.path.basename(os.fspath(decisions_path))} are retired "
+              f"and left alone")
     refusal = pages_guard(dec.get("page_files"),
                           kept_pages if kept_pages is not None
                           else len(bodies))

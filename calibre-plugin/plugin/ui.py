@@ -103,10 +103,26 @@ class CodicologyOCRAction(InterfaceAction):
                     f'Import it here anyway?'):
                 return
         os.makedirs(os.path.dirname(target), exist_ok=True)
-        shutil.copyfile(src, target)
+        # codicology files it, so that a second round of review is kept
+        # beside the first instead of replacing it; an older codicology
+        # has no such verb, and the file is copied as it always was
+        exe = env.resolve_codicology()
+        filed = env.file_decisions(exe, src, target) if exe else None
+        if filed is None:
+            shutil.copyfile(src, target)
+        n_rows = filed['rows'] if filed else len(rows)
+        note = ''
+        if filed and filed['round'] > 1 and not filed['replaced']:
+            note = (f' as round {filed["round"]} of review. The earlier '
+                    f'round(s) are kept and applied first')
+        elif filed and filed['replaced']:
+            note = ', in place of this sheet\'s earlier export'
+        if filed and filed['dropped_retired']:
+            note += (f'. {filed["dropped_retired"]} row(s) were left out '
+                     f'because an earlier round retired them')
         if question_dialog(
                 self.gui, 'Decisions imported',
-                f'{len(rows)} correction(s) imported for "{title}".\n\n'
+                f'{n_rows} correction(s) imported for "{title}"{note}.\n\n'
                 f'Rebuild now to apply them? They are also applied '
                 f'automatically on any later rebuild.'):
             # the record was made before this review; making it again

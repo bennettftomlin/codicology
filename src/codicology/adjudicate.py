@@ -1150,7 +1150,10 @@ def _adjudicate(epub: str, pdf: str, report: "str | None", scale: float,
                                        for w in run_words) / a) / base
                 page_rows.append({
                     "page": i, "pdf_page": pdf_of[i], "n": n_only,
-                    "text": " ".join(run_words)[:2000], "verdict": verdict,
+                    # whole: this is what a "delete run" decision is
+                    # matched against, and cut at 2,000 characters a long
+                    # run could be marked for deletion and never deleted
+                    "text": " ".join(run_words), "verdict": verdict,
                     "why": why, "approx": approx, "box": box, "ink": ink,
                     "density": density})
         if page_rows:

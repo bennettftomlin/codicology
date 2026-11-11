@@ -71,6 +71,28 @@ def quick_doctor(exe, timeout=30):
         return None
 
 
+def file_decisions(exe, src, target, timeout=60):
+    """
+    Have codicology put an exported decisions file beside the book's record.
+
+    It keeps the rounds of review apart: the same sheet exported again
+    replaces the round in hand, and a file from a later sheet becomes a new
+    round with the earlier ones kept and applied first. Copying the file
+    over the last one, which is what this plugin used to do, threw the
+    earlier rounds' corrections away at the next rebuild.
+
+    Returns what was done, {'rows', 'round', 'replaced', 'dropped_retired',
+    'retired'}, or None when this codicology has no such verb or refused the
+    file; the caller then copies it, as before.
+    """
+    try:
+        r = _run([exe, "decisions", "file", src, target, "--json"], timeout)
+        done = json.loads(r.stdout) if r.returncode == 0 else None
+    except Exception:
+        return None
+    return done if isinstance(done, dict) and "round" in done else None
+
+
 def cache_dir(library_id):
     """OCR caches live under Calibre's config dir, keyed by library."""
     from calibre.constants import config_dir

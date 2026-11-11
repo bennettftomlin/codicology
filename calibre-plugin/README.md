@@ -123,7 +123,10 @@ cannot silently reuse OCR read from the file it replaced. The dispute
 record (`…-disputes.json`), its review sheet (`…-disputes.html`), and any
 exported decisions (`…-disputes.decisions.json`) live beside the cache
 under the same stem, which is how a rebuild finds the decisions without
-being told.
+being told. A later round of review, brought in with **Import review
+decisions**, does not replace the one before it: the earlier round is
+kept as `…-disputes.decisions.r1.json` and applied first, because the
+later round was reviewed against the text it left.
 
 ## Requirements, honestly
 

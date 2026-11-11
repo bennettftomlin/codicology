@@ -65,7 +65,7 @@ start. `--without-witness` overrides that and reports at the end how many
 pages went unexamined. Its word boxes also position the searchable PDF text
 layer far more precisely than layout blocks can.
 
-## One command, nine verbs
+## One command, ten verbs
 
 ```bash
 # build — from a PDF (the usual case), photographs, or video.
@@ -99,7 +99,8 @@ backfills layout labels into a cache written before they were kept, and
 `codicology rekey CACHE PDF` refiles one written before a page's reading
 was named for the page's pixels. A build does that refiling for itself the
 first time it meets such a cache; `rekey` brings a whole cache over ahead
-of time.)
+of time. `codicology decisions` looks after decisions files; it is
+described under the review sheet below.)
 
 The cache is what makes a rebuild cheap, and it holds hours of reading, so
 it is keyed on the page and nothing else: a rendered page by its pixels, a
@@ -280,6 +281,19 @@ neighbours, and their `occurrence` counted only the page's disputed
 words. They are applied where that cannot matter (the file accounts for
 every instance of the word on the page) and reported stale where it can;
 adjudicate the book again for a sheet whose decisions are addressed.
+
+Review happens in rounds: correct, rebuild, adjudicate again, correct what
+is left. The second round's decisions are addressed to the text the first
+round left, and the cache still holds the reading as it was first made, so
+a rebuild has to apply every round, in order. `codicology decisions file
+exported.json book-disputes.decisions.json` keeps them apart: the same
+sheet exported again replaces the round in hand, a file from a later sheet
+becomes a new round, and the earlier ones stay beside it as
+`….decisions.r1.json`, `….r2.json`. `convert --apply-decisions` given the
+round in hand applies the earlier ones first. `codicology decisions list`
+prints a file a row to a line, and `codicology decisions retire FILE N`
+takes a row out of use without forgetting it: a retired row is never
+applied, and no later round can bring it back.
 
 ## Checking a build
 
