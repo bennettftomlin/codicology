@@ -3124,6 +3124,38 @@ class OCRCache:
         self.dirty = False
 
 
+# A figure is encoded both ways and the smaller kept. Line art and charts
+# come out smaller as PNG *and* lossless — a drawing measured 6KB against
+# 17KB — because JPEG spends its bits ringing the hard black edges that made
+# this artwork look harsh in the first place. A photograph goes the other
+# way by more than four to one, and takes JPEG on merit.
+#
+# The PNG that competes is the optimised one, and it is the slow one: on
+# the 6,847 figures in the shelf's caches it takes thirteen times as long
+# as a PNG written at the fastest setting, and it loses to the JPEG for
+# 5,823 of them. The fast PNG says whether the contest is worth holding. No
+# figure whose optimised PNG won had a fast PNG more than 1.69 times the
+# size of its JPEG, so past 2.5 times the optimised one is not written:
+# that is 47% of the figures and three quarters of the time it took, and
+# the same choice, byte for byte, for every one of the 6,847.
+FIGURE_PNG_OUT_OF_REACH = 2.5
+FIGURE_ENCODERS = max(1, min(8, os.cpu_count() or 1))   # threads, at once
+
+
+def encode_figure(art: Image.Image) -> "tuple[bytes, str, str]":
+    """(bytes, extension, media type) of a figure as the book will carry it."""
+    jb = io.BytesIO()
+    art.save(jb, "JPEG", quality=88)
+    quick = io.BytesIO()
+    art.save(quick, "PNG", compress_level=1)
+    if quick.tell() <= FIGURE_PNG_OUT_OF_REACH * jb.tell():
+        pb = io.BytesIO()
+        art.save(pb, "PNG", optimize=True)
+        if pb.tell() <= jb.tell():
+            return pb.getvalue(), "png", "image/png"
+    return jb.getvalue(), "jpg", "image/jpeg"
+
+
 def _thumb_data_uri(path: str, width: int = REVIEW_THUMB_WIDTH) -> str:
     with Image.open(path) as im:
         im = im.convert("RGB")
@@ -7944,6 +7976,31 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
 
     nonlocal_page_i = [0]      # the page emit_figure is currently working on
 
+    from concurrent.futures import ThreadPoolExecutor
+    encoders = ThreadPoolExecutor(max_workers=FIGURE_ENCODERS)
+    encoding: list = []         # (stand-in name, the encoding under way)
+
+    def settle_figures() -> None:
+        """Give every figure its file, in the order the pages met them, and
+        its real name wherever a page used the stand-in."""
+        names = {}
+        for k, (stand_in, job) in enumerate(encoding):
+            data, ext, mime = job.result()
+            name = names[stand_in] = f"images/fig_{k:04d}.{ext}"
+            figure_data[name] = data
+            book.add_item(epub.EpubImage(
+                uid=f"fig{k}",
+                file_name=name,
+                media_type=mime,
+                content=data,
+            ))
+        encoders.shutdown()
+        if not names:
+            return
+        named = re.compile(r'(?<=<img src=")images/fig_\d{4}\.encoding(?=")')
+        bodies[:] = [named.sub(lambda m: names[m.group(0)], b) for b in bodies]
+        page_figures[:] = [[names[n] for n in figs] for figs in page_figures]
+
     def emit_figure(item: PageItem, caption: PageItem | None, caption_first: bool) -> str:
         """Store the crop in the book and wrap it, with its caption, in one <figure>."""
         nonlocal n_figures, n_blank_figures, n_hand_figures
@@ -7959,38 +8016,34 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
             item.figure.close()
             return f"<p>{caption.html}</p>" if caption is not None else ""
         art = better_figure(page_paths[nonlocal_page_i[0]], item.box, item.figure)
-        # Encode both ways and keep the smaller. Line art and charts come out
-        # smaller as PNG *and* lossless — a drawing measured 6KB against 17KB
-        # — because JPEG spends its bits ringing the hard black edges that
-        # made this artwork look harsh in the first place. A photograph goes
-        # the other way by more than four to one, and takes JPEG on merit.
         enc = _encodable(art)
         if enc is not art and art is not item.figure:
             art.close()
         art = enc
-        jb = io.BytesIO()
-        art.save(jb, "JPEG", quality=88)
-        pb = io.BytesIO()
-        art.save(pb, "PNG", optimize=True)
-        if len(pb.getvalue()) <= len(jb.getvalue()):
-            data, ext, mime = pb.getvalue(), "png", "image/png"
-        else:
-            data, ext, mime = jb.getvalue(), "jpg", "image/jpeg"
-        if art is not item.figure:
-            art.close()
-        name = f"images/fig_{n_figures:04d}.{ext}"
+
+        def encode(art=art, crop=item.figure):
+            try:
+                return encode_figure(art)
+            finally:
+                for im in (art, crop):
+                    try:
+                        im.close()
+                    except Exception:
+                        pass
+
+        # Encoded on another thread while the pages go on being assembled:
+        # Pillow lets go of the interpreter while it compresses, and this
+        # was 54 of a 104 second rebuild, one figure at a time. Whether a
+        # figure ends as PNG or JPEG is not known until it is done, so the
+        # page is written with a stand-in for the file's name and
+        # settle_figures puts the real one in. No more are left waiting
+        # than the encoders can hold: a plate is tens of megabytes open.
+        while sum(1 for _, job in encoding if not job.done()) \
+                >= 2 * FIGURE_ENCODERS:
+            next(job for _, job in encoding if not job.done()).result()
+        name = f"images/fig_{n_figures:04d}.encoding"
+        encoding.append((name, encoders.submit(encode)))
         current_figures.append(name)
-        figure_data[name] = data
-        book.add_item(epub.EpubImage(
-            uid=f"fig{n_figures}",
-            file_name=name,
-            media_type=mime,
-            content=data,
-        ))
-        try:
-            item.figure.close()
-        except Exception:
-            pass
         n_figures += 1
 
         img_tag = f'<img src="{name}" alt="Figure" style="max-width:100%"/>'
@@ -8128,6 +8181,7 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
                       note=f"{cache.hits} from cache"
                            if cache and cache.hits else "")
 
+    settle_figures()
     if cache:
         if cache.refiled:
             print(f"  OCR cache: {cache.refiled} reading(s) refiled under "

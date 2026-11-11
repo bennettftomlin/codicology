@@ -261,3 +261,140 @@ def test_a_blank_leaf_is_not_called_a_hand(vtb):
     from PIL import Image
     blank = np.full((120, 60, 3), 238, np.uint8)
     assert not vtb.figure_is_a_hand(Image.fromarray(blank))
+
+
+# ── one encoding is not tried when it cannot win ─────────────────────────────
+
+class _Watched:
+    """A figure that notes how it was asked to save itself."""
+    def __init__(self, im):
+        self.im, self.saves = im, []
+
+    def save(self, fh, fmt, **kw):
+        self.saves.append((fmt, kw))
+        self.im.save(fh, fmt, **kw)
+
+
+def _exhaustive(im):
+    """The choice as it was made before: both encodings, the smaller kept."""
+    import io
+    jb, pb = io.BytesIO(), io.BytesIO()
+    im.save(jb, "JPEG", quality=88)
+    im.save(pb, "PNG", optimize=True)
+    return ((pb.getvalue(), "png", "image/png")
+            if len(pb.getvalue()) <= len(jb.getvalue())
+            else (jb.getvalue(), "jpg", "image/jpeg"))
+
+
+def _line_art():
+    from PIL import Image, ImageDraw
+    im = Image.new("RGB", (600, 400), "white")
+    d = ImageDraw.Draw(im)
+    for k in range(12):
+        d.line((20, 30 + 30 * k, 580, 30 + 30 * k), fill="black", width=2)
+        d.rectangle((40 + 45 * k, 60, 70 + 45 * k, 340), outline="black")
+    return im
+
+
+def _photograph():
+    import numpy as np
+    from PIL import Image
+    rng = np.random.default_rng(7)
+    return Image.fromarray(rng.integers(0, 256, (400, 600, 3), dtype=np.uint8))
+
+
+def test_line_art_is_still_a_png_and_the_same_png(vtb):
+    watched = _Watched(_line_art())
+    got = vtb.encode_figure(watched)
+    assert got[1:] == ("png", "image/png")
+    assert got == _exhaustive(_line_art())
+    assert ("PNG", {"optimize": True}) in watched.saves
+
+
+def test_a_photograph_is_a_jpeg_without_the_slow_png_being_written(vtb):
+    """The optimised PNG took thirteen times as long as a quick one and lost
+    for 5,823 of the shelf's 6,847 figures."""
+    watched = _Watched(_photograph())
+    got = vtb.encode_figure(watched)
+    assert got[1:] == ("jpg", "image/jpeg")
+    assert got == _exhaustive(_photograph())
+    assert ("PNG", {"optimize": True}) not in watched.saves
+    assert [fmt for fmt, _ in watched.saves] == ["JPEG", "PNG"]
+
+
+# ── figures are encoded off to one side, and named when they are done ────────
+
+class _FigureBackend:
+    """Three pages: each a line of prose, then pictures cut from the page."""
+    batch_size = 4
+    name = "fake"
+    langs = ["en"]
+
+    def __init__(self, vtb, plan):
+        self.vtb, self.plan, self.at = vtb, plan, 0
+
+    def run_items(self, images):
+        out = []
+        for _ in images:
+            items = [self.vtb.PageItem(html=f"<p>Page {self.at} of the album.</p>",
+                                       label="Text")]
+            items += [self.vtb.PageItem(figure=make(), label="Picture",
+                                        box=(0.1, 0.2, 0.9, 0.8))
+                      for make in self.plan[self.at]]
+            out.append(items)
+            self.at += 1
+        return out
+
+
+def test_a_books_figures_come_out_in_order_whatever_order_they_finish(
+        vtb, tmp_path, monkeypatch):
+    """A figure's name ends in the encoding it took, which is not known
+    until the encoding is done; the pages are written meanwhile. Nothing of
+    that may show: same names, same order, same bytes as one at a time."""
+    import re
+    import zipfile
+    from PIL import Image
+    paths = []
+    for i in range(3):
+        p = tmp_path / f"page_{i:04d}.png"
+        Image.new("RGB", (300, 400), (250 - i, 250, 250)).save(p)
+        paths.append(str(p))
+    # no two alike: a picture that repeats from page to page is taken for
+    # a printer's ornament and dropped
+    def photo(seed):
+        import numpy as np
+        return lambda: Image.fromarray(np.random.default_rng(seed).integers(
+            0, 256, (240, 320, 3), dtype=np.uint8))
+
+    def drawing(n):
+        def make():
+            from PIL import ImageDraw
+            im = Image.new("RGB", (320, 240), "white")
+            d = ImageDraw.Draw(im)
+            for k in range(n + 3):
+                d.rectangle((10 + 14 * k, 20 + 5 * n, 18 + 14 * k, 200 - 9 * k),
+                            outline="black")
+            return im
+        return make
+
+    plan = [[photo(1), drawing(1), photo(2)],
+            [drawing(k) for k in range(2, 6)],
+            [photo(3), drawing(6)]]
+    want = [vtb.encode_figure(make()) for page in plan for make in page]
+
+    monkeypatch.setattr(vtb, "FIGURE_ENCODERS", 2)     # so that some must wait
+    out = tmp_path / "album.epub"
+    vtb.build_epub(paths, str(out), _FigureBackend(vtb, plan), "Album", False,
+                   dedupe=False, drop_blank=False)
+
+    z = zipfile.ZipFile(out)
+    names = [f"EPUB/images/fig_{k:04d}.{ext}"
+             for k, (_data, ext, _mime) in enumerate(want)]
+    assert [n for n in z.namelist() if "/images/fig_" in n] == names
+    assert [z.read(n) for n in names] == [data for data, _e, _m in want]
+    assert {n.rsplit(".", 1)[1] for n in names} == {"png", "jpg"}
+    pages = "".join(z.read(f"EPUB/page_{i:04d}.xhtml").decode() for i in range(3))
+    assert re.findall(r'src="(images/fig_\d{4}\.\w+)"', pages) == \
+           [n[len("EPUB/"):] for n in names]
+    for member in z.namelist():
+        assert b".encoding" not in z.read(member), member
