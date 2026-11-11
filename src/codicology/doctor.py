@@ -118,6 +118,18 @@ def _opencv_warning(cv):
     return f"{said} — {fix}"
 
 
+# What the page rectifier needs (the `geometry` extra). Only photographed
+# and filmed pages go through it; a build from a PDF never does.
+RECTIFIER_PACKAGES = ("transformers", "torch", "safetensors", "scikit-image")
+
+
+def _rectifier():
+    """Whether the rectifier's packages are installed. Not whether it runs:
+    that means loading the model, and fetching it the first time."""
+    missing = [p for p in RECTIFIER_PACKAGES if not _pkg_version(p)]
+    return {"present": not missing, "missing": missing}
+
+
 def _tesseract():
     path = shutil.which("tesseract")
     if not path:
@@ -186,6 +198,7 @@ def report(full=False, ocr="surya", langs=("en",)):
         "machine": platform.machine(),
         "packages": {p: _pkg_version(p) for p in PACKAGES},
         "opencv": _opencv(),
+        "rectifier": _rectifier(),
         "tesseract": _tesseract(),
         "llama_server": _llama_server(),
         "vision": _vision(),
@@ -351,14 +364,13 @@ def _human(rep):
     l = rep["llama_server"]
     print(f"  llama-server: {l['path'] if l['present'] else 'not found'}")
     v = rep.get("vision", {})
-    try:
-        from .dewarp import available as _dewarp_ok
-        print("  leptonica: " + ("found (text-line dewarp active)"
-                                 if _dewarp_ok() else
-                                 "not found — pages keep the rigid deskew "
-                                 "alone"))
-    except Exception:
-        pass
+    r = rep["rectifier"]
+    print("  rectifier: " + (
+        "installed — photographed and filmed pages are flattened"
+        if r["present"] else
+        f"not installed ({', '.join(r['missing'])} missing) — photographed "
+        "and filmed pages are kept as photographed; builds from a PDF are "
+        "unaffected (pip install 'codicology[geometry]')"))
     print("  apple vision: " + ("present (adjudication's optional rung)"
                                 if v.get("present") else
                                 "absent — review sheets will carry more "

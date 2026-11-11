@@ -201,3 +201,33 @@ def test_suryas_pin_is_read_from_its_own_metadata(monkeypatch):
     monkeypatch.setattr(doctor.importlib.metadata, "requires",
                         lambda name: ["pillow<11,>=10.2.0"])
     assert doctor._surya_opencv_pin() is None
+
+
+# ── the rectifier ────────────────────────────────────────────────────────────
+
+def test_the_rectifier_is_reported_and_its_absence_is_not_a_problem(
+        monkeypatch, capsys):
+    """This line used to import a module that no longer exists, inside a
+    try that hid the failure, so the doctor said nothing about geometry at
+    all: someone photographing a book was told "ready" without it."""
+    monkeypatch.setattr(doctor.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(doctor, "_pkg_version",
+                        lambda name: None if name in ("transformers",
+                                                      "scikit-image")
+                        else "1.0")
+    monkeypatch.setattr(doctor, "_opencv",
+                        lambda: {"present": True, "wheels": {}, "version": "4.11",
+                                 "surya_pins": None})
+    rep = doctor.report()
+    assert rep["rectifier"] == {"present": False,
+                                "missing": ["transformers", "scikit-image"]}
+    assert rep["ok"] is True
+    doctor._human(rep)
+    out = capsys.readouterr().out
+    assert "rectifier: not installed (transformers, scikit-image missing)" in out
+    assert "codicology[geometry]" in out
+
+
+def test_the_rectifier_is_reported_when_it_is_there(monkeypatch, capsys):
+    monkeypatch.setattr(doctor, "_pkg_version", lambda name: "1.0")
+    assert doctor._rectifier() == {"present": True, "missing": []}

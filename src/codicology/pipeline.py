@@ -114,6 +114,7 @@ import base64
 import functools
 import glob
 import gzip
+import zlib
 import hashlib
 import json
 import difflib
@@ -505,6 +506,7 @@ def split_spread(image: np.ndarray, min_aspect: float = 1.15) -> list[np.ndarray
 GUTTER_PATH_MIN_LEAN = 0.003
 # The seam may wander this far from the whole-sheet gutter column: a gap
 # it cannot find within a tenth of the width on either side is not there.
+_SEAM_UNAVAILABLE_SAID = False     # the one-line note, once a run
 GUTTER_SEAM_REACH = 0.10
 # Seam costs. A letter must outweigh any detour the grid allows: the grid
 # is at most 2000 cells wide and a few thousand tall, so a whole traverse
@@ -613,8 +615,19 @@ def _gutter_path(image: np.ndarray) -> np.ndarray:
     cost = cost_map[:, lo:hi] \
         + (np.abs(xs - wx) / probe_w).astype(np.float32)[None, :] * 1e-4
     # scikit-image's minimum cost path does the seam; a free row above and
-    # below lets it start and end in whichever column it likes.
-    from skimage.graph import route_through_array
+    # below lets it start and end in whichever column it likes. It comes
+    # with the `geometry` extra, and this was the one place that assumed
+    # the extra: without it a photographed spread ended the capture in an
+    # ImportError. It is cut straight down the gutter instead, and said.
+    try:
+        from skimage.graph import route_through_array
+    except ImportError:
+        if not _SEAM_UNAVAILABLE_SAID:
+            globals()["_SEAM_UNAVAILABLE_SAID"] = True
+            print("  [~] scikit-image is not installed, so a spread is cut "
+                  "straight down its gutter and not along the fold's own "
+                  "line (pip install 'codicology[geometry]')")
+        return np.full(h, whole, dtype=np.float32)
     free = np.full((1, hi - lo), 1e-6, dtype=np.float32)
     grid = np.vstack([free, cost + 1e-6, free])
     start_col = int(np.clip(round(wx) - lo, 0, hi - lo - 1))
@@ -2993,8 +3006,11 @@ class OCRCache:
                         set(stored.get("by_bytes", ())) & set(self.entries)
                         if stored.get("keying") == PAGE_KEYING
                         else set(self.entries))
-            except (OSError, ValueError, KeyError):
-                pass  # an unreadable cache is a cold cache, never an error
+            except (OSError, ValueError, KeyError, EOFError, zlib.error):
+                # an unreadable cache is a cold cache, never an error — and
+                # that includes one cut short (a copy interrupted, a disk
+                # that filled), which raised EOFError straight through here
+                self.entries, self.by_bytes = {}, set()
 
     def _key(self, page_path: str) -> str:
         # a warm build asks for the same page's key several times (get,
@@ -3154,6 +3170,14 @@ def encode_figure(art: Image.Image) -> "tuple[bytes, str, str]":
         if pb.tell() <= jb.tell():
             return pb.getvalue(), "png", "image/png"
     return jb.getvalue(), "jpg", "image/jpeg"
+
+
+def _same_file(a: str, b: str) -> bool:
+    """Whether two paths name one file, by any spelling or link."""
+    try:
+        return os.path.samefile(a, b)
+    except OSError:             # one of them does not exist yet
+        return os.path.abspath(a) == os.path.abspath(b)
 
 
 def _thumb_data_uri(path: str, width: int = REVIEW_THUMB_WIDTH) -> str:
@@ -5632,10 +5656,13 @@ BOLD_HEAD_BLOCK = re.compile(
 # that spell the number out count too — two here do, and leaving them out
 # left sixty openings split between a heading holding the number and a
 # heading holding the title, neither able to say what chapter it was.
+# The number must end where it ends. Without the boundary, "Chapter
+# Introduction" was chapter I with the title "ntroduction", and "Chapter
+# Vital Signs" chapter V, "ital Signs".
 CHAPTER_HEAD = re.compile(
     r"<(h[1-6])[^>]*>\s*(?:<[^/][^>]*>\s*)*"
     rf"(CHAPTER|Chapter)\s+(\d{{1,3}}|[IVXL]{{1,7}}|(?i:{_NUMBER_WORD}))"
-    r"\s*[.:—-]?\s*(.*?)</\1>", re.S)
+    r"(?!\w)\s*[.:—-]?\s*(.*?)</\1>", re.S)
 
 _WORD_VALUE = {w: v for v, w in enumerate(
     "one two three four five six seven eight nine ten eleven twelve thirteen "
@@ -8835,7 +8862,9 @@ def build_epub(
             # whole build down at the last step.
             body = f'<p class="blank">[blank page {i + 1}]</p>'
 
-        ch = epub.EpubHtml(title=f"Page {i + 1}", file_name=f"page_{i:04d}.xhtml", lang="en")
+        # No language of its own: ebooklib then writes the book's, which is
+        # what --lang set. Every page used to say "en" whatever the book said.
+        ch = epub.EpubHtml(title=f"Page {i + 1}", file_name=f"page_{i:04d}.xhtml")
         ch.content = f"<html><body>{body}</body></html>"
         book.add_item(ch)
         chapters.append(ch)
@@ -11608,6 +11637,16 @@ def _convert(args, parser) -> None:
             sys.exit(f"No such folder or pattern: {args.from_images}")
         if not output_pdf and not args.epub:
             sys.exit("give an output: a PDF path, --epub, or both")
+        # The output PDF is assembled from the page images, and writing it
+        # over the PDF they are being taken from replaces the book with a
+        # copy of itself that may be worse: a born-digital source comes
+        # back as pictures of its pages.
+        for out_path in (output_pdf, args.epub):
+            if out_path and args.pages_from and _same_file(out_path,
+                                                           args.pages_from):
+                sys.exit(f"{out_path} is the --pages-from source itself: "
+                         f"writing the output there would overwrite the "
+                         f"book being read. Give the output another name.")
     else:
         if not args.video or not args.pdf:
             parser.error("give a video and an output PDF, or use --pages-from")
