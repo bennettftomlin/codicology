@@ -44,7 +44,9 @@ human act.
 """
 import html
 import json
+import os
 import re
+import shutil
 import subprocess
 import tempfile
 import unicodedata
@@ -231,22 +233,38 @@ def page_tokens(body: str) -> list:
 
 # ── the readers ──────────────────────────────────────────────────────────────
 
+# A reading that failed is None, never an empty page. tesseract's output
+# used to be returned whatever its exit status, so a run that died (a
+# missing language file, a picture it could not open) came back as a page
+# with no words on it: every word of ours "unwitnessed", no dispute raised,
+# and with tesseract not installed at all the book was reported as
+# "disputes: 0", exit 0, having been checked by nobody.
 def read_tesseract(png: str) -> "str | None":
     try:
         r = subprocess.run(["tesseract", png, "stdout", "--psm", "3"],
                            capture_output=True, text=True, timeout=180)
-        return r.stdout
     except Exception:
         return None
+    return r.stdout if r.returncode == 0 else None
 
 
 def read_tesseract_tsv(png: str) -> "str | None":
     try:
         r = subprocess.run(["tesseract", png, "stdout", "--psm", "3", "tsv"],
                            capture_output=True, text=True, timeout=180)
-        return r.stdout
     except Exception:
         return None
+    return r.stdout if r.returncode == 0 else None
+
+
+def _tesseract_present() -> bool:
+    return shutil.which("tesseract") is not None
+
+
+# How many pages tesseract reads at once. It is a process of its own and
+# takes a second or two a page; one at a time, a 440-page book kept a
+# ten-core machine waiting for over eight minutes on one core.
+TESS_WORKERS = 8
 
 
 def _union(a: tuple, b: tuple) -> tuple:
@@ -620,6 +638,23 @@ def surya_only_runs(s_tok: list, t_tok: list,
     return (only / max(1, eligible), only, runs)
 
 
+def _run_starts(s_tok: list, runs: list) -> list:
+    """Where each of surya_only_runs' runs begins among the page's tokens.
+
+    A run is a verbatim span of the page, and the runs come in reading
+    order, so each is looked for after the one before it. None for a run
+    that is not found, which cannot then be addressed."""
+    starts, at = [], 0
+    for words, _n in runs:
+        n = len(words)
+        found = next((k for k in range(at, len(s_tok) - n + 1)
+                      if s_tok[k:k + n] == words), None)
+        starts.append(found)
+        if found is not None:
+            at = found + n
+    return starts
+
+
 def _fold_stream_char(ch: str) -> str:
     """One layer character folded for matching: case and curly quotes
     dropped, whitespace removed entirely — the layer breaks lines and
@@ -893,10 +928,30 @@ def _explains_witness(epub_folds: set, tess_folds: set) -> float:
 
 def main(epub: str, pdf: str, report: "str | None" = None,
          scale: float = 200 / 72, limit: "int | None" = None) -> int:
+    from concurrent.futures import ThreadPoolExecutor
+    if not _tesseract_present():
+        print("[!] tesseract is not installed, and it is the witness every "
+              "page is checked against: nothing was checked and no dispute "
+              "record is written (macOS: brew install tesseract; Debian: "
+              "apt install tesseract-ocr)")
+        return 2
+    # The page images live here until the last rung has looked at them, and
+    # no longer: this directory used to be left behind by every run.
+    tmp = tempfile.mkdtemp(prefix="adjudicate_")
+    pool = ThreadPoolExecutor(
+        max_workers=max(1, min(TESS_WORKERS, os.cpu_count() or 1)))
+    try:
+        return _adjudicate(epub, pdf, report, scale, limit, tmp, pool)
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _adjudicate(epub: str, pdf: str, report: "str | None", scale: float,
+                limit: "int | None", tmp: str, pool) -> int:
     import pypdfium2 as pdfium
     pages = epub_page_texts(epub)
     doc = pdfium.PdfDocument(pdf)
-    tmp = tempfile.mkdtemp(prefix="adjudicate_")
     have_vision = read_vision.__doc__ is not None and _vision_present()
 
     surya_tokens = {i: tokens(t) for i, t in pages.items()}
@@ -914,19 +969,35 @@ def main(epub: str, pdf: str, report: "str | None" = None,
     # gap growing with each drop. The walk is monotone with a bounded
     # lookahead; a book page nothing in the window resembles goes
     # unwitnessed and is counted, never guessed at.
-    tess_cache: dict = {}
+    tess_cache: dict = {}       # PDF page -> the reading, as it comes in
+    unread: set = set()         # PDF pages tesseract could not read
+    ahead = 2 * getattr(pool, "_max_workers", 1)
 
-    def tess_page(j):
+    def read_page(png, width, height):
+        tsv = read_tesseract_tsv(png)
+        if tsv is None:
+            return None
+        return list(_tsv_tokens(tsv, width, height)) + [png]
+
+    def ask(j):
+        # Rendered here, on the one thread pdfium is safe on; read there.
         if j not in tess_cache:
             png = f"{tmp}/p{j}.png"
             img = doc[j].render(scale=scale, draw_annots=False).to_pil()
-            img.save(png)
-            tsv = read_tesseract_tsv(png)
-            if tsv is None:
-                tess_cache[j] = None
-            else:
-                tess_cache[j] = list(_tsv_tokens(tsv, img.width, img.height))                     + [png]
-        return tess_cache[j]
+            img.save(png, compress_level=1)
+            tess_cache[j] = pool.submit(read_page, png, img.width, img.height)
+
+    def tess_page(j):
+        # The walk asks for one page at a time, and nearly always for the
+        # next one, so the pages after it are started while it is waited
+        # for. A --limit run stops asking where it will stop looking.
+        reach = ahead if not limit else max(1, min(ahead, limit - n_done + 1))
+        for k in range(j, min(len(doc), j + reach)):
+            ask(k)
+        data = tess_cache[j].result()
+        if data is None:
+            unread.add(j)
+        return data
 
     drifted = unmatched = 0
     # Only a book whose page count disagrees with its PDF needs the walk:
@@ -997,6 +1068,15 @@ def main(epub: str, pdf: str, report: "str | None" = None,
         witness[i] = tess_page(best)
         pdf_of[i] = best
         j = best + 1
+    if unread:
+        shown = ", ".join(str(j) for j in sorted(unread)[:12]) \
+            + (", …" if len(unread) > 12 else "")
+        print(f"[!] tesseract could not read {len(unread)} page(s) of the "
+              f"PDF ({shown}); the book's pages there were NOT checked")
+    if n_done and not witness:
+        print("[!] no page of this book met a witness reading, so nothing "
+              "was checked; no dispute record is written")
+        return 2
     shipped_last = {i: fold_word(surya_tokens[i][-1])
                     for i in witness if surya_tokens.get(i)}
     n_stitched = _stitch_page_turns(
@@ -1015,7 +1095,8 @@ def main(epub: str, pdf: str, report: "str | None" = None,
         if runs:
             base = _page_text_density(t_tok, t_box)
             crop_pairs = []
-            for run_words, n_only in runs:
+            for (run_words, n_only), run_at in zip(runs,
+                                                   _run_starts(s_tok, runs)):
                 box = _run_box(doc[pdf_of[i]], run_words)
                 crop = _crop_read_tsv(png, box) if box else None
                 verdict = _run_verdict(run_words,
@@ -1052,7 +1133,9 @@ def main(epub: str, pdf: str, report: "str | None" = None,
                             if _is_word(fold_word(b)) and                                     abs(len(a) - len(b)) <= 3:
                                 crop_pairs.append(
                                     (a, b, cb[j1 + k]
-                                     if j1 + k < len(cb) else None))
+                                     if j1 + k < len(cb) else None,
+                                     None if run_at is None
+                                     else run_at + i1 + k))
                 elif verdict == "advisory":
                     if box is not None:
                         why = "unrelated"
@@ -1074,27 +1157,32 @@ def main(epub: str, pdf: str, report: "str | None" = None,
             surya_only.append({"page": i, "pdf_page": pdf_of[i],
                                "fraction": round(frac, 4),
                                "words": only, "runs": page_rows})
-            if crop_pairs:
-                per_page.setdefault(i, {}).setdefault("crop_pairs", [])
-                per_page[i]["crop_pairs"] = crop_pairs
         per_page[i] = {"pairs": pairs, "png": png, "boxes": t_box,
                        "cboxes": t_cbox}
+        # After the page's entry is made, not before: these were set on it
+        # and then the entry was replaced, so no word a second look
+        # disagreed about ever reached the ladder.
+        if page_rows and crop_pairs:
+            per_page[i]["crop_pairs"] = crop_pairs
 
     lexicon = build_lexicon(agreed)
     rungs = Counter()
     for i, info in per_page.items():
         vis_tok = None
-        for a, b, cbox in info.get("crop_pairs", []):
+        for a, b, cbox, at in info.get("crop_pairs", []):
             verdict = adjudicate_pair(a, b, lexicon)
             if verdict["rung"] == "fold":
                 continue
             rungs[verdict["rung"]] += 1
-            disputes.append({"page": i, "pdf_page": pdf_of.get(i, i),
-                             "surya": a, "tesseract": b,
-                             "rung": verdict["rung"],
-                             "winner": verdict.get("winner"),
-                             "shipped": a, "box": cbox,
-                             "via": "crop"})
+            row = {"page": i, "pdf_page": pdf_of.get(i, i),
+                   "surya": a, "tesseract": b,
+                   "rung": verdict["rung"],
+                   "winner": verdict.get("winner"),
+                   "shipped": a, "box": cbox,
+                   "via": "crop"}
+            if at is not None:      # addressed like any other disputed word
+                row.update(site_address(surya_tokens[i], at))
+            disputes.append(row)
         for a, b, j, at in info["pairs"]:
             verdict = adjudicate_pair(a, b, lexicon)
             if verdict["rung"] == "fold":
@@ -1160,12 +1248,15 @@ def main(epub: str, pdf: str, report: "str | None" = None,
               + f", {vc.get('advisory', 0) + vc.get('silent', 0)} advisory"
               + (f" — {inkless} OVER BLANK PAPER" if inkless else ""))
     if report:
-        json.dump({"epub": epub, "pdf": pdf, "pages": n_done,
-                   "page_files": len(pages),
-                   "lexicon_size": len(lexicon),
-                   "rungs": dict(rungs), "disputes": disputes,
-                   "surya_only": surya_only},
-                  open(report, "w"), indent=1)
+        record = {"epub": epub, "pdf": pdf, "pages": n_done,
+                  "page_files": len(pages),
+                  "lexicon_size": len(lexicon),
+                  "rungs": dict(rungs), "disputes": disputes,
+                  "surya_only": surya_only}
+        if unread:      # the pages this record cannot speak for
+            record["unread_pdf_pages"] = sorted(unread)
+        with open(report, "w") as fh:
+            json.dump(record, fh, indent=1)
         print(f"report written: {report}")
     return 0
 
@@ -1196,9 +1287,17 @@ def calibrate(pdf: str, epub: "str | None" = None,
     degraded type and clean-render calibration cannot speak to it. The truth
     stays known — that is the entire point of synthesising the damage.
     """
+    tmp = tempfile.mkdtemp(prefix="calibrate_")
+    try:
+        return _calibrate(pdf, epub, limit, scale, degrade, tmp)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _calibrate(pdf: str, epub: "str | None", limit: "int | None",
+               scale: float, degrade: bool, tmp: str) -> dict:
     import pypdfium2 as pdfium
     doc = pdfium.PdfDocument(pdf)
-    tmp = tempfile.mkdtemp(prefix="calibrate_")
     engines = {"tesseract": Counter(), "vision": Counter()}
     cal_stats = Counter()
     shipped = epub_page_texts(epub) if epub else {}
