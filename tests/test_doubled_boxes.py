@@ -256,6 +256,101 @@ def test_a_stored_picture_under_a_dropped_box_is_not_recovered_either(tmp_path):
                if it.figure is not None) == 1, "untold, it cuts the picture"
 
 
+# ── a box no single block matches ────────────────────────────────────────────
+
+WARN_BOX = (60, 300, 400, 360)          # in points, on the 466 x 704 leaf
+WARN = "DO NOT elevate a suspected fractured limb unless it has been properly splinted."
+
+
+def _warning_page(tmp_path, drawing=False, name="warn"):
+    """A boxed WARNING: the word, and a sentence under it, inside one rule."""
+    pymupdf = pytest.importorskip("pymupdf")
+    doc = pymupdf.open()
+    page = doc.new_page(width=LEAF[0], height=LEAF[1])
+    for k in range(14):
+        page.insert_text((52, 60 + 14 * k), "The publisher set this line in type.",
+                         fontsize=9)
+    page.draw_rect(pymupdf.Rect(*WARN_BOX), width=1.5)
+    page.insert_text((200, 318), "WARNING", fontsize=10)
+    page.insert_text((70, 340), WARN, fontsize=8)
+    if drawing:                          # a sketch beside the words
+        for k in range(6):
+            page.draw_line((330 + 8 * k, 306), (360, 352), width=1)
+    pdf = tmp_path / f"{name}.pdf"
+    doc.save(str(pdf))
+    d = tmp_path / f"{name}-pages"
+    d.mkdir()
+    return vtb.load_pages_from_pdf(str(pdf), str(d))[0]
+
+
+def _warning_blocks():
+    box = tuple(v / LEAF[k % 2] for k, v in enumerate(WARN_BOX))
+    return [vtb.PageItem(html="<p>The publisher set this line in type.</p>",
+                         label="Text", box=(0.1, 0.07, 0.9, 0.36)),
+            vtb.PageItem(html="<p><b>WARNING</b></p>", label="SectionHeader",
+                         box=(0.40, 0.435, 0.60, 0.455)),
+            vtb.PageItem(html=f"<p><b>{WARN}</b></p>", label="Text",
+                         box=(0.14, 0.465, 0.85, 0.49)),
+            vtb.PageItem(figure=_art(), box=box)]
+
+
+def test_a_boxed_warning_read_as_two_blocks_is_not_also_a_picture(tmp_path):
+    """FM 4-25, page 43: the box as a picture, then WARNING, then the
+    sentence. No one block has the box's outline, so the rule that asks for
+    one let the picture through on 62 pages of that book."""
+    items = _warning_blocks()
+    kept, n, held = vtb.drop_doubled_boxes(items, _warning_page(tmp_path))
+    assert n == 1 and kept == items[:3] and held == [items[3].box]
+
+
+def test_without_the_page_to_ask_the_box_is_kept(tmp_path):
+    items = _warning_blocks()
+    assert vtb.drop_doubled_boxes(items) == (items, 0, [])
+
+
+def test_a_box_with_a_drawing_in_it_is_kept(tmp_path):
+    """The picture is the only copy of the drawing."""
+    items = _warning_blocks()
+    kept, n, _ = vtb.drop_doubled_boxes(
+        items, _warning_page(tmp_path, drawing=True))
+    assert n == 0 and kept == items
+
+
+def test_a_box_whose_words_were_not_read_is_kept(tmp_path):
+    """And here it is the only copy of the words."""
+    items = _warning_blocks()
+    del items[2]                         # the sentence never became a block
+    kept, n, _ = vtb.drop_doubled_boxes(items, _warning_page(tmp_path))
+    assert n == 0 and kept == items
+
+
+def test_a_cell_of_a_table_that_was_read_is_not_also_a_picture(tmp_path):
+    """FM 4-25, page 127: Table 5-2 rebuilt as a table, and three of its
+    cells again as pictures of their words."""
+    page = _problem_page(tmp_path)
+    heading, asks, table, _ = _problem_blocks()
+    x0, y0, x1, y1 = RULES
+    rows = [y0 + k * (y1 - y0) / 10 for k in range(11)]
+    cell = (x0 / LEAF[0], rows[1] / LEAF[1], x1 / LEAF[0], rows[4] / LEAF[1])
+    items = [heading, asks, table, vtb.PageItem(figure=_art(), box=cell)]
+    kept, n, held = vtb.drop_doubled_boxes(items, page)
+    assert n == 1 and kept == items[:3] and held == [cell]
+
+
+def test_a_scan_is_left_to_the_rule_it_had(tmp_path):
+    """A scan's PDF holds one picture of the page and says nothing about
+    what is in a box; TiHKAL's structures are ruled boxes inside text."""
+    import json
+    page = _warning_page(tmp_path)
+    with open(page + ".source.json") as fh:
+        src = json.load(fh)
+    src["scan"] = True
+    with open(page + ".source.json", "w") as fh:
+        json.dump(src, fh)
+    items = _warning_blocks()
+    assert vtb.drop_doubled_boxes(items, page) == (items, 0, [])
+
+
 # ── through a build ──────────────────────────────────────────────────────────
 
 class _Reads:

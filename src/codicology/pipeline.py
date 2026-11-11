@@ -1581,8 +1581,110 @@ def find_image_furniture(page_figures: list[list[str]],
 DOUBLED_BOX_OVERLAP = 0.8
 
 
-def drop_doubled_boxes(items: list) -> "tuple[list, int, list]":
-    """Return items without the pictures that only repeat a block the page
+# One block with the box's own outline is the plain case. A box may also
+# hold two blocks (a WARNING and its sentence), or be one cell of a table
+# that is a single block, and then no block has its outline: FM 4-25 printed
+# each boxed warning as a picture, a one-row table and a paragraph, and the
+# cells of its tables again as pictures after the table. Of the 675
+# ruled-border pictures in the shelf's caches that no single block matches,
+# 414 sit over text this way.
+#
+# What settles those is the PDF, where the page is typeset: whether anything
+# is placed or drawn in the box besides type and rules, and whether the
+# words the box prints are words the page has been read as saying. A box of
+# nothing but type the page already has is dropped. A box with a picture or
+# a drawing in it stays, and so does a box whose words were not read: its
+# picture is the only copy of them. Of 408 such boxes on typeset pages the
+# PDF calls 383 type and nothing else; fifty-six of those were looked at
+# and every one is a warning, a sidebar or a table cell. Of the 25 it holds
+# back, five are drawings and the rest are text set on a tint, which stays
+# doubled rather than be guessed at. A scan has no such record and its boxes
+# are left as they were: TiHKAL's chemical structures are boxes inside text.
+BOX_WORDS_READ = 0.9     # of the words the box prints, on the page as read
+
+
+def _box_holds_only_type(page, box) -> bool:
+    """Whether the PDF puts nothing inside this box but type and rules."""
+    pw, ph = page.get_size()
+    inner = (box[0] + 0.008, box[1] + 0.006, box[2] - 0.008, box[3] - 0.006)
+    span = (inner[2] - inner[0]) * (inner[3] - inner[1])
+    if span <= 0:
+        return False
+
+    def inside(nb):
+        return max(0.0, min(nb[2], inner[2]) - max(nb[0], inner[0])) \
+            * max(0.0, min(nb[3], inner[3]) - max(nb[1], inner[1]))
+
+    whole = (box[2] - box[0]) * (box[3] - box[1])
+    for obj in page.get_objects(max_depth=4):
+        if obj.type not in (2, 3, 4):       # a path, an image, a shading
+            continue
+        b = obj.get_bounds()
+        nb = _pdf_box_to_normalized(b, pw, ph)
+        if nb[2] < inner[0] or nb[0] > inner[2] \
+                or nb[3] < inner[1] or nb[1] > inner[3]:
+            continue
+        if obj.type == 3:
+            if inside(nb) > 0.02 * span:
+                return False
+            continue
+        if obj.type == 4:
+            return False
+        w, h = b[2] - b[0], b[3] - b[1]
+        if min(w, h) < 2.5 or max(w, h) < 9:
+            continue                        # a rule; a bullet or a tick
+        area = (nb[2] - nb[0]) * (nb[3] - nb[1])
+        if area > 0 and max(0.0, min(nb[2], box[2]) - max(nb[0], box[0])) \
+                * max(0.0, min(nb[3], box[3]) - max(nb[1], box[1])) \
+                >= 0.85 * whole:
+            continue                        # the box's own border
+        if inside(nb) >= 0.6 * area or inside(nb) > 0.05 * span:
+            return False
+    return True
+
+
+_BOX_WORD = re.compile(r"[a-z0-9]+")
+
+
+def _typeset_boxes_already_read(items: list, ruled: list, page_path: str
+                                ) -> set:
+    """ids of the ruled-border pictures that hold only type the page has."""
+    try:
+        with open(page_path + ".source.json") as fh:
+            src = json.load(fh)
+        if src.get("facsimile") or src.get("scan"):
+            return set()
+        import pypdfium2 as pdfium
+        page = pdfium.PdfDocument(src["pdf"])[src["page"]]
+        pw, ph = page.get_size()
+        textpage = page.get_textpage()
+    except Exception:
+        return set()
+    said = Counter(_BOX_WORD.findall(" ".join(
+        _strip_tags(it.html) for it in items
+        if it.html and it.figure is None).lower()))
+    gone = set()
+    for fig in ruled:
+        x0, y0, x1, y1 = fig.box
+        try:
+            printed = Counter(_BOX_WORD.findall(textpage.get_text_bounded(
+                left=x0 * pw, bottom=(1 - y1) * ph,
+                right=x1 * pw, top=(1 - y0) * ph).lower()))
+            total = sum(printed.values())
+            if total < 2:
+                continue                    # an empty box says nothing
+            read = sum(min(n, said.get(w, 0)) for w, n in printed.items())
+            if read >= BOX_WORDS_READ * total \
+                    and _box_holds_only_type(page, fig.box):
+                gone.add(id(fig))
+        except Exception:
+            continue
+    return gone
+
+
+def drop_doubled_boxes(items: list, page_path: "str | None" = None
+                       ) -> "tuple[list, int, list]":
+    """Return items without the pictures that only repeat what the page
     already has, how many were dropped, and the boxes they stood in."""
     ruled = [it for it in items
              if it.figure is not None and it.label is None and it.box]
@@ -1599,6 +1701,9 @@ def drop_doubled_boxes(items: list) -> "tuple[list, int, list]":
                 gone.add(id(fig))   # the block says what the box holds
             elif PLACEHOLDER_IMG.search(it.html):
                 gone.add(id(it))    # the same picture, about to be cut again
+    if page_path:
+        gone |= _typeset_boxes_already_read(
+            items, [f for f in ruled if id(f) not in gone], page_path)
     return ([it for it in items if id(it) not in gone], len(gone),
             [it.box for it in items if id(it) in gone])
 
@@ -8331,7 +8436,7 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
             n_phantoms += _sp
             if strip_furniture:
                 items = strip_running_heads(items)
-            items, _dbl, _held = drop_doubled_boxes(items)
+            items, _dbl, _held = drop_doubled_boxes(items, path)
             n_doubled += _dbl
             items = recover_placeholder_figures(items, path)
             items = recover_orphan_artwork(items, path, _held)
