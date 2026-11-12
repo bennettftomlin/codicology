@@ -565,6 +565,24 @@ def _differs_only_where_blind(ours: str, theirs: str) -> bool:
     return blind
 
 
+# The long s. An old book sets "Swainſon", "Guernſy", "Briſt."; the first
+# reader writes s, which is what the letter is, and a witness that has never
+# met it writes f. On Lloyd's register of 1764 Apple Vision did, and the
+# ladder took its "Swainfon", "Guernfy", "Amft" and "Brift" over the right
+# words: five verdicts, all wrong, out of ten such pairs on a shelf of 147
+# records. One pair alone may be a real misreading (fat for sat). A book
+# that has LONG_S_WANTED of them prints a long s, and in that book the
+# witness's f for our s is not a dispute.
+LONG_S_WANTED = 3
+
+
+def long_s(ours: str, theirs: str) -> bool:
+    """Whether the witness's word is ours with an f where ours has an s,
+    and nothing else different."""
+    return len(ours) == len(theirs) and ours != theirs and all(
+        x == y or (x in "sS" and y == "f") for x, y in zip(ours, theirs))
+
+
 def _dash_parts(word: str) -> int:
     """How many pieces a dash joins in a token: 2 for well-nigh, 1 for nigh."""
     return len([p for p in word.translate(_TYPO).split("-") if p])
@@ -1445,6 +1463,10 @@ def _adjudicate(epub: str, pdf: str, report: "str | None", scale: float,
     lexicon = build_lexicon(agreed)
     rungs = Counter()
     n_overruled = 0
+    # A book that prints a long s shows it more than once.
+    n_long_s = 0
+    prints_long_s = sum(long_s(a, b) for info in per_page.values()
+                        for a, b, _, _ in info["pairs"]) >= LONG_S_WANTED
     for i, info in per_page.items():
         heard: dict = {}        # each further reader reads a page once
 
@@ -1474,6 +1496,9 @@ def _adjudicate(epub: str, pdf: str, report: "str | None", scale: float,
                 row.update(site_address(surya_tokens[i], at))
             disputes.append(row)
         for a, b, j, at in info["pairs"]:
+            if prints_long_s and long_s(a, b):
+                n_long_s += 1
+                continue                    # the witness cannot read the letter
             verdict = adjudicate_pair(a, b, lexicon)
             if verdict["rung"] == "fold":
                 continue                    # policy, not a dispute
@@ -1505,6 +1530,9 @@ def _adjudicate(epub: str, pdf: str, report: "str | None", scale: float,
               f"the book"
               + (f"; {unmatched} matched nothing in the window and went "
                  f"unwitnessed" if unmatched else ""))
+    if n_long_s:
+        print(f"long s: {n_long_s} word(s) the witness read with an f where "
+              f"the book prints a long s, and we an s — not disputes")
     if align_stats["seam"]:
         print(f"reading order: {align_stats['seam']} word pair(s) discarded "
               f"where the readers walked the page in different orders — the "
