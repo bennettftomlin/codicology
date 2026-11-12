@@ -1,10 +1,11 @@
 # tools
 
-Three instruments, none of which reads a PDF or runs OCR.
+Four instruments, none of which reads a PDF or runs OCR.
 
 Two judge a change to the note linkers before it ships, working on
 EPUBs that already exist. The third builds an EPUB from a source that
-never went near a camera.
+never went near a camera. The fourth writes the shelf file that
+`codicology shelf` builds from.
 
 ## `linkprobe.py` — what today's code would make of every book
 
@@ -139,3 +140,26 @@ the rest of it sat outside the chapter div, and the lost words were
 ordinary ones the book used elsewhere. Counting could not see it.
 `absorb_strays` now puts those blocks back; `coverage` is what would
 have found them.
+
+## `shelf_from_calibre.py` — the shelf file, from a Calibre library
+
+```
+python tools/shelf_from_calibre.py --library "~/Calibre Library" \
+    --cache ~/Library/Preferences/calibre/plugins/codicology_ocr/cache/<library id> \
+    --second DIR --second-for 2061 3492 --out shelf.json
+```
+
+`codicology shelf build` builds every book a shelf file names from its OCR
+cache and `codicology shelf compare` says what differs between two such
+runs (see "Judging a change on the books already built" in the main
+README). This writes that file for the books the Calibre plugin has built:
+one entry for each cache in the plugin's folder whose book still has a PDF
+and an EPUB in the library.
+
+The options a book is built with are taken from its installed copy. A copy
+built since 12 November 2026 says them in its package; an older one is read
+for its signs (a page list means `--check-folios`, a bibliography entry
+with an id means `--link-citations`), and each entry records which of the
+two it was (`options_known`). The second reader leaves no sign, so the
+books built with it are named on the command line. The file is meant to be
+corrected by hand: it is the record of how the shelf is built.

@@ -292,6 +292,12 @@ def test_worker_processes_write_what_one_process_writes(vtb, tmp_path,
     monkeypatch.setattr(vtb, "PDF_POOL_MIN_PAGES", 2)
     monkeypatch.setattr(vtb, "PDF_POOL_WORKERS", 3)
     assert vtb._pdf_pool_workers(7) == min(3, os.cpu_count() or 1)
+    # whoever runs several builds at once may say how many each starts
+    monkeypatch.setenv(vtb.PDF_WORKERS_ENV, "1")
+    assert vtb._pdf_pool_workers(7) == 1
+    monkeypatch.setenv(vtb.PDF_WORKERS_ENV, "many")
+    assert vtb._pdf_pool_workers(7) == min(3, os.cpu_count() or 1)
+    monkeypatch.delenv(vtb.PDF_WORKERS_ENV)
     many = vtb.load_pages_from_pdf(book, str(shared))
 
     assert [os.path.basename(p) for p in many] == \

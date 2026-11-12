@@ -1,4 +1,4 @@
-"""codicology — one command, ten verbs.
+"""codicology — one command, and its verbs.
 
     codicology convert …    build the PDF/EPUB (the pipeline; see convert -h)
     codicology verify EPUB PDF
@@ -35,6 +35,11 @@
                             their pages have now. A build does it for itself
                             on first meeting an older cache; this does a
                             whole cache ahead of time
+    codicology shelf build SHELF OUT | compare BASE NEW | installed SHELF OUT
+                            build every book a shelf file names from its
+                            cache, reading nothing, several at once; and
+                            say what differs between two such runs, book
+                            by book. How a change to the pipeline is judged
 
 The check subcommands take the book first and the source second, in every
 case — the old standalone scripts disagreed with each other about the
@@ -283,7 +288,118 @@ def main(argv: "list[str] | None" = None) -> "int | None":
     d_file.add_argument("--json", action="store_true", dest="as_json",
                         help="print what was done as one JSON object")
 
+    p_shelf = sub.add_parser(
+        "shelf",
+        help="build every book a shelf file names from its OCR cache, "
+             "reading nothing, and say what differs between two such "
+             "runs: how a change to the pipeline is judged on the books "
+             "it has already built")
+    ssub = p_shelf.add_subparsers(dest="what", required=True)
+    s_build = ssub.add_parser(
+        "build",
+        help="build the shelf's books from their caches with "
+             "--cache-only, several at once, and keep a print of each")
+    s_build.add_argument("shelf", help="the shelf file: a JSON list of "
+                                       "books, each with id, pdf, cache, "
+                                       "and the options it is built with")
+    s_build.add_argument("out", help="the folder this run is kept in")
+    s_build.add_argument("--jobs", type=int, default=None,
+                         help="books built at once (default: 4)")
+    s_build.add_argument("--only", nargs="+", metavar="ID",
+                         help="build only these books")
+    s_build.add_argument("--code", metavar="DIR",
+                         help="build with the codicology package under "
+                              "this folder (a src folder of another "
+                              "checkout, say), not the one this command "
+                              "runs from: how a base run is made of a "
+                              "commit before a change")
+    s_build.add_argument("--verify", action="store_true",
+                         help="also run verify on each book against its "
+                              "PDF, and keep what it said")
+    s_build.add_argument("--resume", action="store_true",
+                         help="leave the books this folder already holds "
+                              "a good print of, and build the rest")
+    s_build.add_argument("--read-missing", action="store_true",
+                         help="when the rest are done, build the books "
+                              "--cache-only refused for a page with no "
+                              "reading the ordinary way, one at a time: "
+                              "the cached pages from the cache, the "
+                              "missing ones read. This starts the "
+                              "recogniser")
+    s_build.add_argument("--prints-only", action="store_true",
+                         help="keep each book's print, log and build "
+                              "record and not the book itself: enough to "
+                              "compare against, in a hundredth of the room")
+    s_build.add_argument("--against", metavar="BASE",
+                         help="when the run is done, compare it with this "
+                              "earlier run")
+    s_build.add_argument("--json", metavar="FILE", dest="report",
+                         help="with --against: write the whole comparison "
+                              "here")
+    s_build.add_argument("--show", type=int, default=None,
+                         help="changes shown for each book (default: 3)")
+    s_cmp = ssub.add_parser(
+        "compare",
+        help="what differs between two runs, book by book: words, markup "
+             "alone, the binding, pictures, contents. Exit status 1 if "
+             "anything does")
+    s_cmp.add_argument("base", help="the earlier run's folder")
+    s_cmp.add_argument("new", help="the later run's folder")
+    s_cmp.add_argument("--only", nargs="+", metavar="ID",
+                       help="compare only these books")
+    s_cmp.add_argument("--json", metavar="FILE", dest="report",
+                       help="write the whole comparison here")
+    s_cmp.add_argument("--show", type=int, default=None,
+                       help="changes shown for each book (default: 3)")
+    s_list = ssub.add_parser("list", help="print the books a shelf names")
+    s_list.add_argument("shelf", help="the shelf file")
+    s_inst = ssub.add_parser(
+        "installed",
+        help="take prints of the copies the shelf file says are installed, "
+             "building nothing, so a run can be compared with the shelf "
+             "as it stands: which books a rebuild would change")
+    s_inst.add_argument("shelf", help="the shelf file (each book's "
+                                      "\"installed\" names its copy)")
+    s_inst.add_argument("out", help="the folder the prints are kept in")
+    s_inst.add_argument("--only", nargs="+", metavar="ID",
+                        help="only these books")
+
     args = parser.parse_args(argv)
+    if args.command == "shelf":
+        import json
+        from . import shelf
+        try:
+            if args.what == "list":
+                shelf.listing(args.shelf)
+                return 0
+            if args.what == "installed":
+                record = shelf.installed(args.shelf, args.out,
+                                         only=args.only)
+                return 1 if record["failed"] else 0
+            status = 0
+            if args.what == "build":
+                record = shelf.build(
+                    args.shelf, args.out, jobs=args.jobs or shelf.JOBS,
+                    only=args.only, code=args.code, verify=args.verify,
+                    resume=args.resume, prints_only=args.prints_only,
+                    read_missing=args.read_missing)
+                status = 1 if record["failed"] else 0
+                if not args.against:
+                    return status
+                base, new = args.against, args.out
+                print()
+            else:
+                base, new = args.base, args.new
+            result = shelf.compare(base, new, only=args.only)
+            if args.report:
+                with open(args.report, "w", encoding="utf-8") as fh:
+                    json.dump(result, fh, ensure_ascii=False, indent=1)
+            differ = shelf.tell(result, show=shelf.SHOW if args.show is None
+                                else args.show)
+            return 1 if differ or status else 0
+        except shelf.ShelfError as exc:
+            print(f"[!] {exc}")
+            return 2
     if args.command == "verify":
         from . import verify
         return verify.main(args.epub, args.pdf)

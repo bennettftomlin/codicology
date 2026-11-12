@@ -125,7 +125,7 @@ It reads only the pages it is asked about, about twelve seconds each on an
 M1 Pro, and its readings are kept beside the OCR cache, so a rebuild does
 not read them again.
 
-## One command, thirteen verbs
+## One command, fourteen verbs
 
 ```bash
 # build — from a PDF (the usual case), photographs, or video.
@@ -162,7 +162,9 @@ first time it meets such a cache; `rekey` brings a whole cache over ahead
 of time. `codicology decisions` looks after decisions files; it is
 described under the review sheet below. `codicology bind`, `unbind` and
 `rebind` change how a built book's files are cut and nothing else; see
-"Pages, bound into chapters" below.)
+"Pages, bound into chapters" below. `codicology shelf` builds every book
+of a shelf from its cache and compares two such runs; see "Judging a
+change on the books already built".)
 
 The cache is what makes a rebuild cheap, and it holds hours of reading, so
 it is keyed on the page and nothing else: a rendered page by its pixels, a
@@ -467,6 +469,81 @@ up in `verify`.
 layer disagree. On a born-digital book, a disagreement is our error. On a
 scan, that layer is just another OCR pass and usually a worse one, so
 matching word counts show completeness, not correctness.
+
+## Judging a change on the books already built
+
+A rule written for one book is run on all of them before it is kept.
+`codicology shelf` does that: it builds every book a *shelf file* names
+from its OCR cache with `--cache-only`, several at once, and says what
+differs between two such runs.
+
+```bash
+# before the change: the shelf as the committed code builds it
+git archive HEAD src | tar -x -C /tmp/base
+codicology shelf build shelf.json runs/base --code /tmp/base/src --prints-only
+
+# after it: the shelf again, held against that
+codicology shelf build shelf.json runs/new --against runs/base
+```
+
+A shelf file is JSON, a list of books under `"books"`:
+
+```json
+{"id": "2102", "title": "The War Correspondent",
+ "pdf": "/books/war-correspondent.pdf", "cache": "/caches/2102-9f3a.ocr.gz",
+ "options": ["--check-folios", "--link-notes", "--typography"],
+ "decisions": "/caches/2102-9f3a-disputes.decisions.json"}
+```
+
+`id`, `pdf` and `cache` are required; `lang` is `en` unless said; `beside`
+lists files to put beside the cache (a second reader's readings).
+`tools/shelf_from_calibre.py` writes one from a Calibre library and the
+plugin's cache folder.
+
+Nothing a run reads is written. Each cache is borrowed into the run's
+folder first (cloned where the filing system can, copied where it cannot),
+and the build's log and record land beside the borrowed copy.
+
+A book whose cache lacks a page is not built that way, and is named:
+`--cache-only` reads nothing. There are such books on any shelf, because a
+page that reads empty is never cached (see "What every build does"): 13 of
+151 here, each for one or two pages. `--read-missing` builds them when the
+rest are done, the ordinary way and one at a time, since each starts the
+recogniser: every cached page from the cache, the missing ones read. The
+run and every comparison say which books those were and how many pages
+were read, because such a page can read differently the next time.
+
+What a run keeps of each book is a **print**: every page's markup, and a
+digest of every other file. Left out of it are the three things that
+belong to the occasion: the date, the identifier, and the line saying
+which commit built the book. Two more are written so as not to depend on
+how the book happens to be filed: a picture is named by its bytes and not
+by its number, and a link by the page it lands on and not by the chapter
+file that page was bound into. So one picture dropped on page 40 is one
+page that differs, not every page after it.
+
+`shelf compare BASE NEW` then reports, book by book: words that differ
+(with the words), markup alone, pages or pictures gone or new, the same
+pages bound differently, and the counts that moved (note links, links,
+contents entries, page list). It also says when a book was built from a
+different cache or decisions file, or with different options. Exit status
+is 0 only when every book is the same, so "this change moves nothing" is a
+command. `--only ID…` limits either verb to some books; `--resume` takes
+up a run that was stopped; `--verify` also runs `verify` on each book;
+`--jobs` sets how many build at once (4 by default), and each build is
+told to render its pages with its share of the machine's cores
+(`$CODICOLOGY_PDF_WORKERS`), so four builds are not forty processes.
+`shelf installed SHELF OUT` takes the same prints of the copies the shelf
+file says are installed, building nothing: compared with a run, it says
+which books a rebuild would change.
+
+Two measurements stand behind it. Two books built twice came out the same
+book. The same two built by the commit before the page-edge rules differed
+from today's in exactly the six places those rules act on, and nowhere
+else.
+
+`tools/linkprobe.py` remains the quick instrument for the note linkers
+alone (seconds, from the installed copies); the shelf run is the proof.
 
 ## Tests
 

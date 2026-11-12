@@ -10923,6 +10923,7 @@ def _scanned_pages(doc) -> set:
 # would be run a second time in each of them.
 PDF_POOL_MIN_PAGES = 24
 PDF_POOL_WORKERS = 8
+PDF_WORKERS_ENV = "CODICOLOGY_PDF_WORKERS"
 _PDF_WORKER = (
     "import json, sys; sys.path.insert(0, sys.argv[1]); "
     "from {module} import _load_pdf_share; "
@@ -11151,7 +11152,14 @@ def _pdf_pool_workers(n_pages: int) -> int:
     """How many processes to render with: one means stay in this one."""
     if n_pages < PDF_POOL_MIN_PAGES:
         return 1
-    return max(1, min(PDF_POOL_WORKERS, os.cpu_count() or 1))
+    # Whoever runs several builds at once says how many each may start:
+    # four builds of the shelf harness, eight workers apiece, were fifty
+    # processes on ten cores and a load average over two hundred.
+    most = PDF_POOL_WORKERS
+    said = os.environ.get(PDF_WORKERS_ENV, "")
+    if said.isdigit() and int(said) >= 1:
+        most = min(most, int(said))
+    return max(1, min(most, os.cpu_count() or 1))
 
 
 def load_pages_from_pdf(pdf_path: str, pages_dir: str,
