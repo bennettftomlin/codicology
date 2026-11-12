@@ -275,6 +275,12 @@ No flags required for any of this.
   a superscript; a footnote region printed without its rule gets one.
 - **Born-digital text is authority.** On a scan, the embedded text layer
   is somebody else's OCR — it is used as a witness, never as the answer.
+  On a page the publisher set, a word the reading got wrong is exchanged
+  for the publisher's, and a word it passed over is put back: a doubled
+  word written once, the second of two like words taken for the first, a
+  line the eye dropped, the "1" of "1 ½ tablets". Only where the PDF sets
+  the word in the line between words both agree on, and the page does not
+  have it somewhere else; each one is named in the build log.
 - **Pages are bound into chapters.** See the next section.
 
 ## Pages, bound into chapters

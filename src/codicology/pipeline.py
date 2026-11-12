@@ -9596,6 +9596,13 @@ def build_epub(
     if n_reconciled:
         print(f"    reconciled {n_reconciled} word(s) against the book's "
               f"own born-digital text")
+    if reconcile_native_text.put_back:
+        print(f"    put back {sum(len(w.split()) for _, _, w, _ in reconcile_native_text.put_back)} "
+              f"word(s) in {len(reconcile_native_text.put_back)} place(s) "
+              f"where the PDF's own text prints them in the line and the "
+              f"reading had passed over them:")
+    for _pi, _before, _words, _after in reconcile_native_text.put_back:
+        print(f"      page {_pi + 1}: “{_before} [{_words}] {_after}”")
     for _pi, _before, _figure, _after in reconcile_native_text.unplaced:
         print(f"    [?] page {_pi + 1}: the PDF's own text prints "
               f"“{_figure}” between “{_before}” and “{_after}”, and the "
@@ -12018,6 +12025,121 @@ def _same_word(ours: str, layer: str) -> bool:
     return False
 
 
+# Words the publisher prints and the reading passed over.
+#
+# A recogniser that writes a page out word by word does what a copyist
+# does. It writes a doubled word once ("to say that that the world" came
+# out with one that), takes the second of two words that look alike for the
+# first ("1.4 billion toe to 2.5 billion" lost its unit, "as well as fora
+# for teaching" its fora), and now and then drops down a line from one
+# word to another like it: Kill Boxes lost eleven words between "prevents"
+# and "pretends". Where There Is No Doctor gives a dose as "children 9 to
+# 14 years: 1 ½ tablets" and it was read as "½ tablets". On a born-digital
+# page the layer has every one of these, and the reconciler, which only
+# ever exchanged one word for another, left them out.
+#
+# Most of what the layer has and we lack is not that. The layer's order is
+# the typesetter's: it reads a table across its columns, puts a running
+# head after the last line of the text, and sets the page reference from
+# the next column in mid-sentence ("the first day: soak 102 joint in cold
+# water"). Of 263 runs of the layer's words with nothing of ours against
+# them, on the 26,728 born-digital pages of 134 books that differ from
+# their layer at all, 38 are words the reading passed over. Four things
+# tell them, and each was needed:
+#
+#   the words round the gap agree, three on each side (a running head's
+#     "oil price shocks" lined up with a caption's "two oil shocks");
+#   each word is a word, or a figure (the layer runs words together where
+#     a heading is set tight: "changehorizontal");
+#   the page does not have it already: the layer has each word more often
+#     than the page does (a chapter's number read after its title);
+#   it stands in the line: in the PDF each word follows the one before it
+#     on the same line of type, or opens the line below.
+#
+# All 38 were looked at on the page: 59 words in 28 books, two of them
+# whole lines, 15 a doubled word the book prints (some of them the book's
+# own slips, which are the book's). What the last test alone refuses stays
+# on the list a build prints, as before.
+PUT_BACK_ANCHOR = 3         # agreeing words wanted on each side of the gap
+PUT_BACK_LONGEST = 40       # words; nothing longer than twelve was found
+_VULGAR_SIGNS = "½¼¾⅓⅔⅛⅜⅝⅞"
+_PRINTED_RUN = re.compile(r"[^\W_]+|[%s]" % _VULGAR_SIGNS)
+
+
+def _printed_runs(words) -> list:
+    """The letters and figures of some words, each run apart, lower case:
+    what is counted when asking whether a page has a word."""
+    return [r.lower() for r in _PRINTED_RUN.findall(" ".join(words))]
+
+
+def _layer_geometry(page_path: str) -> "list | None":
+    """A typeset page's words in the PDF's own order, each with where it
+    stands: (word, left, bottom, right, top) in points. None for a scan, or
+    with no PDF to ask. Read a character at a time, so that a box is the
+    box of the character it is filed under."""
+    try:
+        with open(page_path + ".source.json") as fh:
+            src = json.load(fh)
+        if src.get("facsimile") or src.get("scan"):
+            return None
+        import pypdfium2 as pdfium
+        import pypdfium2.raw as pdfium_c
+        textpage = pdfium.PdfDocument(src["pdf"])[src["page"]].get_textpage()
+        words, cur = [], None
+        for i in range(textpage.count_chars()):
+            ch = chr(pdfium_c.FPDFText_GetUnicode(textpage.raw, i))
+            if ch.isspace():
+                if cur:
+                    words.append(tuple(cur))
+                cur = None
+                continue
+            if ch == "\x00":
+                continue
+            left, bottom, right, top = textpage.get_charbox(i)
+            if cur is None:
+                cur = [ch, left, bottom, right, top]
+            else:
+                cur[0] += ch
+                cur[1], cur[2] = min(cur[1], left), min(cur[2], bottom)
+                cur[3], cur[4] = max(cur[3], right), max(cur[4], top)
+        if cur:
+            words.append(tuple(cur))
+        return words
+    except Exception:
+        return None
+
+
+def _follows(a: tuple, b: tuple) -> bool:
+    """Whether word b comes straight after word a in a line of type: beside
+    it, a word space off, or opening the line below it."""
+    h = max(a[4] - a[2], b[4] - b[2], 1e-3)
+    if min(a[4], b[4]) - max(a[2], b[2]) >= 0.5 * min(a[4] - a[2], b[4] - b[2]):
+        # the same line: a word space is a third of the type's height and
+        # a justified line's twice that; the gutter of a table is more
+        return -0.6 * h <= b[1] - a[3] <= 1.6 * h
+    # the next line down, and back towards the margin it started from
+    return b[4] <= a[2] + 0.3 * h and a[2] - b[4] <= 1.6 * h and b[1] < a[1]
+
+
+def _stands_in_the_line(geometry: list, layer_words: list, b0: int,
+                        b1: int) -> bool:
+    """Whether layer_words[b0:b1] is set in the line between the word before
+    it and the word after: found in one place in the PDF, each word
+    following the last."""
+    printed = [g[0] for g in geometry]
+    for lead in (2, 1):
+        if b0 - lead < 0 or b1 + lead > len(layer_words):
+            continue
+        run = layer_words[b0 - lead:b1 + lead]
+        at = [i for i in range(len(printed) - len(run) + 1)
+              if printed[i:i + len(run)] == run]
+        if len(at) == 1:
+            first = at[0] + lead - 1
+            return all(_follows(geometry[i], geometry[i + 1])
+                       for i in range(first, first + (b1 - b0) + 1))
+    return False
+
+
 def reconcile_native_text(bodies: list[str], page_paths: list[str]) -> int:
     """
     Where a page's text is born-digital, defer to it word by word.
@@ -12035,6 +12157,11 @@ def reconcile_native_text(bodies: list[str], page_paths: list[str]) -> int:
     differs, bounded by words both sides agree on, with the same number of
     words on each side. Everything else — tables surya restructured, split
     hyphens the layer kept, regions that align loosely — stays ours.
+
+    And words the layer prints where we have none are put back, where they
+    are words the reading passed over and not the layer's own order: see
+    PUT_BACK_ANCHOR. They are listed in reconcile_native_text.put_back and
+    are not counted in what this returns.
 
     "Bounded" is enforced, not assumed. The aligner pairs a page's first
     words with the layer's first words whatever they are, and the layer's
@@ -12064,6 +12191,8 @@ def reconcile_native_text(bodies: list[str], page_paths: list[str]) -> int:
 
     changed = 0
     reconcile_native_text.unplaced.clear()
+    reconcile_native_text.put_back.clear()
+    vocabulary: "set | None" = None      # the book's own words, if asked for
     for pi, body in enumerate(bodies):
         if pi >= len(page_paths) or not body:
             continue
@@ -12092,18 +12221,78 @@ def reconcile_native_text(bodies: list[str], page_paths: list[str]) -> int:
         ours = [t[3] for t in toks]
         sm = difflib.SequenceMatcher(a=ours, b=layer_words, autojunk=False)
         subs: list[tuple[int, str]] = []
-        for tag, a0, a1, b0, b1 in sm.get_opcodes():
-            if tag == "insert" and 0 < a0 < len(ours) and b1 - b0 <= 2 \
-                    and toks[a0 - 1][0] == toks[a0][0] \
-                    and any(ch.isdigit() or ch in _VULGAR_SIGNS
-                            for w in layer_words[b0:b1] for ch in w):
-                # A figure the publisher prints between two words we read
-                # one after the other. It is said and not acted on: see
-                # reconcile_native_text.unplaced.
-                reconcile_native_text.unplaced.append(
-                    (pi, " ".join(ours[max(0, a0 - 2):a0]),
-                     " ".join(layer_words[b0:b1]),
-                     " ".join(ours[a0:a0 + 2])))
+        puts: list[tuple[int, list]] = []    # (the word before, the words)
+        ops = sm.get_opcodes()
+        on_layer = on_page = geometry = None
+
+        def agreed(n: int, step: int) -> int:
+            """How many words in a row agree on that side of op n: equal,
+            or the same word set the publisher's way."""
+            count = 0
+            n += step
+            while 0 <= n < len(ops) and count < PUT_BACK_ANCHOR:
+                kind, x0, x1, y0, y1 = ops[n]
+                if kind != "equal" and not (
+                        kind == "replace" and x1 - x0 == y1 - y0
+                        and all(_same_word(a, b) for a, b in
+                                zip(ours[x0:x1], layer_words[y0:y1]))):
+                    break
+                count += x1 - x0
+                n += step
+            return count
+
+        for n, (tag, a0, a1, b0, b1) in enumerate(ops):
+            if tag == "insert" and 0 < a0 < len(ours) \
+                    and toks[a0 - 1][0] == toks[a0][0]:
+                words = layer_words[b0:b1]
+                printed = _printed_runs(words)
+                passed_over = (
+                    b1 - b0 <= PUT_BACK_LONGEST and bool(printed)
+                    and not any(_CONTROL.search(w) or _no_glyph(w)
+                                for w in words)
+                    and agreed(n, -1) >= PUT_BACK_ANCHOR
+                    and agreed(n, +1) >= PUT_BACK_ANCHOR)
+                if passed_over:
+                    from .adjudicate import _is_word, fold_word
+                    for run in printed:
+                        if run.isdigit() or run in _VULGAR_SIGNS \
+                                or _is_word(fold_word(run)):
+                            continue
+                        if vocabulary is None:
+                            vocabulary = {
+                                fold_word(w) for b in bodies for w in
+                                re.findall(r"[^\W\d_]+", _strip_tags(b))}
+                        if fold_word(run) not in vocabulary:
+                            passed_over = False
+                            break
+                if passed_over:
+                    if on_layer is None:
+                        on_layer = Counter(_printed_runs(layer_words))
+                        on_page = Counter(_printed_runs(ours))
+                    wanted = Counter(printed)
+                    passed_over = all(on_layer[r] - on_page[r] >= c
+                                      for r, c in wanted.items())
+                if passed_over:
+                    if geometry is None:
+                        geometry = _layer_geometry(base) or []
+                    passed_over = bool(geometry) and _stands_in_the_line(
+                        geometry, layer_words, b0, b1)
+                if passed_over:
+                    puts.append((a0 - 1, words))
+                    on_page.update(printed)
+                    reconcile_native_text.put_back.append(
+                        (pi, " ".join(ours[max(0, a0 - 3):a0]),
+                         " ".join(words), " ".join(ours[a0:a0 + 3])))
+                elif b1 - b0 <= 2 and any(
+                        ch.isdigit() or ch in _VULGAR_SIGNS
+                        for w in words for ch in w):
+                    # A figure the publisher prints between two words we
+                    # read one after the other, and not one that can be put
+                    # back on the tests above. It is said and not acted on:
+                    # see reconcile_native_text.unplaced.
+                    reconcile_native_text.unplaced.append(
+                        (pi, " ".join(ours[max(0, a0 - 2):a0]),
+                         " ".join(words), " ".join(ours[a0:a0 + 2])))
             if tag != "replace" or (a1 - a0) != (b1 - b0) or (a1 - a0) > 3:
                 continue
             run = list(zip(range(a0, a1), layer_words[b0:b1]))
@@ -12156,13 +12345,18 @@ def reconcile_native_text(bodies: list[str], page_paths: list[str]) -> int:
                     continue
                 if mine != cand:
                     subs.append((ti, cand))
-        if not subs:
+        if not subs and not puts:
             continue
-        # apply from the back so recorded offsets stay valid
-        for ti, new_word in sorted(subs, reverse=True):
-            k, a, z, _ = toks[ti]
-            parts[k] = parts[k][:a] + html.escape(new_word) + parts[k][z:]
-            changed += 1
+        # A word exchanged takes the place of its word; words put back go
+        # in after the word before them. Applied from the back, so that
+        # recorded offsets stay valid.
+        edits = [(toks[ti][0], toks[ti][1], toks[ti][2], html.escape(word))
+                 for ti, word in subs]
+        edits += [(toks[ti][0], toks[ti][2], toks[ti][2],
+                   " " + html.escape(" ".join(words))) for ti, words in puts]
+        for k, a, z, new in sorted(edits, reverse=True):
+            parts[k] = parts[k][:a] + new + parts[k][z:]
+        changed += len(subs)
         bodies[pi] = "".join(parts)
     return changed
 
@@ -12172,15 +12366,16 @@ def reconcile_native_text(bodies: list[str], page_paths: list[str]) -> int:
 # and the recogniser read "½ tablets". The layer has the 1, and the
 # reconciler only ever exchanges one word for another, so it stood.
 #
-# It is not put in. Across the 26,044 born-digital pages of 133 books, 111
-# such words sit between two words we read together, and one of them is that
-# dose: the rest are the layer reading a table across its columns, or a page
-# reference from the margin landing in mid-sentence ("soak 102 joint in cold
-# water"). Twenty of the 111 hold a figure, in seven books. A figure is the
-# word a reader acts on, so those are listed when the book is built, for
-# someone to look at.
+# That one is put back now (see PUT_BACK_ANCHOR). What is not: across the
+# 26,044 born-digital pages of 133 books, 111 such words sit between two
+# words we read together, and most are the layer reading a table across its
+# columns, or a page reference from the next column landing in mid-sentence
+# ("soak 102 joint in cold water"). Twenty of the 111 hold a figure, in
+# seven books. A figure is the word a reader acts on, so those that cannot
+# be put back are listed when the book is built, for someone to look at:
+# three of them are that table's page references, which the page does lack.
 reconcile_native_text.unplaced = []
-_VULGAR_SIGNS = "½¼¾⅓⅔⅛⅜⅝⅞"
+reconcile_native_text.put_back = []
 
 
 def _collect_page_items(page_paths: list[str], backend: "OCRBackend",

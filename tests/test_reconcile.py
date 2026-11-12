@@ -472,8 +472,10 @@ def test_a_line_break_inside_the_paired_word_does_not_cost_its_run(vtb,
 def test_a_figure_the_reading_dropped_is_reported_and_not_put_in(vtb, tmp_path):
     """Where There Is No Doctor, page 413: "children 9 to 14 years: 1 ½
     tablets" was read as "½ tablets". The layer has the 1. Words the layer
-    has and we lack are mostly a table read across its columns, so nothing
-    is inserted, but a figure in mid-sentence is listed for a person."""
+    has and we lack are mostly a table read across its columns, so with no
+    PDF to say where the figure stands (as here) nothing is inserted, and
+    a figure in mid-sentence is listed for a person. With one, it is put
+    back: tests/test_put_back.py."""
     lead = ("Give medicine each day, starting the day entering a malaria area "
             "until 28 days after leaving the area.").split()
     body = "<p>" + " ".join(lead) + "</p><p>children 9 to 14 years: ½ tablets (150 mg.)</p>"
