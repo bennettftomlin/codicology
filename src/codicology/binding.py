@@ -25,9 +25,21 @@ The marks, all in the flow and none of them shown:
         page 123 begins here
     <span class="pg pg-joined" id="page-0123"></span>
         the same, inside a paragraph that began on the page before
+    <span class="pg pg-joined" id="page-0123" data-back="7"></span>
+        the same, where the page turned inside a word that has a hyphen of
+        its own ("self-" | "control"): the mark stands after the whole
+        word, and the page began 7 characters before it
+    <span class="pg pg-joined pg-hyphen" id="page-0123" data-back="11"></span>
+        the same, where the page before ended "con-" and this one began
+        "centration,": the hyphen the printer put there is left out
     <span class="pg pg-joined pg-hyphen" id="page-0123"></span>
-        the same, inside a word: the page before ended "con-" and this one
-        began "centration", and the hyphen the printer put there is left out
+        as books were bound on 11 and 12 November 2026: the mark at the
+        break itself, inside the word. Still read; no longer written.
+
+A page's mark never stands inside a word. Where the paper ran out in the
+middle of one, a reader's page begins with the next whole word, as it does
+in a book whose printer broke no word there; a reading system that shows
+page numbers, or speaks them, does so between two words.
     <div class="pg-held" data-page="0122">…</div>
         what closed page 122 after the paragraph that runs on from it
     <div class="pg-led" data-page="0123">…</div>
@@ -47,9 +59,11 @@ BOUND_FILE = re.compile(r"(?:.*/)?ch_(\d{4})\.xhtml$")
 
 MARK = '<span class="pg" id="page-%04d"></span>'
 MARK_JOINED = '<span class="pg pg-joined" id="page-%04d"></span>'
-MARK_IN_A_WORD = '<span class="pg pg-joined pg-hyphen" id="page-%04d"></span>'
+MARK_AFTER_WORD = ('<span class="pg pg-joined%s" id="page-%04d" '
+                   'data-back="%d"></span>')
 _MARK = re.compile(r'<span class="pg(?P<joined> pg-joined(?P<hyphen> '
-                   r'pg-hyphen)?)?" id="page-(?P<page>\d{4})"\s*'
+                   r'pg-hyphen)?)?" id="page-(?P<page>\d{4})"'
+                   r'(?: data-back="(?P<back>\d+)")?\s*'
                    r'(?:/>|>\s*</span>)')
 _ASIDE = re.compile(r'<div class="pg-(held|led)" data-page="(\d{4})"\s*>')
 # The printed page number, which the build sets at the head of its page.
@@ -85,6 +99,8 @@ _LABEL_AND_NAMES = re.compile(r"[A-Z][\w ]{0,30}:\s+(?:[^a-z\s]\S*\s*)+$")
 # A word the printer broke at the foot of the page, and what takes it up.
 _BROKEN_WORD = re.compile(r"([A-Za-z]+)-$")
 _REST_OF_WORD = re.compile(r"[a-z]+")
+# …and all of it, with whatever is set close against it: "centration,".
+_REST_OF_TOKEN = re.compile(r"[^\s<]*")
 # A paragraph that stops without a stop, taken up by a capital or a figure:
 # "…except in | Canton on the Pearl River" is one sentence, and so is a line
 # of verse followed by the next. Prose is told from the rest by its length.
@@ -266,14 +282,25 @@ def bind(pages: "list[tuple[int, str]]", words=None) -> str:
         else:
             a, b = pending["a"], rest[t][1]
             said, rest_b = a[:-len("</p>")].rstrip(), b[len("<p>"):].lstrip()
-            if _one_word(said, rest_b, words):
-                said, glue, mark = said[:-1], "", MARK_IN_A_WORD
+            one_word = _one_word(said, rest_b, words)
+            # a dash set close against its word takes the next close
+            # against itself; one with a space before it has one after
+            close_set = one_word or bool(re.search(r"\S[-—–/]$", said))
+            if one_word:
+                said = said[:-1]            # the printer's hyphen
+            # Where the page turned inside a word, its mark goes after
+            # the word: a page begins with a whole one. A dash between two
+            # words is between two words already.
+            in_a_word = one_word or bool(re.search(r"\S[-/]$", said))
+            rest_of_it = _REST_OF_TOKEN.match(rest_b).group(0) \
+                if in_a_word else ""
+            if rest_of_it:
+                joined = (said + rest_of_it + MARK_AFTER_WORD % (
+                    " pg-hyphen" if one_word else "", page, len(rest_of_it))
+                    + head.strip() + rest_b[len(rest_of_it):])
             else:
-                # a dash set close against its word takes the next close
-                # against itself; one with a space before it has one after
-                glue = "" if re.search(r"\S[-—–/]$", said) else " "
-                mark = MARK_JOINED
-            joined = said + glue + mark % page + head.strip() + rest_b
+                joined = (said + ("" if close_set else " ")
+                          + MARK_JOINED % page + head.strip() + rest_b)
             after = list(pending["after"])
             held = "".join(pending["trailing"] + pending["feet"])
             if held:
@@ -326,14 +353,22 @@ def unbind(flow: str) -> "list[tuple[int, str]]":
     """The pages a bound file was made of: (page index, body), in order."""
     flow, held, led = _take_asides(flow)
     marks = list(_MARK.finditer(flow))
+    segs = [flow[m.end():marks[k + 1].start() if k + 1 < len(marks)
+                 else len(flow)] for k, m in enumerate(marks)]
+    # what of a page's first word stands before its mark is the page's
+    first = [""] * len(marks)
+    for k, m in enumerate(marks):
+        back = int(m.group("back") or 0)
+        if back and k:
+            first[k], segs[k - 1] = segs[k - 1][-back:], segs[k - 1][:-back]
     pages = []
     for k, m in enumerate(marks):
         page = int(m.group("page"))
-        end = marks[k + 1].start() if k + 1 < len(marks) else len(flow)
-        seg = flow[m.end():end]
+        seg = segs[k]
         head = re.match(r"(?:%s)*" % _FOLIO.pattern, seg)
         body = seg[:head.end()] + "".join(led.get(page, [])) \
-            + ("<p>" if m.group("joined") else "") + seg[head.end():]
+            + ("<p>" if m.group("joined") else "") + first[k] \
+            + seg[head.end():]
         body = body.rstrip()
         if k + 1 < len(marks) and marks[k + 1].group("joined"):
             body += ("-" if marks[k + 1].group("hyphen") else "") + "</p>"
@@ -954,6 +989,44 @@ def unbind_epub(path: str, out: "str | None" = None) -> dict:
         _rewrite(z, out, changed, set(text), added)
     _put_bookmarks(out, remembered)
     return {"pages": n, "files": len(text)}
+
+
+def rebind_epub(path: str, out: "str | None" = None) -> dict:
+    """A bound book's files bound again from their own pages, by the rules
+    as they now are. The files, their names, the package and the contents
+    are what they were; a file is rewritten only where the binding of its
+    pages comes out differently, and only if it still comes apart into the
+    pages it held."""
+    out = out or path
+    stats = {"files": 0, "changed": 0, "pages": 0}
+    with zipfile.ZipFile(path) as z:
+        names = [n for n in z.namelist() if BOUND_FILE.match(n)]
+        if not names:
+            raise CannotBind("it is not bound")
+        text = {n: _text(z, n) for n in names}
+        pages = {n: unbind(body_of(t)) for n, t in text.items()}
+        words = book_words(b for group in pages.values() for _, b in group)
+        changed = {}
+        for n, src in text.items():
+            lo, hi = _span(src)
+            flow = bind(pages[n], words)
+            if not same_pages(unbind(flow), pages[n]):
+                raise CannotBind(f"{n} would not come apart again as it was")
+            new = "\n" + _lines(flow) + "\n"
+            stats["files"] += 1
+            stats["pages"] += len(pages[n])
+            if _norm(new) != _norm(src[lo:hi]):
+                import xml.etree.ElementTree as ET
+                doc = src[:lo] + new + src[hi:]
+                try:
+                    ET.fromstring(doc.encode("utf-8"))
+                except ET.ParseError as exc:
+                    raise CannotBind(f"{n} would not be well-formed ({exc})")
+                changed[n] = doc.encode("utf-8")
+                stats["changed"] += 1
+        if changed or out != path:
+            _rewrite(z, out, changed, set(), {})
+    return stats
 
 
 def rewrite_pages(path: str, out: str, change) -> int:

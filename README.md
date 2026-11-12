@@ -125,7 +125,7 @@ It reads only the pages it is asked about, about twelve seconds each on an
 M1 Pro, and its readings are kept beside the OCR cache, so a rebuild does
 not read them again.
 
-## One command, twelve verbs
+## One command, thirteen verbs
 
 ```bash
 # build — from a PDF (the usual case), photographs, or video.
@@ -160,8 +160,8 @@ backfills layout labels into a cache written before they were kept, and
 was named for the page's pixels. A build does that refiling for itself the
 first time it meets such a cache; `rekey` brings a whole cache over ahead
 of time. `codicology decisions` looks after decisions files; it is
-described under the review sheet below. `codicology bind` and `codicology
-unbind` change how a built book's files are cut and nothing else; see
+described under the review sheet below. `codicology bind`, `unbind` and
+`rebind` change how a built book's files are cut and nothing else; see
 "Pages, bound into chapters" below.)
 
 The cache is what makes a rebuild cheap, and it holds hours of reading, so
@@ -311,7 +311,9 @@ turns through:
 - **A word the printer broke at the foot of the page is one word** where
   its two halves make a word of the dictionary's or of the book's own
   ("con-" | "centration"). A compound that happened to break at its hyphen
-  ("self-" | "control") keeps it.
+  ("self-" | "control") keeps it. Either way the page begins after the
+  whole word: a page's mark, and the printed page number with it, never
+  stands inside a word.
 
 Nothing is read again and no word changes. Every page's start is marked in
 the text (`id="page-0212"`), the printed page number stays exactly where
@@ -326,6 +328,7 @@ inside the book is carried to the page it was on.
 ```bash
 codicology bind book.epub      # a book built before this, or with --page-files
 codicology unbind book.epub    # one file to a printed page again
+codicology rebind book.epub    # a bound book, bound again by the rules as they now are
 ```
 
 `convert --page-files` leaves the book as it is built. A book the binding

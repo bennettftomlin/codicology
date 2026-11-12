@@ -236,6 +236,15 @@ def main(argv: "list[str] | None" = None) -> "int | None":
     p_bind.add_argument("--out", metavar="EPUB",
                         help="write here instead of binding in place")
 
+    p_rebind = sub.add_parser(
+        "rebind",
+        help="bind a bound EPUB again by the rules as they now are (where "
+             "a page's mark stands when the page turned inside a word, "
+             "say). Its files, links and pages stay what they were")
+    p_rebind.add_argument("epub", help="an EPUB bound into chapters")
+    p_rebind.add_argument("--out", metavar="EPUB",
+                          help="write here instead of in place")
+
     p_unbind = sub.add_parser(
         "unbind",
         help="take a bound EPUB apart into one file to a printed page "
@@ -310,6 +319,17 @@ def main(argv: "list[str] | None" = None) -> "int | None":
     if args.command == "apply":
         from . import review
         review.apply_decisions(args.epub, args.decisions, out=args.out)
+        return 0
+    if args.command == "rebind":
+        from . import binding
+        try:
+            st = binding.rebind_epub(args.epub, out=args.out)
+        except binding.CannotBind as exc:
+            print(f"not bound again: {exc}")
+            return 1
+        print(f"{st['changed']} of {st['files']} file(s) bound again "
+              f"differently ({st['pages']} pages, all as they were): "
+              f"{args.out or args.epub}")
         return 0
     if args.command in ("bind", "unbind"):
         from . import binding

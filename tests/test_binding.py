@@ -100,7 +100,8 @@ def test_what_takes_up_a_paragraph_and_what_does_not(a, b, joins):
 
 def test_a_compound_broken_at_its_hyphen_keeps_it_and_is_given_no_space():
     pages = [(1, "<p>a printed compound such as self-</p>"), (2, "<p>control keeps its hyphen.</p>")]
-    assert "self-<span" in B.bind(pages)
+    assert ('such as self-control<span class="pg pg-joined" id="page-0002" data-back="7"></span>'
+            " keeps its hyphen.</p>") in B.bind(pages)
     assert _back(pages) == pages
 
 
@@ -111,8 +112,9 @@ def test_a_word_broken_at_the_foot_of_the_page_is_one_word():
     pages = [(1, "<p>estimates of the 1900 con-</p>" + feet),
              (2, (FOLIO % (2, 344)) + "<p>centration, industry by industry.</p>")]
     flow = B.bind(pages)
-    assert ('1900 con<span class="pg pg-joined pg-hyphen" id="page-0002"></span>'
-            + (FOLIO % (2, 344)) + "centration, industry") in flow
+    # the word is whole, and the page (and its printed number) begins after it
+    assert ('1900 concentration,<span class="pg pg-joined pg-hyphen" id="page-0002" data-back="11"></span>'
+            + (FOLIO % (2, 344)) + " industry by industry.</p>") in flow
     assert B.unbind(flow) == pages
 
 
@@ -120,7 +122,7 @@ def test_the_books_own_words_count_as_words():
     pages = [(1, "<p>what the miners called a Zwangs-</p>"), (2, "<p>arbeit of their own.</p>")]
     assert "pg-hyphen" not in B.bind(pages)
     words = B.book_words(["<p>Zwangsarbeit was abolished.</p>"])
-    assert "Zwangs<span" in B.bind(pages, words)
+    assert "Zwangsarbeit<span" in B.bind(pages, words)
     assert B.unbind(B.bind(pages, words)) == pages
 
 
@@ -758,3 +760,121 @@ def test_the_original_is_kept_and_a_stale_decision_reported_on_a_bound_book(tmp_
     dec.write_text(json.dumps({"page_files": 9, "decisions": [good]}))
     after = open(path, "rb").read()
     assert review.apply_decisions(path, str(dec))["refused"] and open(path, "rb").read() == after
+
+
+# ── a page's mark never stands inside a word ─────────────────────────────────
+
+INSIDE = re.compile(r'[^\s>]<span class="pg[^>]*></span>(?:<span[^>]*epub:type="pagebreak"[^>]*>(?:</span>)?)*[^\s<]')
+
+
+@pytest.mark.parametrize("a, b", [
+    ("estimates of the 1900 con-", "centration, industry by industry."),
+    ("estimates of the 1900 con-", "centration"),                          # the paragraph ends with the word
+    ("estimates of the 1900 con-", 'centration.<sup><a href="#fn-p2-n3">3</a></sup> Moody says so.'),
+    ("a printed compound such as self-", "control keeps its hyphen."),
+    ("a printed compound such as self-", "<i>control</i> in italic."),       # nothing of the word to take: left
+    ("the choice was and/", "or both of them, he said."),
+    ("for the letter itself see www.stuff.co.nz/letters-to-the-", "editor/9652661 (accessed 26 November)."),
+    ("R&amp;D spending in pharma-", "ceuticals rose &amp; rose."),
+])
+def test_where_the_page_turned_inside_a_word_it_begins_after_the_word(a, b):
+    for head in ("", FOLIO % (2, 9)):
+        pages = [(1, f"<p>{a}</p>"), (2, f"{head}<p>{b}</p>")]
+        flow = B.bind(pages)
+        assert "pg-joined" in flow
+        if not b.startswith("<"):
+            assert not INSIDE.search(flow), flow
+        assert B.unbind(flow) == pages
+
+
+def test_a_dash_between_two_words_is_between_two_words_already():
+    pages = [(1, "<p>the aftermath of arrival and of finding a place—</p>"),
+             (2, "<p>accommodation, a job—posed many challenges.</p>")]
+    assert 'place—<span class="pg pg-joined" id="page-0002"></span>accommodation,' in B.bind(pages)
+    assert _back(pages) == pages
+
+
+def test_a_word_broken_at_each_of_two_turns():
+    pages = [(1, "<p>It began with a long con-</p>"),
+             (2, (FOLIO % (2, 5)) + "<p>centration of the whole manu-</p>"),
+             (3, (FOLIO % (3, 6)) + "<p>facturing interest. Then it ended.</p>")]
+    flow = B.bind(pages)
+    assert "long concentration<span" in flow and "whole manufacturing<span" in flow
+    assert not INSIDE.search(flow)
+    assert B.unbind(flow) == pages
+
+
+def test_a_book_bound_before_the_mark_was_moved_is_still_read():
+    """As books were bound on 11 and 12 November 2026: the mark at the
+    break, inside the word."""
+    pages = [(1, "<p>estimates of the 1900 con-</p>"),
+             (2, (FOLIO % (2, 344)) + "<p>centration, industry by industry.</p>")]
+    old = ('<span class="pg" id="page-0001"></span><p>estimates of the 1900 con'
+           '<span class="pg pg-joined pg-hyphen" id="page-0002"></span>' + (FOLIO % (2, 344))
+           + "centration, industry by industry.</p>")
+    assert B.unbind(old) == pages
+    assert B.bind(B.unbind(old)) != old and B.unbind(B.bind(B.unbind(old))) == pages
+
+
+def _as_bound_before(path):
+    """Put a bound book's in-word marks back where they stood before."""
+    with zipfile.ZipFile(path) as z:
+        members = [(i, z.read(i.filename)) for i in z.infolist()]
+    moved = 0
+    with zipfile.ZipFile(path, "w") as z:
+        for info, data in members:
+            if B.BOUND_FILE.match(info.filename):
+                text = data.decode("utf-8")
+
+                def back(m):
+                    n = int(m.group(3))
+                    return (m.group(1)[:-n] + f'<span class="pg pg-joined pg-hyphen" id="page-{m.group(2)}"></span>'
+                            + m.group(4) + m.group(1)[-n:])
+                text, k = re.subn(r'([^<>]+)<span class="pg pg-joined pg-hyphen" id="page-(\d{4})" data-back="(\d+)"></span>'
+                                  r'((?:<span[^>]*epub:type="pagebreak"[^>]*/>)?)', back, text)
+                moved += k
+                data = text.encode("utf-8")
+            z.writestr(info, data)
+    return moved
+
+
+BROKEN = [(0, "<h1>One</h1><p>Estimates of the 1900 con-</p>"
+              '<hr/><p id="fn-p0000-n1"><a href="#fnref-p0000-n1">1</a> Moody, 1904.</p>'),
+          (1, (FOLIO % (1, 344)) + "<p>centration, industry by industry, were made later.</p>"),
+          (2, (FOLIO % (2, 345)) + "<h1>Two</h1><p>Another chapter, with no word broken.</p>")]
+
+
+def test_a_bound_book_is_bound_again_by_the_rules_as_they_now_are(tmp_path, capsys):
+    from codicology import cli
+    path = _built(tmp_path, BROKEN, toc=((0, "One"), (2, "Two")))
+    B.bind_epub(path)
+    new = _members(path)
+    assert _as_bound_before(path) == 1
+    old = _members(path)
+    assert INSIDE.search(old["EPUB/ch_0000.xhtml"]) and old != new
+    pages = B.page_bodies(path)
+    assert B.rebind_epub(path) == {"files": 2, "changed": 1, "pages": 3}
+    again = _members(path)
+    assert not INSIDE.search(again["EPUB/ch_0000.xhtml"])
+    assert "1900 concentration,<span" in again["EPUB/ch_0000.xhtml"]
+    # the pages are the pages they were, and nothing else in the book moved
+    assert B.page_bodies(path) == pages
+    assert {n: t for n, t in again.items() if "ch_0000" not in n} == {n: t for n, t in old.items() if "ch_0000" not in n}
+    assert again == new
+    # a second time changes nothing; the verb says what it did
+    assert B.rebind_epub(path)["changed"] == 0
+    assert cli.main(["rebind", path]) == 0
+    assert "0 of 2 file(s) bound again differently (3 pages, all as they were)" in capsys.readouterr().out
+    unbound = _built(tmp_path / "u" if (tmp_path / "u").mkdir() is None else tmp_path)
+    assert cli.main(["rebind", unbound]) == 1 and "not bound again: it is not bound" in capsys.readouterr().out
+
+
+def test_the_printed_page_number_is_found_after_the_word(tmp_path):
+    path = _built(tmp_path, BROKEN, toc=((0, "One"), (2, "Two")))
+    B.bind_epub(path)
+    one = _members(path)["EPUB/ch_0000.xhtml"]
+    assert re.search(r'concentration,<span class="pg pg-joined pg-hyphen" id="page-0001" data-back="11"></span>'
+                     r'<span epub:type="pagebreak"[^>]*id="pgb-0001"[^>]*aria-label="344"\s*/> industry', one)
+    assert 'href="ch_0000.xhtml#pgb-0001">344<' in _members(path)["EPUB/nav.xhtml"]
+    with zipfile.ZipFile(path) as z:
+        assert B.page_places(z)[1] == "epubcfi(/4/2/4/6/2)"
