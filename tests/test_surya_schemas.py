@@ -124,7 +124,10 @@ def test_the_backend_repairs_before_it_builds(stock, monkeypatch):
     monkeypatch.setitem(sys.modules, "surya.recognition",
                         _stub_predictor("surya.recognition",
                                         "RecognitionPredictor", seen, None))
-    vtb.SuryaBackend(["en"])
+    backend = vtb.SuryaBackend(["en"])
+    # nothing is built until a page has to be read (tests/test_cache_only.py)
+    assert not seen
+    backend._predict([object()])
     assert seen, "the backend built no predictor"
     assert all(llamacpp_rejects(p) is None for p in seen[0])
 

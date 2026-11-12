@@ -2380,6 +2380,14 @@ class ThirdOpinion(SecondOpinion):
 SECOND_OPINION: "SecondOpinion | None" = None
 THIRD_OPINION: "ThirdOpinion | None" = None
 
+# --cache-only: this run reads no page. What the cache holds is the book.
+CACHE_ONLY = False
+# Pages sent to the recogniser on this run, counting a page sent twice twice.
+READ_THIS_RUN = {"pages": 0}
+# What built the book, for the book to carry: set by the command, written
+# into the package as <meta name="codicology:build">.
+BUILD_NOTE: "str | None" = None
+
 # A rebuilt table is questioned where it holds less than this share of the
 # figures the PDF prints in its place, and the second reader's table is
 # taken where it holds nearly all of them, holds clearly more than the first,
@@ -3209,30 +3217,55 @@ class SuryaBackend(OCRBackend):
     # out of the tag for such an engine.
     language_blind = True
 
+    _NOT_THERE = (
+        "Could not find Surya's RecognitionPredictor. Install the "
+        "release this package pins: pip install 'codicology[surya]'.\n"
+        "If Surya is installed and this still fails, its API has "
+        "moved — check the installed version with\n"
+        "  python -c \"import importlib.metadata as m; "
+        "print(m.version('surya-ocr'))\"\n"
+        "then adjust SuryaBackend.\n")
+
     def __init__(self, langs: list[str]) -> None:
         super().__init__(langs)
         self._shape: str | None = None
-        self._load()
+        self._rec = None
+        # Whether Surya is there is asked now, before minutes of work. The
+        # predictor itself, which starts the recognition server and loads
+        # its model, waits for the first page that has to be read: a
+        # rebuild from a full cache used to start a server it never spoke
+        # to, and two such builds at once could find each other's.
+        import importlib.util
+        if "surya.recognition" not in sys.modules:
+            try:
+                found = importlib.util.find_spec("surya.recognition")
+            except (ImportError, ValueError) as exc:
+                raise RuntimeError(self._NOT_THERE
+                                   + f"Underlying import error: {exc}") from exc
+            if found is None:
+                raise RuntimeError(self._NOT_THERE
+                                   + "Underlying import error: no module "
+                                     "named surya.recognition")
 
     def _load(self) -> None:
+        if CACHE_ONLY:
+            # Not an exception a retry could catch: the promise of the flag
+            # is that nothing is read, whatever asked.
+            sys.exit("--cache-only: a page was sent to be read. Nothing "
+                     "more was done. Build without the flag to read it.")
         llamacpp_safe_schemas()     # before any predictor: the fallback's layout
         try:
             from surya.recognition import RecognitionPredictor
         except ImportError as exc:
-            raise RuntimeError(
-                "Could not find Surya's RecognitionPredictor. Install the "
-                "release this package pins: pip install 'codicology[surya]'.\n"
-                "If Surya is installed and this still fails, its API has "
-                "moved — check the installed version with\n"
-                "  python -c \"import importlib.metadata as m; "
-                "print(m.version('surya-ocr'))\"\n"
-                "then adjust SuryaBackend.\n"
-                f"Underlying import error: {exc}"
-            ) from exc
+            raise RuntimeError(self._NOT_THERE
+                               + f"Underlying import error: {exc}") from exc
         self._rec = RecognitionPredictor()
         self._shape = "predictor"
 
     def _predict(self, images: list[Image.Image]):
+        if self._rec is None:
+            self._load()
+        READ_THIS_RUN["pages"] += len(images)
         return self._rec(images)
 
     def _page_fragments(self, images: list[Image.Image]) -> list[list[str]]:
@@ -9493,9 +9526,28 @@ def build_epub(
                      " and will be read again, which is what puts the "
                      "labels there"))
 
+    if CACHE_ONLY:
+        # Said before anything is done, and of every page at once: a
+        # rebuild that must not read should not get as far as page 206 to
+        # find that out.
+        unread = [k for k, path_ in enumerate(page_paths)
+                  if cache is None or cache.get(path_) is None]
+        if unread:
+            named = ", ".join(f"page_{k:04d}" for k in unread[:12]) \
+                + (f" and {len(unread) - 12} more" if len(unread) > 12 else "")
+            sys.exit(f"--cache-only: {len(unread)} of this book's "
+                     f"{len(page_paths)} page(s) have no reading in the "
+                     f"cache ({named}). Nothing was read and nothing was "
+                     f"built. Build once without the flag to read them.")
+        print("  --cache-only: every page has a reading in the cache; "
+              "nothing will be read")
+
     book = epub.EpubBook()
     book.set_title(title)
     book.set_language(backend.langs[0] if backend.langs else "en")
+    if BUILD_NOTE:
+        book.add_metadata("OPF", "meta", "", {"name": "codicology:build",
+                                              "content": BUILD_NOTE})
 
     # Load each batch from disk rather than holding every page in memory: a
     # 300-page book at full resolution is several GB of decoded pixels. Figures
@@ -13240,6 +13292,13 @@ def main(argv: "list[str] | None" = None) -> None:
                         help="Remember what OCR read on each page here, and reuse it. "
                              "Re-running to change deduplication or --drop-pages then "
                              "costs seconds instead of reading the book again")
+    parser.add_argument("--cache-only", action="store_true",
+                        help="Read no page on this run: build from what "
+                             "--ocr-cache holds, and stop before doing "
+                             "anything if a page is missing from it. A "
+                             "rebuild made this way is the cache and the "
+                             "code and nothing else, so two of them can be "
+                             "compared")
     parser.add_argument("--review-sheet", metavar="HTML",
                         help="Write a page of everything the duplicate pass was unsure "
                              "of, for checking by eye. Its output is a --drop-pages list")
@@ -13415,17 +13474,176 @@ def main(argv: "list[str] | None" = None) -> None:
         set_pages_in_flight(args.batch_size)
     if args.progress_json:
         progress.enable()
+    if args.cache_only and not args.ocr_cache:
+        parser.error("--cache-only needs --ocr-cache: the cache is what it "
+                     "builds from")
+    record = None
     try:
+        globals()["CACHE_ONLY"] = bool(args.cache_only)
+        READ_THIS_RUN["pages"] = 0
+        if args.ocr_cache and args.epub:
+            record = _BuildRecord(args, argv)
+            globals()["BUILD_NOTE"] = record.note()
+            record.open()
         _convert(args, parser)
+        if record:
+            record.write()
     except SystemExit as exc:
         # sys.exit(message) is this pipeline's idiom for a refusal; hand the
         # message to whoever is driving before the status code ends us.
         if exc.code not in (None, 0):
             progress.emit(event="error", message=str(exc.code))
+            if record:
+                print(f"\n[stopped] {exc.code}")     # into the kept log
         raise
     except Exception as exc:
         progress.emit(event="error", message=f"{type(exc).__name__}: {exc}")
         raise
+    finally:
+        if record:
+            record.close()
+        globals()["CACHE_ONLY"] = False
+        globals()["BUILD_NOTE"] = None
+
+
+# What built a book, kept where the next person to wonder will look: beside
+# the cache it was built from. Twelve of fifty installed books turned out,
+# on 11 November, to be older than the code that was thought to have built
+# them, and which passes each had been built with had to be read off the
+# book: a page list meant --check-folios, an id beginning "bib-" meant
+# --link-citations. The log of a build went wherever its caller sent it, or
+# nowhere.
+#
+#   <cache stem>.build.log    what the build said, as it said it
+#   <cache stem>.build.json   when, by what code, with what options, from
+#                             what PDF, how many pages it had to read, and
+#                             what came out
+#
+# Both are of the LAST build from that cache. The book itself carries the
+# one line that matters most, in its package: the version, the commit and
+# the options (<meta name="codicology:build">).
+
+class _Tee:
+    """What is written, written twice."""
+
+    def __init__(self, stream, fh):
+        self.stream, self.fh = stream, fh
+
+    def write(self, text):
+        self.fh.write(text)
+        return self.stream.write(text)
+
+    def flush(self):
+        self.fh.flush()
+        self.stream.flush()
+
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
+
+
+def _code_version() -> str:
+    """The package's version and, where it runs from a checkout, the
+    commit, with a + where the checkout holds changes not committed."""
+    import subprocess
+    from . import __version__
+    here = os.path.dirname(os.path.abspath(__file__))
+    try:
+        said = subprocess.run(
+            ["git", "-C", here, "describe", "--always", "--dirty=+",
+             "--abbrev=7"], capture_output=True, text=True, timeout=10)
+        if said.returncode == 0 and said.stdout.strip():
+            return f"{__version__} {said.stdout.strip()}"
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return __version__
+
+
+# The options that are where a thing is and not what is done to it.
+_PLACES = {"video", "pdf", "epub", "ocr_cache", "pages_from", "from_images",
+           "review_sheet", "apply_decisions", "page_map", "patch", "title",
+           "progress_json"}
+
+
+class _BuildRecord:
+    def __init__(self, args, argv):
+        stem = args.ocr_cache
+        for end in (".ocr.gz", ".gz", ".json"):
+            if stem.endswith(end):
+                stem = stem[:-len(end)]
+                break
+        self.args, self.argv = args, list(argv or sys.argv[1:])
+        self.log_path, self.path = stem + ".build.log", stem + ".build.json"
+        self.began = time.time()
+        self.fh = self.stdout = None
+        self.code = _code_version()
+        # every option that is not as it would be if nothing were said
+        self.options = sorted(
+            "--" + k.replace("_", "-") + ("" if v is True else f"={v}")
+            for k, v in vars(args).items()
+            if k not in _PLACES and v not in (None, False, [], "")
+            and v != self._unsaid(k))
+
+    @staticmethod
+    def _unsaid(key):
+        # the few options whose silence is not None or False
+        return {"ocr": "surya", "lang": "en", "stride": 1, "rotate": 0,
+                "cover": "auto", "min_area": 0.15, "min_still_frames": 3}.get(
+                    key, None)
+
+    def note(self) -> str:
+        return f"{self.code}; {' '.join(self.options)}".rstrip("; ")
+
+    def open(self) -> None:
+        try:
+            self.fh = open(self.log_path, "w", encoding="utf-8")
+        except OSError:
+            self.fh = None
+            return
+        self.fh.write(f"codicology {self.code}\n"
+                      f"{time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                      f"convert {' '.join(self.argv)}\n\n")
+        self.stdout, sys.stdout = sys.stdout, _Tee(sys.stdout, self.fh)
+
+    def close(self) -> None:
+        if self.stdout is not None:
+            sys.stdout, self.stdout = self.stdout, None
+        if self.fh is not None:
+            self.fh.close()
+            self.fh = None
+
+    def write(self) -> None:
+        a = self.args
+        source = a.pages_from or a.from_images or a.video
+        out = {"built": time.strftime("%Y-%m-%dT%H:%M:%S"),
+               "codicology": self.code, "options": self.options,
+               "argv": self.argv,
+               "source": os.path.abspath(source) if source else None,
+               "cache": os.path.abspath(a.ocr_cache),
+               "decisions": a.apply_decisions,
+               "pages_sent_to_be_read": READ_THIS_RUN["pages"],
+               "cache_only": bool(a.cache_only),
+               "seconds": round(time.time() - self.began),
+               "log": os.path.abspath(self.log_path)}
+        if source and os.path.isfile(source):
+            out["source_bytes"] = os.path.getsize(source)
+        if a.epub and os.path.exists(a.epub):
+            from . import binding
+            with open(a.epub, "rb") as fh:
+                out["epub"] = {"path": os.path.abspath(a.epub),
+                               "sha256": hashlib.sha256(fh.read()).hexdigest()}
+            try:
+                import zipfile
+                with zipfile.ZipFile(a.epub) as z:
+                    out["epub"]["bound"] = binding.is_bound(z.namelist())
+                out["epub"]["pages"] = len(binding.page_bodies(a.epub))
+            except Exception:
+                pass
+        try:
+            with open(self.path, "w", encoding="utf-8") as fh:
+                json.dump(out, fh, indent=1, ensure_ascii=False)
+            print(f"\n  build record: {self.path}")
+        except OSError as exc:
+            print(f"\n  [~] no build record written: {exc}")
 
 
 def _convert(args, parser) -> None:
@@ -13459,8 +13677,12 @@ def _convert(args, parser) -> None:
                      f"{_second.DEFAULT_DIR} (or name them in "
                      f"${_second.MODEL_ENV} and ${_second.MMPROJ_ENV}), and "
                      f"have llama-server on the PATH.")
+        _unasked = "--cache-only: no page is read on this run" \
+            if args.cache_only else None
+        _reader2 = _second.SecondReader()
+        _reader2.down = _unasked
         _opinion = SecondOpinion(
-            _second.SecondReader(),
+            _reader2,
             _second.SecondCache(_second.SecondCache.beside(args.ocr_cache))
             if args.ocr_cache else None)
         globals()["SECOND_OPINION"] = _opinion
@@ -13470,8 +13692,10 @@ def _convert(args, parser) -> None:
         if _third.available():
             # Not asked for by name: it has no say but in what the second
             # reader raises, so it comes with it where it is installed.
+            _reader3 = _third.ThirdReader()
+            _reader3.down = _unasked
             _vote = ThirdOpinion(
-                _third.ThirdReader(),
+                _reader3,
                 _second.SecondCache(_second.SecondCache.beside(
                     args.ocr_cache, ".third.gz"), tag=_third.NAME)
                 if args.ocr_cache else None)

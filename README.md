@@ -169,6 +169,20 @@ it is keyed on the page and nothing else: a rendered page by its pixels, a
 page lifted out of the PDF as a JPEG by its bytes. The encoder that writes
 the working page files can change without a single page being read again.
 
+A rebuild that must not read anything says so: `convert --cache-only`
+builds from what the cache holds, never starts the recogniser, and stops
+before it has built anything if a page is missing from the cache, naming
+the pages. Two such builds of one book from one cache are the same book,
+which is what lets a change to the code be measured. (Without the flag the
+recogniser is still not started until a page actually has to be read.)
+
+Every build made with `--ocr-cache` leaves two files beside the cache,
+`<cache>.build.log` (what the build said) and `<cache>.build.json` (when,
+by which version and commit, with which options, from which PDF, how many
+pages it had to read, and the hash of the EPUB that came out). The book
+carries the short form of that in its package, as
+`<meta name="codicology:build">`.
+
 `codicology convert -h` documents the full flag set: page dropping and
 swapping by stable run ids, review sheets for human adjudication, cover
 selection, OCR backend and language choice, and the geometry knobs for
