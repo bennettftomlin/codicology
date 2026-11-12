@@ -6070,6 +6070,25 @@ def normalize_math(body: str) -> str:
                   clean, body, flags=re.S)
 
 
+# A raised 2 or 3 standing directly on a unit of length is a power. The
+# recogniser writes "60,000 km<sup>2</sup>" exactly as it writes a note
+# call, and where the chapter had a note 2 the linker bound the unit to
+# it: ten square kilometres on the shelf pointed at somebody's citation,
+# and Small is Necessary's list of abbreviations ("ft² square feet")
+# would have. These five are not words, so nothing else can be meant; "in"
+# is one, and a raised 1 on "ft" in a table was a note mark, so neither is
+# taken. Set as the character, it is what the page prints and nothing a
+# linker looks at. (It is set once the page's own text layer has been
+# deferred to: see where build_epub calls this.)
+_UNIT_POWER = re.compile(
+    r"(?<![A-Za-z])(mm|cm|km|m|ft)<sup>\s*([23])\s*</sup>")
+
+
+def set_unit_powers(body: str) -> str:
+    return _UNIT_POWER.sub(
+        lambda m: m.group(1) + ("²" if m.group(2) == "2" else "³"), body)
+
+
 # The five renderings of an entry head, each capturing the head's own text.
 _HEAD_FORMS = [re.compile(x, re.S) for x in (
     r"<h[1-4][^>]*>\s*(?:<b>\s*)?(#\d{1,3}\..*?)(?:</b>\s*)?</h[1-4]>",
@@ -6168,7 +6187,23 @@ BODY_MARKER = re.compile(r"<sup>\s*(\d{1,3})\s*</sup>")
 # the group walk, and the rank probe all gate on this one pattern. The word
 # must still be the whole heading.
 #
-NOTES_HEAD = re.compile(r"<h\d[^>]*>\s*(?:FOOT|END)?NOTES?\s*</h\d>", re.I)
+# And the word a publisher puts before it. Every heading on the shelf that
+# says "notes" was listed on 12 November 2026, 151 books: besides the bare
+# word there are "REFERENCE NOTES" (Allen's Reconstruction, whose 192
+# markers all stayed plain for it) and "End Notes" written as two words.
+# Everything else that says the word is a heading ABOUT something ("A Note
+# on the Text", "Notes on Contributors", "Notes payable to order") and is
+# still refused, because the designation must be the whole heading.
+#
+# "Source Notes" is refused too, though it reads like one of these. Both
+# books that have it are field manuals whose source notes are a list keyed
+# by page, not numbered notes, and admitted, the heading made a notes
+# section of FM 3-06's back matter: a stray raised 2 in the body was bound
+# to the second sense of a word in the glossary, thirty-eight pages on.
+# The first whole-shelf run found it; the link probe, which skips a book
+# with so few markers, had not.
+_NOTES_WORDS = r"(?:(?:FOOT|END|REFERENCE)[\s-]*)?NOTES?"
+NOTES_HEAD = re.compile(rf"<h\d[^>]*>\s*{_NOTES_WORDS}\s*</h\d>", re.I)
 # A publisher may call the same thing by the other name: one book heads its
 # endnotes "References" and then groups them PREFACE, INTRODUCTION, CHAPTER
 # 1…, numbered from 1 in each — a notes section in every respect but the
@@ -6191,16 +6226,22 @@ NOTES_HEAD = re.compile(r"<h\d[^>]*>\s*(?:FOOT|END)?NOTES?\s*</h\d>", re.I)
 # so the ungrouped fallback refuses it for want of an ascending run. A
 # section has to be shaped like notes to be read as notes.
 NOTES_SECTION_HEAD = re.compile(
-    r"<h\d[^>]*>\s*(?:(?:FOOT|END)?NOTES?|REFERENCES?)\s*</h\d>", re.I)
+    rf"<h\d[^>]*>\s*(?:{_NOTES_WORDS}|REFERENCES?)\s*</h\d>", re.I)
 # The names a notes section gives its groups. Chapter forms, spelled out or
 # numbered — and the sections a book's front and back matter use, because a
 # book that annotates its introduction gives those notes a group of their
 # own. Missing that group does not merely lose it: groups pair by position,
 # so an unrecognised first group shifts every one after it by one, and the
 # markers then link confidently to the wrong chapter's citations.
-GROUP_NAMES = (r"CHAPTER\s+[A-Z\-]+|CHAPTER\s+\d{1,3}"
+#
+# A notes section may also say whose notes they are in so many words:
+# Cressey's Other People's Money heads its groups "Notes to Chapter 1",
+# and none of the five was a head, so its 102 markers had five groups too
+# few to pair with.
+GROUP_NAMES = (r"(?:NOTES\s+(?:TO|FOR)\s+(?:THE\s+)?)?"
+               r"(?:CHAPTER\s+[A-Z\-]+|CHAPTER\s+\d{1,3}"
                r"|INTRODUCTION|PREFACE|PROLOGUE|FOREWORD|FORWARD"
-               r"|CONCLUSION|EPILOGUE|AFTERWORD|POSTSCRIPT")
+               r"|CONCLUSION|EPILOGUE|AFTERWORD|POSTSCRIPT)")
 # Inline markup between the heading and its words is invisible to a reader
 # and fatal to a pattern that does not expect it: Work, Sex & Power sets
 # every one of its eighteen group heads as <h2><i>Chapter One</i></h2>, and
@@ -6211,6 +6252,79 @@ GROUP_HEAD = re.compile(
     r"<(h[1-6]|p)\b[^>]*>\s*(?:<[^/][^>]*>\s*)*"
     r"(" + GROUP_NAMES + r")"
     r"\s*(?:</[a-zA-Z]+>\s*)*</\1>", re.I)
+# A group's head may carry the chapter's title after its number: The War
+# Correspondent heads its eight "CHAPTER 3. JOURNALISM, OBJECTIVITY AND
+# WAR". GROUP_HEAD wants the designation to be the whole heading, for the
+# reason given above, so not one of the eight opened a group and all 188
+# markers stayed plain. Here the heading must be a HEADING (a paragraph
+# that opens "Chapter 3: see…" is somebody's note), the number must be
+# one the strict parsers accept, and a mark must stand between it and the
+# title, which is what tells "CHAPTER 3. THE PRESS" from a heading that
+# merely begins with the words.
+GROUP_HEAD_TITLED = re.compile(
+    r"<(h[1-6])\b[^>]*>\s*(?:<[^/][^>]*>\s*)*"
+    rf"CHAPTER\s+(\d{{1,3}}|[IVXL]{{1,7}}|{_NUMBER_WORD})(?!\w)"
+    r"\s*[.:—–-]\s*\S", re.I)
+
+# And a group may be named by where in the book its notes belong and by
+# nothing else. Ste. Croix's Class Struggle in the Ancient Greek World
+# numbers its notes afresh in every section of every chapter and heads each
+# group with the section's designation alone: "[I.ii]", "[IV.vi]". Thirty-
+# eight heads, not one of them a head. The whole heading must be the
+# designation: numerals joined by full stops, in brackets or not.
+_SECTION_NUMERAL = r"(?:[IVXL]{1,7}|[ivxl]{1,7}|\d{1,3})"
+GROUP_HEAD_SECTION = re.compile(
+    r"<(h[1-6])\b[^>]*>\s*(?:<[^/][^>]*>\s*)*"
+    rf"[\[(]?\s*{_SECTION_NUMERAL}(?:\s*\.\s*{_SECTION_NUMERAL})+\s*[\])]?"
+    r"\s*(?:</[a-zA-Z]+>\s*)*</\1>")
+
+
+def _notes_follow(bodies: list[str], page: int, pos: int) -> bool:
+    """Whether what stands under a NOTES head is notes: a numbered entry,
+    in any dress the parsers read, before the page after next begins.
+
+    The word alone is not the thing. A field manual sets a caution under
+    the heading NOTE two dozen times, and Small is Necessary opens with a
+    one-page NOTE on its terms; each was counted as a notes section. The
+    count decides which linker a book gets, and the first such heading is
+    where the back-of-book section is taken to begin, so that one page cost
+    Small is Necessary 361 links: its real Notes, two hundred pages on,
+    were read as the tail of a section that had begun in the front matter.
+    """
+    under = bodies[page][pos:]
+    if page + 1 < len(bodies):
+        under += bodies[page + 1]
+    return any(pat.search(under) for pat in (
+        NOTE_ENTRY, NOTE_ENTRY_PLAIN, NOTE_ENTRY_LI, NOTE_ENTRY_BARE))
+
+
+def notes_head_on(bodies: list[str], page: int, pattern=None):
+    """The first NOTES head on this page that notes follow, or None."""
+    for m in (pattern or NOTES_HEAD).finditer(bodies[page]):
+        if _notes_follow(bodies, page, m.end()):
+            return m
+    return None
+
+
+def count_notes_heads(bodies: list[str]) -> int:
+    """How many pages open a notes section."""
+    return sum(1 for i in range(len(bodies)) if notes_head_on(bodies, i))
+
+
+def notes_section_start(bodies: list[str]) -> "int | None":
+    """The page the back-of-book notes begin on: the first with a notes
+    head (or the other name for one) that notes follow. A book none of
+    whose heads is followed by anything this can read keeps its first, as
+    before: the parser may still find what this glance did not."""
+    first = None
+    for i, b in enumerate(bodies):
+        if not NOTES_SECTION_HEAD.search(b):
+            continue
+        if notes_head_on(bodies, i, NOTES_SECTION_HEAD):
+            return i
+        if first is None:
+            first = i
+    return first
 
 
 def _bare_numbered(bodies: list[str], start: int) -> bool:
@@ -6221,7 +6335,7 @@ def _bare_numbered(bodies: list[str], start: int) -> bool:
     running on from the page before. Ten, because a notes section set this
     way runs to dozens of entries, while three bare numerals were the panel
     labels of a figure in FM 31-70's appendix, under a REFERENCES head."""
-    rank = re.search(r"<(h[1-6])[^>]*>\s*(?:FOOT|END)?NOTES?\s*</\1>",
+    rank = re.search(rf"<(h[1-6])[^>]*>\s*{_NOTES_WORDS}\s*</\1>",
                      bodies[start], re.I)
     stop = rf"<{rank.group(1)}[^>]*>" if rank else r"<h1[^>]*>"
     bare = 0
@@ -6245,7 +6359,7 @@ def parse_notes_section(bodies: list[str]) -> tuple[int, list[list[tuple[int, in
     tells a citation apart from a marker in running prose, which never leads
     its paragraph.
     """
-    start = next((i for i, b in enumerate(bodies) if NOTES_SECTION_HEAD.search(b)), None)
+    start = notes_section_start(bodies)
     if start is None:
         return -1, []
     bare = _bare_numbered(bodies, start)
@@ -6255,6 +6369,10 @@ def parse_notes_section(bodies: list[str]) -> tuple[int, list[list[tuple[int, in
     group_nos: list[int | None] = []
     current: list[tuple[int, int, int]] | None = None
     empty_streak = 0
+    # The section is read first and grouped after, because one question
+    # asked while grouping needs what comes next (_lists_inside_notes).
+    stream: list[tuple[int, int, str, "int | None"]] = []
+    seen_group = open_notes = False       # a group is open and has a note
     for i in range(start, len(bodies)):
         b = bodies[i]
         sup_notes = [(m.start(), "note", int(m.group(1))) for m in NOTE_ENTRY.finditer(b)]
@@ -6278,8 +6396,14 @@ def parse_notes_section(bodies: list[str]) -> tuple[int, list[list[tuple[int, in
                 no = _roman_to_int(m.group(1))
                 if no is not None:
                     heads.append((m.start(), "group", no))
+        for m in GROUP_HEAD_TITLED.finditer(b):
+            no = _chapter_head_number(m.group(2))
+            if no is not None:
+                heads.append((m.start(), "group", no))
+        for m in GROUP_HEAD_SECTION.finditer(b):
+            heads.append((m.start(), "group", None))
         events = sorted(heads + sup_notes + plain_notes, key=lambda e: e[0])
-        if i > start and not events and current:
+        if i > start and not events and open_notes:
             # one event-less page may be a blank leaf inside the notes; two
             # in a row mean the notes have ended and this is the index
             empty_streak += 1
@@ -6289,34 +6413,43 @@ def parse_notes_section(bodies: list[str]) -> tuple[int, list[list[tuple[int, in
         empty_streak = 0
         for pos, kind, n in events:
             if kind == "group":
+                seen_group, open_notes = True, False
+            elif seen_group:
+                open_notes = True
+            stream.append((i, pos, kind, n))
+    skip = _lists_inside_notes(stream)
+    for at, (i, pos, kind, n) in enumerate(stream):
+        if at in skip:
+            continue
+        if kind == "group":
+            current = []
+            groups.append(current)
+            group_nos.append(n)
+        elif current is not None:
+            if n == 1 and current and current[-1][1] > 1:
+                # The numbering came back to 1. A book restarts its
+                # notes at 1 only where a new chapter's notes begin, so
+                # the section's own sequence declares the boundary — a
+                # structural fact no typographic pattern can supply, and
+                # the only evidence available when a head is dressed in
+                # a way the patterns miss. Gendzier's Development
+                # Against Democracy heads all eight of its groups and
+                # four are invisible here: three wrap the number in
+                # <i>, and chapter four's is a centred paragraph with a
+                # <br/> inside it. Eight groups parsed as four, too far
+                # from the body's eight to pair, and all 705 markers
+                # went unlinked.
+                #
+                # A RETURN TO 1 specifically, not any number that fails
+                # to climb: a repeated or misread number is a damaged
+                # entry, and splitting on one would invent a group and
+                # shift every pairing after it. The numbering must also
+                # have climbed above 1 first, so a group whose own
+                # first entries read 1, 1 stays whole.
                 current = []
                 groups.append(current)
-                group_nos.append(n)
-            elif current is not None:
-                if n == 1 and current and current[-1][1] > 1:
-                    # The numbering came back to 1. A book restarts its
-                    # notes at 1 only where a new chapter's notes begin, so
-                    # the section's own sequence declares the boundary — a
-                    # structural fact no typographic pattern can supply, and
-                    # the only evidence available when a head is dressed in
-                    # a way the patterns miss. Gendzier's Development
-                    # Against Democracy heads all eight of its groups and
-                    # four are invisible here: three wrap the number in
-                    # <i>, and chapter four's is a centred paragraph with a
-                    # <br/> inside it. Eight groups parsed as four, too far
-                    # from the body's eight to pair, and all 705 markers
-                    # went unlinked.
-                    #
-                    # A RETURN TO 1 specifically, not any number that fails
-                    # to climb: a repeated or misread number is a damaged
-                    # entry, and splitting on one would invent a group and
-                    # shift every pairing after it. The numbering must also
-                    # have climbed above 1 first, so a group whose own
-                    # first entries read 1, 1 stays whole.
-                    current = []
-                    groups.append(current)
-                    group_nos.append(None)
-                current.append((i, n, pos))
+                group_nos.append(None)
+            current.append((i, n, pos))
     keep = [(no, g) for no, g in zip(group_nos, groups) if g]
     if not keep:
         solo = _ungrouped_notes(bodies, start)
@@ -6325,6 +6458,47 @@ def parse_notes_section(bodies: list[str]) -> tuple[int, list[list[tuple[int, in
             return start, [solo]
     parse_notes_section.last_group_numbers = [no for no, _ in keep]
     return start, [g for _, g in keep]
+
+
+def _lists_inside_notes(stream: list) -> set:
+    """Which entries of a notes section are a numbered list inside a note,
+    as positions in `stream` ((page, pos, kind, number), in reading order).
+
+    A return to 1 is how a notes section says a new chapter's notes begin
+    where its head went unread (see parse_notes_section). But a note may
+    itself hold a numbered list, and that returns to 1 as well: KGB: Masters
+    of the Soviet Union has one "1." inside note 15 of a chapter, and the
+    phantom group it opened put every later group one out against the
+    body's, so that 643 markers, the whole book's, were refused.
+
+    What tells the two apart is what comes after. A chapter's notes go on
+    from 1; a list inside note 15 is followed by note 16. So a run that
+    climbs from 1 by ones, begun where the numbers had passed 1 and with
+    no head before it, is a list inside a note exactly when the entry
+    after it is the next number of the notes it interrupted.
+    """
+    skip: set = set()
+    prev = None                 # the last note of the group being read
+    at = 0
+    while at < len(stream):
+        _, _, kind, n = stream[at]
+        if kind == "group":
+            prev = None
+            at += 1
+            continue
+        if n == 1 and prev is not None and prev > 1:
+            end = at + 1
+            while (end < len(stream) and stream[end][2] == "note"
+                   and stream[end][3] == stream[end - 1][3] + 1):
+                end += 1
+            after = stream[end] if end < len(stream) else None
+            if after and after[2] == "note" and after[3] == prev + 1:
+                skip.update(range(at, end))
+                at = end
+                continue
+        prev = n
+        at += 1
+    return skip
 
 
 def _ungrouped_notes(bodies: list[str], start: int) -> list:
@@ -6349,7 +6523,7 @@ def _ungrouped_notes(bodies: list[str], start: int) -> list:
     opens with a heading of the notes head's own rank, and numbered entries
     beyond that boundary are somebody else's.
     """
-    rank = re.search(r"<(h[1-6])[^>]*>\s*(?:FOOT|END)?NOTES?\s*</\1>",
+    rank = re.search(rf"<(h[1-6])[^>]*>\s*{_NOTES_WORDS}\s*</\1>",
                      bodies[start], re.I)
     stop = rf"<{rank.group(1)}[^>]*>" if rank else r"<h1[^>]*>"
     bare = _bare_numbered(bodies, start)
@@ -6434,8 +6608,8 @@ def link_chapter_notes(bodies: list[str], dropped: set) -> dict:
     notes.
     """
     stats = {"linked": 0, "unlinked": 0, "sections": 0}
-    heads = [(i, m.start()) for i, b in enumerate(bodies)
-             for m in [NOTES_HEAD.search(b)] if m]
+    heads = [(i, m.start()) for i in range(len(bodies))
+             for m in [notes_head_on(bodies, i)] if m]
     # A section whose display heading the OCR dropped still announces
     # itself: a bare chapter designation followed at once by entries
     # numbered from one. One book lost a single FOOTNOTES head that way,
@@ -7378,7 +7552,7 @@ def normalize_note_heads(bodies: list[str]) -> int:
     Only pages inside the notes section that carry note entries are touched,
     and only standalone bold blocks; bold inside a sentence stays emphasis.
     """
-    start = next((i for i, b in enumerate(bodies) if NOTES_SECTION_HEAD.search(b)), None)
+    start = notes_section_start(bodies)
     if start is None:
         return 0
     changed = 0
@@ -8721,6 +8895,64 @@ def link_citations(bodies: list[str], dropped: set) -> dict:
     return stats
 
 
+# A raised figure standing directly on a title in italics, an abbreviation
+# in capitals or a Roman numeral is how an edition or a volume is written:
+# SEHRE², SIG³, IG II². In the body of a book whose notes are numbered it is
+# also exactly how a note call is written, so it is only taken for the
+# edition where it does not continue its chapter's calls: the calls climb,
+# and a 2 after call 14 has not climbed. Ste. Croix cites editions this way
+# ninety-odd times in a body of 1,275 calls; each would have opened the
+# second or third note of whatever section it stood in.
+#
+# One that happens to continue the calls (PL² met just after call 1) is
+# told another way: a title carries its edition wherever it is cited, so
+# a figure once shown to be a title's edition is that title's edition
+# everywhere in the book. Shown, not merely met twice: "in the EU¹" may
+# open two chapters, and both are calls.
+_EDITION_MARK = re.compile(
+    r"(?:<i>([^<]{1,40})</i>|(?<![A-Za-z])([A-Z]{2,}))?"
+    r"(?:\s*(?<![A-Za-z])([IVXL]{1,6}))?$")
+
+
+def _title_under(body: str, pos: int) -> "str | None":
+    """The title, abbreviation or volume the raised figure at `pos` stands
+    directly on, or None where it stands on anything else."""
+    m = _EDITION_MARK.search(body[max(0, pos - 60):pos])
+    if not m or not any(m.groups()):
+        return None
+    return " ".join(g.strip() for g in m.groups() if g)
+
+
+def _titles_with_editions(bodies: list[str], body_groups: list,
+                          note_groups: list) -> set:
+    """(title, figure) pairs the order of the calls shows to be editions:
+    met somewhere on that title at or below the highest call its chapter
+    had made."""
+    shown: set = set()
+    for bg, ng in zip(body_groups, note_groups):
+        answered = {n for (_, n, _) in ng}
+        top = 0
+        for (pi, n, pos) in bg:
+            if n not in answered:
+                continue
+            title = _title_under(bodies[pi], pos)
+            if title is not None and n <= top:
+                shown.add((title, n))
+                continue
+            top = max(top, n)
+    return shown
+
+
+def _an_editions_number(body: str, pos: int, n: int, top: int,
+                        editions: set = frozenset()) -> bool:
+    """Whether the raised figure at `pos` is an edition's or a volume's and
+    not a call: it stands on a title, and either is no higher than the
+    highest call its chapter has made so far or is that title's edition
+    elsewhere in the book (`editions`, from _titles_with_editions)."""
+    title = _title_under(body, pos)
+    return title is not None and (n <= top or (title, n) in editions)
+
+
 def link_notes(bodies: list[str], dropped: set[int],
                chapter_starts: "list[tuple[int, int]] | None" = None) -> dict:
     """
@@ -8784,6 +9016,7 @@ def link_notes(bodies: list[str], dropped: set[int],
         stats["misaligned"] = True
         return stats
 
+    editions = _titles_with_editions(bodies, body_groups, note_groups)
     # rewrite from the last page backward so match offsets stay valid
     edits: dict[int, list[tuple[int, int, str]]] = {}
     for g, (bg, ng) in enumerate(zip(body_groups, note_groups)):
@@ -8792,11 +9025,16 @@ def link_notes(bodies: list[str], dropped: set[int],
         for (pi, n, pos) in ng:
             notes_by_n.setdefault(n, (pi, pos))
         seen_backref: set[int] = set()
+        top = 0                 # the highest call this chapter has made
         for (pi, n, pos) in bg:
             target = notes_by_n.get(n)
             if target is None or pi in dropped:
                 stats["unlinked"] += 1
                 continue
+            if _an_editions_number(bodies[pi], pos, n, top, editions):
+                stats["unlinked"] += 1
+                continue
+            top = max(top, n)
             tpi, tpos = target
             m = BODY_MARKER.match(bodies[pi][pos:])
             ref_id = f"ref-g{g}-{n}"
@@ -9766,6 +10004,12 @@ def build_epub(
               f"reading had passed over them:")
     for _pi, _before, _words, _after in reconcile_native_text.put_back:
         print(f"      page {_pi + 1}: “{_before} [{_words}] {_after}”")
+    # After the layer has had its say and not before. A PDF's text layer
+    # is flat: it holds "km2" for km², and a word it holds differently
+    # from ours is taken from it. Set first, "km²" was one word the layer
+    # spelled another way and came back "km2": the first whole-shelf run
+    # of this rule showed it in four born-digital books.
+    bodies = [set_unit_powers(b) for b in bodies]
     for _pi, _before, _figure, _after in reconcile_native_text.unplaced:
         print(f"    [?] page {_pi + 1}: the PDF's own text prints "
               f"“{_figure}” between “{_before}” and “{_after}”, and the "
@@ -10033,7 +10277,7 @@ def build_epub(
         # runs regardless, and The Invisible Government, which mixes symbol
         # footnotes with numbered endnotes, gets both linkers each taking
         # only what is theirs.
-        n_note_heads = sum(1 for b in bodies if NOTES_HEAD.search(b))
+        n_note_heads = count_notes_heads(bodies)
         # Only the strict heads gate the numbered footnote pass. Widening it
         # to READ References as well cost three books every same-page link
         # they had — 35, 14 and 4 — because a book can print numbered notes

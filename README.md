@@ -269,7 +269,13 @@ No flags required for any of this.
   endnotes, per-chapter endnotes, symbol footnotes and numbered same-page
   footnotes are told apart by the book's own layout. A marker that cannot
   be bound confidently is left as printed, on the view that no link beats
-  a wrong one.
+  a wrong one. A notes section is known by its name (Notes, Endnotes,
+  Reference Notes) *and* by numbered entries following it,
+  so a page headed NOTE in the front matter is not one; its groups by any
+  of the ways a book names them ("Chapter 3", "CHAPTER 3. THE TITLE",
+  "Notes to Chapter 3", "[I.ii]"). A raised figure that is not a call is
+  not linked: a power on a unit (km² is set as that), or an edition's
+  number on a title (SEHRE², SIG³).
 - **Structure.** Chapters come from the printed contents where it parses,
   and otherwise from the book's own running heads, which name the chapter
   on every page of it. The two are also checked against each other: a
@@ -541,6 +547,15 @@ Two measurements stand behind it. Two books built twice came out the same
 book. The same two built by the commit before the page-edge rules differed
 from today's in exactly the six places those rules act on, and nowhere
 else.
+
+Its first use was the notes rules of 12 November. Of 138 books built
+before and after, 127 came out the same and 11 differed, each of them a
+book the rules were written for. It also found two things the link probe
+had not, because the probe runs the linkers and nothing else: a power set
+as "km²" was handed back as "km2" by the step that defers to a PDF's own
+text, and a heading admitted as a notes head ("Source Notes") bound a
+stray figure in a field manual to an entry in its glossary. Both were put
+right before the rules were kept.
 
 `tools/linkprobe.py` remains the quick instrument for the note linkers
 alone (seconds, from the installed copies); the shelf run is the proof.

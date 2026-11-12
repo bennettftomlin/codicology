@@ -76,7 +76,7 @@ def dispatch(bodies: list[str], dropped: set) -> tuple[int, int]:
     dispatch and books stop reproducing, which is the loudest thing this
     tool can say.
     """
-    n_heads = sum(1 for b in bodies if P.NOTES_HEAD.search(b))
+    n_heads = P.count_notes_heads(bodies)
     foot = P.link_footnotes(bodies, allow_numbered=(n_heads == 0))
     if n_heads >= 2:
         before = list(bodies)
@@ -106,7 +106,8 @@ def measure(path: str) -> dict | None:
     raw = [files.get(i, "") for i in range(total)]
     has_note = sum(len(re.findall(r'href="[^"]*#note-', b)) for b in raw)
     has_foot = sum(len(re.findall(r'href="[^"]*#fn-', b)) for b in raw)
-    bodies = [unlink(b) for b in raw]
+    # and what the build does to a page before any linker sees it
+    bodies = [P.set_unit_powers(unlink(b)) for b in raw]
     if sum(len(P.BODY_MARKER.findall(b)) for b in bodies) < 5 and not has_foot:
         return None                     # nothing in this book to link
     dropped = {i for i in range(total) if i not in files}
