@@ -35,12 +35,33 @@
    "probe_foot": 0,
    "probe_notes": 0
   },
+  "1117": {
+   "installed_foot": 1,
+   "installed_notes": 0,
+   "name": "Kill or Get Killed - U.S. Marine Corps.epub",
+   "probe_foot": 1,
+   "probe_notes": 0
+  },
+  "1122": {
+   "installed_foot": 0,
+   "installed_notes": 0,
+   "name": "Nuclear Winter_ The Anthropology of Human - An",
+   "probe_foot": 0,
+   "probe_notes": 0
+  },
+  "1123": {
+   "installed_foot": 12,
+   "installed_notes": 0,
+   "name": "Where There is no Dentist - Murray Dickson.epu",
+   "probe_foot": 12,
+   "probe_notes": 0
+  },
   "1996": {
    "installed_foot": 0,
-   "installed_notes": 568,
+   "installed_notes": 575,
    "name": "Chinese Communism and the Rise of Mao - Benjam",
    "probe_foot": 0,
-   "probe_notes": 567
+   "probe_notes": 575
   },
   "2017": {
    "installed_foot": 13,
@@ -49,11 +70,18 @@
    "probe_foot": 13,
    "probe_notes": 0
   },
+  "2030": {
+   "installed_foot": 2,
+   "installed_notes": 0,
+   "name": "FMFRP 12-15  Small Wars Manual - Marine Corps.",
+   "probe_foot": 2,
+   "probe_notes": 0
+  },
   "2043": {
    "installed_foot": 35,
    "installed_notes": 0,
    "name": "When Protest Becomes Crime - Carolijn Terwindt",
-   "probe_foot": 35,
+   "probe_foot": 36,
    "probe_notes": 0
   },
   "2044": {
@@ -114,10 +142,10 @@
   },
   "2053": {
    "installed_foot": 0,
-   "installed_notes": 111,
+   "installed_notes": 112,
    "name": "After Queer Theory - James Penney.epub",
    "probe_foot": 0,
-   "probe_notes": 111
+   "probe_notes": 112
   },
   "2054": {
    "installed_foot": 0,
@@ -170,10 +198,10 @@
   },
   "2061": {
    "installed_foot": 0,
-   "installed_notes": 500,
+   "installed_notes": 505,
    "name": "Burning Up - Simon Pirani.epub",
    "probe_foot": 0,
-   "probe_notes": 500
+   "probe_notes": 505
   },
   "2062": {
    "installed_foot": 0,
@@ -231,12 +259,54 @@
    "probe_foot": 0,
    "probe_notes": 391
   },
+  "2070": {
+   "installed_foot": 0,
+   "installed_notes": 876,
+   "name": "How America Became Capitalist - James Parisot.",
+   "probe_foot": 0,
+   "probe_notes": 876
+  },
+  "2071": {
+   "installed_foot": 0,
+   "installed_notes": 1666,
+   "name": "How the West Came to Rule - Alexander Anievas.",
+   "probe_foot": 0,
+   "probe_notes": 1666
+  },
+  "2072": {
+   "installed_foot": 0,
+   "installed_notes": 353,
+   "name": "Hope Lies in the Proles - John Newsinger.epub",
+   "probe_foot": 0,
+   "probe_notes": 353
+  },
+  "2073": {
+   "installed_foot": 10,
+   "installed_notes": 0,
+   "name": "Information Politics - Tim Jordan.epub",
+   "probe_foot": 10,
+   "probe_notes": 0
+  },
   "2074": {
    "installed_foot": 11,
    "installed_notes": 0,
    "name": "Laboratories of Learning - Mario Novelli.epub",
    "probe_foot": 11,
    "probe_notes": 0
+  },
+  "2075": {
+   "installed_foot": 0,
+   "installed_notes": 204,
+   "name": "Lost Worlds - Kevin Foster.epub",
+   "probe_foot": 0,
+   "probe_notes": 204
+  },
+  "2076": {
+   "installed_foot": 1,
+   "installed_notes": 312,
+   "name": "Kurdish Hizbullah in Turkey - Mehmet Kurt.epub",
+   "probe_foot": 1,
+   "probe_notes": 312
   },
   "2077": {
    "installed_foot": 1,
@@ -252,6 +322,13 @@
    "probe_foot": 0,
    "probe_notes": 547
   },
+  "2079": {
+   "installed_foot": 0,
+   "installed_notes": 14,
+   "name": "People Without History - Jeremy Seabrook.epub",
+   "probe_foot": 0,
+   "probe_notes": 14
+  },
   "2080": {
    "installed_foot": 0,
    "installed_notes": 41,
@@ -259,12 +336,222 @@
    "probe_foot": 0,
    "probe_notes": 41
   },
+  "2081": {
+   "installed_foot": 0,
+   "installed_notes": 985,
+   "name": "Paul Robeson - Gerald Horne.epub",
+   "probe_foot": 0,
+   "probe_notes": 985
+  },
+  "2082": {
+   "installed_foot": 23,
+   "installed_notes": 0,
+   "name": "Geographies of Digital Exclusion - Mark Graham",
+   "probe_foot": 23,
+   "probe_notes": 0
+  },
   "2083": {
    "installed_foot": 0,
    "installed_notes": 791,
    "name": "Revolutionary Movements in Africa - Pascal Bia",
    "probe_foot": 0,
    "probe_notes": 791
+  },
+  "2084": {
+   "installed_foot": 0,
+   "installed_notes": 372,
+   "name": "Right Across the World - John Feffer.epub",
+   "probe_foot": 0,
+   "probe_notes": 372
+  },
+  "2085": {
+   "installed_foot": 0,
+   "installed_notes": 183,
+   "name": "Small is Necessary - Anitra Nelson.epub",
+   "probe_foot": 0,
+   "probe_notes": 183
+  },
+  "2086": {
+   "installed_foot": 2,
+   "installed_notes": 0,
+   "name": "Sans Papiers - Alice Bloch.epub",
+   "probe_foot": 2,
+   "probe_notes": 0
+  },
+  "2087": {
+   "installed_foot": 0,
+   "installed_notes": 93,
+   "name": "The Anthropology of Security - Mark Maguire.ep",
+   "probe_foot": 0,
+   "probe_notes": 93
+  },
+  "2088": {
+   "installed_foot": 0,
+   "installed_notes": 670,
+   "name": "The Birth of Capitalism - Henry Heller.epub",
+   "probe_foot": 0,
+   "probe_notes": 670
+  },
+  "2089": {
+   "installed_foot": 0,
+   "installed_notes": 497,
+   "name": "The Corporation that Changed the World - Nick ",
+   "probe_foot": 0,
+   "probe_notes": 497
+  },
+  "2090": {
+   "installed_foot": 1,
+   "installed_notes": 769,
+   "name": "The European Radical Left - Giorgos Charalambo",
+   "probe_foot": 1,
+   "probe_notes": 769
+  },
+  "2092": {
+   "installed_foot": 0,
+   "installed_notes": 481,
+   "name": "The Geopolitics of Green Colonialism - Miriam ",
+   "probe_foot": 0,
+   "probe_notes": 481
+  },
+  "2093": {
+   "installed_foot": 0,
+   "installed_notes": 397,
+   "name": "The Long Retreat - Boris Kagarlitsky.epub",
+   "probe_foot": 0,
+   "probe_notes": 397
+  },
+  "2095": {
+   "installed_foot": 0,
+   "installed_notes": 276,
+   "name": "The Poverty of Growth - Olivier De Schutter.ep",
+   "probe_foot": 0,
+   "probe_notes": 276
+  },
+  "2096": {
+   "installed_foot": 0,
+   "installed_notes": 203,
+   "name": "The Message is Murder - Jonathan Beller.epub",
+   "probe_foot": 0,
+   "probe_notes": 203
+  },
+  "2097": {
+   "installed_foot": 0,
+   "installed_notes": 216,
+   "name": "The Politics of Permaculture - Terry Leahy.epu",
+   "probe_foot": 0,
+   "probe_notes": 216
+  },
+  "2098": {
+   "installed_foot": 0,
+   "installed_notes": 337,
+   "name": "The Roman Empire - Neville Morley.epub",
+   "probe_foot": 0,
+   "probe_notes": 337
+  },
+  "2099": {
+   "installed_foot": 10,
+   "installed_notes": 0,
+   "name": "The Profit Doctrine - Robert Chernomas.epub",
+   "probe_foot": 10,
+   "probe_notes": 0
+  },
+  "2100": {
+   "installed_foot": 0,
+   "installed_notes": 167,
+   "name": "Theories of Social Capital - Ben Fine.epub",
+   "probe_foot": 0,
+   "probe_notes": 167
+  },
+  "2101": {
+   "installed_foot": 0,
+   "installed_notes": 46,
+   "name": "The Politics of Food Sovereignty - Remy Herrer",
+   "probe_foot": 0,
+   "probe_notes": 46
+  },
+  "2102": {
+   "installed_foot": 0,
+   "installed_notes": 0,
+   "name": "The War Correspondent - Greg McLaughlin.epub",
+   "probe_foot": 0,
+   "probe_notes": 0
+  },
+  "2103": {
+   "installed_foot": 0,
+   "installed_notes": 92,
+   "name": "Tweets and the Streets - Paolo Gerbaudo.epub",
+   "probe_foot": 0,
+   "probe_notes": 92
+  },
+  "2104": {
+   "installed_foot": 0,
+   "installed_notes": 432,
+   "name": "Toussaint Louverture - Charles Forsdick.epub",
+   "probe_foot": 0,
+   "probe_notes": 432
+  },
+  "2105": {
+   "installed_foot": 0,
+   "installed_notes": 162,
+   "name": "Understanding Al Qaeda - Mohammad-Mahmoud Ould",
+   "probe_foot": 0,
+   "probe_notes": 162
+  },
+  "2106": {
+   "installed_foot": 1,
+   "installed_notes": 184,
+   "name": "Utopia and Modernity in China - David Margolie",
+   "probe_foot": 1,
+   "probe_notes": 184
+  },
+  "2108": {
+   "installed_foot": 1,
+   "installed_notes": 240,
+   "name": "The Horn of Africa - Redie Bereketeab.epub",
+   "probe_foot": 1,
+   "probe_notes": 240
+  },
+  "2109": {
+   "installed_foot": 0,
+   "installed_notes": 7,
+   "name": "Stopping Oil - Sophie Bond.epub",
+   "probe_foot": 0,
+   "probe_notes": 7
+  },
+  "2110": {
+   "installed_foot": 54,
+   "installed_notes": 0,
+   "name": "Green Politics in China - Joy Y Zhang.epub",
+   "probe_foot": 54,
+   "probe_notes": 0
+  },
+  "2111": {
+   "installed_foot": 0,
+   "installed_notes": 63,
+   "name": "Caring Cash - Tom Neumark.epub",
+   "probe_foot": 0,
+   "probe_notes": 63
+  },
+  "2132": {
+   "installed_foot": 0,
+   "installed_notes": 34,
+   "name": "Venezuela_ The Revolution Unfolding in Lat - J",
+   "probe_foot": 0,
+   "probe_notes": 34
+  },
+  "2134": {
+   "installed_foot": 0,
+   "installed_notes": 34,
+   "name": "The Tamil Freedom Struggle in Sri Lanka - Chri",
+   "probe_foot": 0,
+   "probe_notes": 34
+  },
+  "2142": {
+   "installed_foot": 0,
+   "installed_notes": 0,
+   "name": "Behind the Cold War on China - Dave Holmes.epu",
+   "probe_foot": 0,
+   "probe_notes": 0
   },
   "224": {
    "installed_foot": 3,
@@ -279,6 +566,181 @@
    "name": "Shadow Libraries - Joe Karaganis.epub",
    "probe_foot": 0,
    "probe_notes": 339
+  },
+  "3492": {
+   "installed_foot": 36,
+   "installed_notes": 0,
+   "name": "Production of commodities by means of comm - P",
+   "probe_foot": 34,
+   "probe_notes": 0
+  },
+  "3548": {
+   "installed_foot": 2,
+   "installed_notes": 0,
+   "name": "Science Abridged Beyond the Point of Usefu - Z",
+   "probe_foot": 2,
+   "probe_notes": 0
+  },
+  "3553": {
+   "installed_foot": 17,
+   "installed_notes": 0,
+   "name": "Augie & The Green Knight - Zach Weinersmith.ep",
+   "probe_foot": 16,
+   "probe_notes": 0
+  },
+  "3651": {
+   "installed_foot": 377,
+   "installed_notes": 0,
+   "name": "The Fight for Black Liberation - William T. Ho",
+   "probe_foot": 377,
+   "probe_notes": 0
+  },
+  "3652": {
+   "installed_foot": 1,
+   "installed_notes": 0,
+   "name": "The Dream Slaves - Darieck Scott.epub",
+   "probe_foot": 1,
+   "probe_notes": 0
+  },
+  "3653": {
+   "installed_foot": 448,
+   "installed_notes": 0,
+   "name": "Disturbing Times - Catherine E. Karkov.epub",
+   "probe_foot": 440,
+   "probe_notes": 0
+  },
+  "3656": {
+   "installed_foot": 62,
+   "installed_notes": 0,
+   "name": "Knocking the Hustle - Lester K. Spence.epub",
+   "probe_foot": 64,
+   "probe_notes": 0
+  },
+  "3657": {
+   "installed_foot": 156,
+   "installed_notes": 0,
+   "name": "The Critique of Digital Capitalism - Michael B",
+   "probe_foot": 154,
+   "probe_notes": 0
+  },
+  "3658": {
+   "installed_foot": 3,
+   "installed_notes": 0,
+   "name": "Ardea - Freya Matthews.epub",
+   "probe_foot": 3,
+   "probe_notes": 0
+  },
+  "3659": {
+   "installed_foot": 519,
+   "installed_notes": 0,
+   "name": "Kill Boxes - Elisabeth Weber.epub",
+   "probe_foot": 519,
+   "probe_notes": 0
+  },
+  "3660": {
+   "installed_foot": 235,
+   "installed_notes": 0,
+   "name": "Urban Re-industrialization - Krzysztof Nawrate",
+   "probe_foot": 235,
+   "probe_notes": 0
+  },
+  "3662": {
+   "installed_foot": 615,
+   "installed_notes": 0,
+   "name": "Queer Ancient Ways - Zairong Xiang.epub",
+   "probe_foot": 615,
+   "probe_notes": 0
+  },
+  "3663": {
+   "installed_foot": 185,
+   "installed_notes": 0,
+   "name": "Opioids_ Addiction, Narrative, Freedom - Maia ",
+   "probe_foot": 184,
+   "probe_notes": 0
+  },
+  "3664": {
+   "installed_foot": 258,
+   "installed_notes": 0,
+   "name": "Pedagogics of Liberation_ A Latin American - E",
+   "probe_foot": 257,
+   "probe_notes": 0
+  },
+  "3665": {
+   "installed_foot": 391,
+   "installed_notes": 0,
+   "name": "Anti-Racism Inc._ Why the Way We Talk Abou - F",
+   "probe_foot": 391,
+   "probe_notes": 0
+  },
+  "3966": {
+   "installed_foot": 1,
+   "installed_notes": 0,
+   "name": "1927 Instructions to Employees of the Ligh - U",
+   "probe_foot": 1,
+   "probe_notes": 0
+  },
+  "4009": {
+   "installed_foot": 13,
+   "installed_notes": 0,
+   "name": "Social Problems - Henry George.epub",
+   "probe_foot": 13,
+   "probe_notes": 0
+  },
+  "4116": {
+   "installed_foot": 9,
+   "installed_notes": 0,
+   "name": "Reconstruction_ The Battle for Democracy - Jam",
+   "probe_foot": 9,
+   "probe_notes": 0
+  },
+  "4242": {
+   "installed_foot": 401,
+   "installed_notes": 0,
+   "name": "Gilded Rage - Jacob Silverman.epub",
+   "probe_foot": 508,
+   "probe_notes": 0
+  },
+  "4334": {
+   "installed_foot": 405,
+   "installed_notes": 0,
+   "name": "The Modern Corporation & Private Property - Ad",
+   "probe_foot": 366,
+   "probe_notes": 0
+  },
+  "4730": {
+   "installed_foot": 0,
+   "installed_notes": 636,
+   "name": "Sexuality and Socialism - Sherry Wolf.epub",
+   "probe_foot": 0,
+   "probe_notes": 636
+  },
+  "5493": {
+   "installed_foot": 20,
+   "installed_notes": 0,
+   "name": "The Knights of Industry - Rollo Reuschel.epub",
+   "probe_foot": 20,
+   "probe_notes": 0
+  },
+  "5496": {
+   "installed_foot": 0,
+   "installed_notes": 0,
+   "name": "Other people's money; a study in the socia - D",
+   "probe_foot": 0,
+   "probe_notes": 0
+  },
+  "5497": {
+   "installed_foot": 36,
+   "installed_notes": 0,
+   "name": "The Man Who Stole Portugal - Murray Teigh Bloo",
+   "probe_foot": 36,
+   "probe_notes": 0
+  },
+  "5498": {
+   "installed_foot": 4,
+   "installed_notes": 0,
+   "name": "The History of Lloyd's and of Marine Insur - F",
+   "probe_foot": 4,
+   "probe_notes": 0
   },
   "8644": {
    "installed_foot": 89,
@@ -300,7 +762,42 @@
    "name": "A History of the Rock Island District Corp - R",
    "probe_foot": 0,
    "probe_notes": 207
+  },
+  "9221": {
+   "installed_foot": 2,
+   "installed_notes": 0,
+   "name": "Our penal machinery and its victims - John Pet",
+   "probe_foot": 2,
+   "probe_notes": 0
+  },
+  "9482": {
+   "installed_foot": 0,
+   "installed_notes": 0,
+   "name": "The Class Struggle in the Ancient Greek Wo - G",
+   "probe_foot": 0,
+   "probe_notes": 0
+  },
+  "9546": {
+   "installed_foot": 39,
+   "installed_notes": 0,
+   "name": "Confusion de Confusiones (Confusion of Con - J",
+   "probe_foot": 38,
+   "probe_notes": 0
+  },
+  "9559": {
+   "installed_foot": 60,
+   "installed_notes": 0,
+   "name": "KGB_ Masters of the Soviet Union - Peter Deria",
+   "probe_foot": 60,
+   "probe_notes": 0
+  },
+  "9564": {
+   "installed_foot": 1108,
+   "installed_notes": 0,
+   "name": "Studies in the History of Accounting - A. C. L",
+   "probe_foot": 1053,
+   "probe_notes": 0
   }
  },
- "generated": "2026-09-12"
+ "generated": "2026-11-12"
 }

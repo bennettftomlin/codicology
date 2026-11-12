@@ -35,15 +35,13 @@ import json
 import os
 import re
 import sys
-import zipfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-from codicology import pipeline as P              # noqa: E402
+from codicology import binding, pipeline as P     # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BASELINE = os.path.join(HERE, "link-baseline.json")
 LIBRARY = os.path.expanduser("~/Calibre Library")
-PAGE = re.compile(r"page_(\d+)\.xhtml$")
 
 # Undo exactly what the linkers do, so they are handed what they were handed
 # the first time. The catch-all at the end is not decoration: one book sets
@@ -98,20 +96,14 @@ def dispatch(bodies: list[str], dropped: set) -> tuple[int, int]:
 
 
 def measure(path: str) -> dict | None:
-    z = zipfile.ZipFile(path)
-    files = {int(m.group(1)): n for m, n in
-             ((PAGE.search(n), n) for n in z.namelist()) if m}
+    # by page whichever way the book is filed: since 11 November 2026 a
+    # build binds its pages into chapters, and a probe that looked for a
+    # file to a page found none, measured no book, and said "no change"
+    files = binding.page_bodies(path)
     if len(files) < 20:
         return None
     total = max(files) + 1
-    raw = []
-    for i in range(total):
-        if i not in files:
-            raw.append("")
-            continue
-        t = z.read(files[i]).decode("utf-8", "replace")
-        raw.append(re.sub(r"</body>.*$", "",
-                          re.sub(r"^.*?<body[^>]*>", "", t, flags=re.S), flags=re.S))
+    raw = [files.get(i, "") for i in range(total)]
     has_note = sum(len(re.findall(r'href="[^"]*#note-', b)) for b in raw)
     has_foot = sum(len(re.findall(r'href="[^"]*#fn-', b)) for b in raw)
     bodies = [unlink(b) for b in raw]
@@ -157,6 +149,9 @@ def main() -> int:
     if os.path.exists(args.baseline):
         old = json.load(open(args.baseline)).get("books", {})
 
+    # a book the baseline has and this run could not measure is not "no
+    # change": it is the probe gone blind, which it has been once
+    unmeasured = sorted((b for b in old if b not in books), key=int)
     moved, gain, lose = [], [], []
     for bid, r in sorted(books.items(), key=lambda kv: int(kv[0])):
         s = state(r)
@@ -174,8 +169,13 @@ def main() -> int:
             print(f"  {bid:<6}{r['name']:48s}"
                   f"notes {was.get('probe_notes')}->{r['probe_notes']}  "
                   f"foot {was.get('probe_foot')}->{r['probe_foot']}")
-    elif old:
+    elif old and not unmeasured:
         print("no change against the baseline")
+    if unmeasured:
+        print(f"\nNOT MEASURED — {len(unmeasured)} book(s) the baseline has "
+              f"and this run found nothing to measure in: "
+              + ", ".join(unmeasured[:20])
+              + (" …" if len(unmeasured) > 20 else ""))
     for label, rows in (("WOULD GAIN IF REBUILT", gain), ("WOULD LOSE IF REBUILT", lose)):
         if rows:
             print(f"\n{label}:")
@@ -187,7 +187,7 @@ def main() -> int:
         json.dump({"generated": datetime.date.today().isoformat(), "books": books},
                   open(args.baseline, "w"), indent=1, sort_keys=True)
         print(f"\nbaseline rewritten: {args.baseline}")
-    return 1 if (moved and not args.update) else 0
+    return 1 if ((moved or unmeasured) and not args.update) else 0
 
 
 if __name__ == "__main__":
