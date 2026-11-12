@@ -3668,6 +3668,25 @@ def _head_runs(bodies: list[str], page_furniture: list[list[str]]) -> dict:
     return runs
 
 
+def _worded_head(text: str) -> bool:
+    """Whether a line of page furniture carries words, as a running head
+    does. A designation does not: "SWM 6-77" names a paragraph of the
+    manual as a page number names a page, "AGO 8641A" is the printer's
+    and "DOI: 10.21983/…" the publisher's. One short word in capitals
+    beside a figure is that, and a page that carries it may still have a
+    running head the layout took for a heading: the Small Wars Manual sets
+    one under its designation on 198 pages, 115 of them in the middle of a
+    sentence that runs over the page."""
+    text = html.unescape(text)
+    words = [w for w in re.findall(r"[A-Za-z]+", text)
+             if not re.fullmatch(r"[ivxlcdm]+", w, re.I)]
+    if not any(len(w) >= 3 for w in words):
+        return False
+    longer = [w for w in words if len(w) >= 2]
+    return not (len(longer) == 1 and len(longer[0]) <= 3
+                and longer[0].isupper() and re.search(r"\d", text))
+
+
 def strip_missed_running_heads(bodies: list[str],
                                page_furniture: list[list[str]]
                                ) -> list[tuple[int, str]]:
@@ -3731,8 +3750,7 @@ def strip_missed_running_heads(bodies: list[str],
     runs = _head_runs(bodies, page_furniture)
     # A page whose furniture already carries words, not just a number, has
     # its running head; a second line the rhythm points at is its own.
-    has_head = [any(len(w) >= 3 and not re.fullmatch(r"[ivxlcdm]+", w, re.I)
-                    for t in texts for w in re.findall(r"[A-Za-z]+", t))
+    has_head = [any(_worded_head(t) for t in texts)
                 for texts in page_furniture]
     has_head += [False] * (len(bodies) - len(has_head))
     for i, body in enumerate(bodies):
@@ -4628,6 +4646,94 @@ def folios_from_furniture(page_furniture: list[list[str]]) -> list[Folio]:
         out = [f if f.number not in constant else
                Folio(f.index, f.number, f.text, False) for f in out]
     return out
+
+
+# A signature mark: the letter a printer set at the foot of the first page
+# of each gathering, to tell the binder the order of the sheets. "B", "D",
+# "F" down The Knights of Industry, "A A", "B B" once the alphabet is used
+# up in Lloyd's. The layout calls it text, with good confidence, and it is
+# the last paragraph of its page: bound into chapters, it stands between
+# two halves of a sentence. One alone cannot be told from a paragraph that
+# says "B". A run of them can: they climb through the alphabet as the book
+# goes on, and nothing else at the foot of a page does. On 152 books the
+# rule takes 12 marks in those two and nothing else; a table's lone "H"
+# and an index's letter "K" are single and stay.
+_SIGNATURE = re.compile(
+    r"<p>\s*((?:\d\s?)?[A-Za-z](?:\s?[A-Za-z])?(?:\s?\d)?)\s*</p>\s*$")
+SIGNATURES_WANTED = 3
+
+
+def _signature_rank(mark: str) -> "tuple | None":
+    """Where a mark comes in a printer's series: B before C, and a doubled
+    letter after every single one. None for two different letters."""
+    letters = [ch.lower() for ch in mark if ch.isalpha()]
+    if len(set(letters)) != 1:
+        return None
+    return len(letters), letters[0]
+
+
+def strip_signature_marks(bodies: list[str]) -> list[tuple[int, str]]:
+    """Take out the printer's signature marks; return (page, mark) for each."""
+    found = []
+    for i, body in enumerate(bodies):
+        m = _SIGNATURE.search(body)
+        if m and len(m.group(1).replace(" ", "")) <= 3:
+            rank = _signature_rank(m.group(1))
+            if rank is not None and body[:m.start()].strip():
+                found.append((i, m, rank))
+    # the longest run that climbs: what is not in it is something else
+    best: list = []
+    runs: list = []
+    for k, (_, _, rank) in enumerate(found):
+        before = [r for j, r in enumerate(runs) if found[j][2] <= rank]
+        runs.append(max(before, key=len, default=[]) + [k])
+        if len(runs[-1]) > len(best):
+            best = runs[-1]
+    ranks = {found[k][2] for k in best}
+    if len(best) < SIGNATURES_WANTED or len(ranks) < SIGNATURES_WANTED:
+        return []
+    removed = []
+    for k in best:
+        i, m, _ = found[k]
+        bodies[i] = bodies[i][:m.start()] + bodies[i][m.end():]
+        removed.append((i, m.group(1)))
+    return removed
+
+
+# A page's own number, run into its last line. Where the number is printed
+# close under the text the layout draws one box round both, and the page
+# ends "…his valuable bag-89": bound, "bag-89 gage". Only the page's own
+# number, only as the last thing on the page and a whole figure there (not
+# the 200 of "29,200"), only after a letter, a hyphen, or a comma and a
+# space (after a full stop it would be a sentence's last figure), and not
+# after a word that names what the number counts. That a page's text should
+# end on a figure that happens to be the page's own number is rare enough
+# to leave to chance: on 152 books the rule takes seven, six of them in The
+# Man Who Stole Portugal, and each is the number under the text.
+_TAKES_A_NUMBER = re.compile(
+    r"(?:pages?|pp?|chapters?|ch|chap|tables?|figures?|figs?|sections?|sec|"
+    r"vols?|volumes?|nos?|numbers?|parts?|lines?|notes?|items?|"
+    r"paragraphs?|paras?)\.?$", re.I)
+
+
+def strip_fused_folios(bodies: list[str], numbers: dict) -> list:
+    """Take a page's own printed number off the end of its last line;
+    return (page, number) for each."""
+    removed = []
+    for i, number in numbers.items():
+        if not isinstance(number, int) or number <= 0 or i >= len(bodies):
+            continue
+        m = re.search(r"(?:(?<=[A-Za-z\-–])|(?<=[A-Za-z,(]\s)|(?<=[A-Za-z]\s\s))"
+                      r"(\s*)%d(\s*(?:</[^>]+>\s*)*)$" % number, bodies[i])
+        if not m:
+            continue
+        kept = bodies[i][:m.start(1)].rstrip()
+        said = _strip_tags(kept).split()
+        if not said or _TAKES_A_NUMBER.match(said[-1].strip("([\"“‘'")):
+            continue
+        bodies[i] = kept + m.group(2)
+        removed.append((i, number))
+    return removed
 
 
 def strip_folio_superscripts(bodies: list[str],
@@ -9640,6 +9746,11 @@ def build_epub(
                   + (f": {len(shapes)} distinct head(s)" if len(shapes) > 1
                      else f": {missed[0][1]!r}"))
 
+    signatures = strip_signature_marks(bodies)
+    if signatures:
+        print(f"    took out {len(signatures)} signature mark(s) the printer "
+              f"set at the foot of a gathering's first page: "
+              + ", ".join(f"{mark} (page {i + 1})" for i, mark in signatures))
     bodies = [normalize_entry_heads(normalize_math(b)) for b in bodies]
     n_promoted = normalize_note_heads(bodies)
     if n_promoted:
@@ -10043,6 +10154,12 @@ def build_epub(
             print(f"    [~] pages {lo + 1}-{hi - 1} left out of the page list: "
                   f"{hi - lo} pages between folios {lo_no} and {hi_no} but "
                   f"{hi_no - lo_no} numbers — which page holds which is unknown")
+        fused = strip_fused_folios(bodies, {i: n for i, n in numbers.items()
+                                            if i not in dropped})
+        if fused:
+            print(f"    took {len(fused)} page number(s) off the end of "
+                  f"the page's last line, where the layout had run them "
+                  f"in: " + ", ".join(f"{n} (page {i + 1})" for i, n in fused))
         read_at = {f.index for f in folios
                    if f.confident and f.number is not None}
         anchored = restored = 0
