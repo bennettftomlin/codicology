@@ -12109,7 +12109,7 @@ def _same_word(ours: str, layer: str) -> bool:
 #     on the same line of type, or opens the line below.
 #
 # All 38 were looked at on the page: 59 words in 28 books, two of them
-# whole lines, 15 a doubled word the book prints (some of them the book's
+# whole lines, 13 a doubled word the book prints (some of them the book's
 # own slips, which are the book's). What the last test alone refuses stays
 # on the list a build prints, as before.
 PUT_BACK_ANCHOR = 3         # agreeing words wanted on each side of the gap
