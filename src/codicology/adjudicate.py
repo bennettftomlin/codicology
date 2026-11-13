@@ -1000,8 +1000,8 @@ def _run_box(page, run: list) -> "list | None":
             t = y1 if t is None else max(t, y1)
         if l is None:
             return None
-        W, H = page.get_width(), page.get_height()
-        return [l / W, 1 - t / H, r / W, 1 - b / H]
+        from .pipeline import _page_frame, _pdf_box_to_normalized
+        return list(_pdf_box_to_normalized((l, b, r, t), _page_frame(page)))
     except Exception:
         return None
 

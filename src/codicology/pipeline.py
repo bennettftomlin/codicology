@@ -2047,7 +2047,7 @@ BOX_WORDS_READ = 0.9     # of the words the box prints, on the page as read
 
 def _box_holds_only_type(page, box) -> bool:
     """Whether the PDF puts nothing inside this box but type and rules."""
-    pw, ph = page.get_size()
+    frame = _page_frame(page)
     inner = (box[0] + 0.008, box[1] + 0.006, box[2] - 0.008, box[3] - 0.006)
     span = (inner[2] - inner[0]) * (inner[3] - inner[1])
     if span <= 0:
@@ -2062,7 +2062,7 @@ def _box_holds_only_type(page, box) -> bool:
         if obj.type not in (2, 3, 4):       # a path, an image, a shading
             continue
         b = obj.get_bounds()
-        nb = _pdf_box_to_normalized(b, pw, ph)
+        nb = _pdf_box_to_normalized(b, frame)
         if nb[2] < inner[0] or nb[0] > inner[2] \
                 or nb[3] < inner[1] or nb[1] > inner[3]:
             continue
@@ -2098,7 +2098,7 @@ def _typeset_boxes_already_read(items: list, ruled: list, page_path: str
             return set()
         import pypdfium2 as pdfium
         page = pdfium.PdfDocument(src["pdf"])[src["page"]]
-        pw, ph = page.get_size()
+        frame = _page_frame(page)
         textpage = page.get_textpage()
     except Exception:
         return set()
@@ -2107,11 +2107,9 @@ def _typeset_boxes_already_read(items: list, ruled: list, page_path: str
         if it.html and it.figure is None).lower()))
     gone = set()
     for fig in ruled:
-        x0, y0, x1, y1 = fig.box
         try:
             printed = Counter(_BOX_WORD.findall(textpage.get_text_bounded(
-                left=x0 * pw, bottom=(1 - y1) * ph,
-                right=x1 * pw, top=(1 - y0) * ph).lower()))
+                **_normalized_to_pdf(fig.box, frame)).lower()))
             total = sum(printed.values())
             if total < 2:
                 continue                    # an empty box says nothing
@@ -2156,16 +2154,14 @@ def _typeset_text_in(page_path: "str | None"):
             return None
         import pypdfium2 as pdfium
         page = pdfium.PdfDocument(src["pdf"])[src["page"]]
-        pw, ph = page.get_size()
+        frame = _page_frame(page)
         textpage = page.get_textpage()
     except Exception:
         return None
 
     def text_in(box) -> str:
-        x0, y0, x1, y1 = box
         try:
-            return textpage.get_text_bounded(left=x0 * pw, bottom=(1 - y1) * ph,
-                                             right=x1 * pw, top=(1 - y0) * ph)
+            return textpage.get_text_bounded(**_normalized_to_pdf(box, frame))
         except Exception:
             return ""
     return text_in
@@ -2553,7 +2549,7 @@ def recover_orphan_artwork(items: list, page_path: str,
         import pypdfium2 as pdfium
         doc = pdfium.PdfDocument(src["pdf"])
         page = doc[src["page"]]
-        pw, ph = page.get_size()
+        frame = _page_frame(page)
     except Exception:
         return items
 
@@ -2566,7 +2562,7 @@ def recover_orphan_artwork(items: list, page_path: str,
             if not isinstance(obj, pdfium.PdfImage):
                 continue
             b = obj.get_bounds()
-            placed = _pdf_box_to_normalized(b, pw, ph)
+            placed = _pdf_box_to_normalized(b, frame)
             area = (placed[2] - placed[0]) * (placed[3] - placed[1])
             placements.append((area, placed, obj))
         # On a scanned page the largest picture is the page, at whatever
@@ -2676,7 +2672,8 @@ def recover_vector_artwork(items: list, page_path: str,
         import pypdfium2 as pdfium
         doc = pdfium.PdfDocument(src["pdf"])
         page = doc[src["page"]]
-        pw, ph = page.get_size()
+        frame = _page_frame(page)
+        pw, ph = frame[2], frame[3]
     except Exception:
         return items
 
@@ -2691,7 +2688,7 @@ def recover_vector_artwork(items: list, page_path: str,
             w, h = b[2] - b[0], b[3] - b[1]
             if w > 0.8 * pw and h < 3:
                 continue                        # the running head's rule
-            at = _pdf_box_to_normalized(b, pw, ph)
+            at = _pdf_box_to_normalized(b, frame)
             if any(at[0] >= t[0] - TABLE_RULE_REACH
                    and at[1] >= t[1] - TABLE_RULE_REACH
                    and at[2] <= t[2] + TABLE_RULE_REACH
@@ -2729,7 +2726,7 @@ def recover_vector_artwork(items: list, page_path: str,
             continue
         x0 = min(b[0] for b in members); y0 = min(b[1] for b in members)
         x1 = max(b[2] for b in members); y1 = max(b[3] for b in members)
-        placed = (x0 / pw, 1 - y1 / ph, x1 / pw, 1 - y0 / ph)
+        placed = _pdf_box_to_normalized((x0, y0, x1, y1), frame)
         area = (placed[2] - placed[0]) * (placed[3] - placed[1])
         if not 0.02 <= area <= 0.9 or (placed[3] - placed[1]) < 0.03:
             continue
@@ -2795,11 +2792,46 @@ def _looks_like_same_picture(a: "Image.Image", b: "Image.Image") -> bool:
     return corr >= 0.85
 
 
-def _pdf_box_to_normalized(b, pw, ph):
+# Where on a PDF page a box in fractions of the page lies. A page's
+# fractions are of what is drawn when it is rendered, the crop box; the
+# PDF's own coordinates (an object's bounds, a character's box, a region
+# of text asked for) are of its user space, whose origin is the media box's
+# corner. The two agree only where the crop box starts at that corner, and
+# on 8,844 pages of 42 books on the shelf it does not: a publisher's PDF
+# whose trim is set 21 to 60 points in from the media box, on pages about
+# 400 points wide. Every conversion used to divide by the page's size and
+# stop there, so on those pages the table check asked the PDF for the text
+# of a region a tenth of the page away from the table (121 tables in 30
+# books measured in the wrong place, and the table Burning Up lost on page
+# 69 not mended for it), and boxes found in the PDF were placed as far off
+# on the page. There is one frame now and every conversion goes through it.
+# (No page on the shelf is rotated; a /Rotate would need this to turn too.)
+
+def _page_frame(page) -> "tuple[float, float, float, float]":
+    """(x, y, width, height) of what the page draws, in its user space."""
+    pw, ph = page.get_size()
+    try:
+        x0, y0, _, _ = page.get_bbox()
+    except Exception:
+        x0 = y0 = 0.0
+    return float(x0), float(y0), float(pw), float(ph)
+
+
+def _pdf_box_to_normalized(b, frame):
     """A PDF-space rect (bottom-up y) as this pipeline's normalized box
-    (top-down y). Written inline twice before being extracted; the y-flip
-    convention lives here and nowhere else (R6)."""
-    return (b[0] / pw, 1 - b[3] / ph, b[2] / pw, 1 - b[1] / ph)
+    (top-down y), in the page's frame (_page_frame). The y-flip convention
+    lives here and in _normalized_to_pdf and nowhere else (R6)."""
+    x0, y0, pw, ph = frame
+    return ((b[0] - x0) / pw, 1 - (b[3] - y0) / ph,
+            (b[2] - x0) / pw, 1 - (b[1] - y0) / ph)
+
+
+def _normalized_to_pdf(box, frame) -> dict:
+    """A normalized box as the left, bottom, right and top of the PDF's
+    user space, as get_text_bounded takes them."""
+    x0, y0, pw, ph = frame
+    return {"left": x0 + box[0] * pw, "bottom": y0 + (1 - box[3]) * ph,
+            "right": x0 + box[2] * pw, "top": y0 + (1 - box[1]) * ph}
 
 
 def _render_region(page, box, want_w: int) -> "Image.Image | None":
@@ -2888,7 +2920,7 @@ def better_figure(page_path: str, box, crop: "Image.Image") -> "Image.Image":
         import pypdfium2 as pdfium
         doc = pdfium.PdfDocument(src["pdf"])
         page = doc[src["page"]]
-        pw, ph = page.get_size()
+        frame = _page_frame(page)
     except Exception:
         return crop
 
@@ -2898,7 +2930,7 @@ def better_figure(page_path: str, box, crop: "Image.Image") -> "Image.Image":
             if not isinstance(obj, pdfium.PdfImage):
                 continue
             b = obj.get_bounds()
-            placed = _pdf_box_to_normalized(b, pw, ph)
+            placed = _pdf_box_to_normalized(b, frame)
             score = _box_iou(box, placed)
             if score >= 0.6 and (best is None or score > best[0]):
                 best = (score, obj, placed)
