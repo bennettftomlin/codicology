@@ -12631,6 +12631,31 @@ def _same_word(ours: str, layer: str) -> bool:
     return False
 
 
+# At a page's edge the pairing of our word with the layer's is unproven,
+# and only the same word set differently is taken (_same_word). That kept
+# folios and running heads from being pasted over headings. It also kept
+# the recogniser's slips with the marks around a word: a quote it dropped
+# ("People" where the page prints "‘People", Work, Sex & Power p. 8), one
+# it added ("employment.'"), the doubled dash a bibliography sets for "the
+# same author" read as one ("—" for "——", Nomads, Empires, States). A word
+# whose letters are the layer's, and which differs only in quotes and
+# dashes standing at its ends, is the same word: the layer says which marks
+# the page prints. Inside a word a mark counts, so "well-known" is never
+# "wellknown"; a word of nothing but dashes is the same as another such.
+_EDGE_MARKS = "‘’‚‛'\"“”„‟′″«»—–‒−-"
+
+
+def _same_but_its_marks(ours: str, layer: str) -> bool:
+    a, b = ours.translate(_SETTING), layer.translate(_SETTING)
+    if a == b:
+        return False
+    ca, cb = a.strip(_EDGE_MARKS), b.strip(_EDGE_MARKS)
+    if ca or cb:
+        return ca == cb
+    dashes = "—–‒−-"
+    return bool(ours) and bool(layer) and all(c in dashes for c in ours + layer)
+
+
 # Words the publisher prints and the reading passed over.
 #
 # A recogniser that writes a page out word by word does what a copyist
@@ -12947,7 +12972,8 @@ def reconcile_native_text(bodies: list[str], page_paths: list[str]) -> int:
                 if mine.lower() == cand.lower() and (
                         len(mine) == 1 or mine[1:] != cand[1:]):
                     continue
-                if open_side and not _same_word(mine, cand):
+                if open_side and not (_same_word(mine, cand)
+                                      or _same_but_its_marks(mine, cand)):
                     continue
                 if mine != cand:
                     subs.append((ti, cand))

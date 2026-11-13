@@ -495,3 +495,45 @@ def test_a_word_the_reading_lacks_is_not_reported(vtb, tmp_path):
     vtb.reconcile_native_text(bodies, paths)
     assert vtb.reconcile_native_text.unplaced == []
 
+
+
+# ── the marks around a word, at the page's edge ──────────────────────────────
+
+TAIL = ("make their own history, but they do not make it as they please; they "
+        "do not make it under self-selected circumstances").split()
+
+
+@pytest.mark.parametrize("ours, layer, want", [
+    ("People", "‘People", "‘People"),           # a quote the reading dropped (Work, Sex & Power)
+    ("—", "——", "——"),                          # a bibliography's "same author" read as one dash
+    ("“People", "People", "People"),            # a quote the reading added
+])
+def test_at_the_edge_the_layer_says_which_marks_stand_round_a_word(vtb, tmp_path, ours, layer, want):
+    """The first word of a page differed from the layer's only in the quote
+    or dash at its end, and the edge rule kept the recogniser's slip."""
+    body = f"<p><i>{ours} " + " ".join(TAIL) + "</i></p>"
+    bodies, paths = _native(tmp_path, body, layer + " " + " ".join(TAIL))
+    assert vtb.reconcile_native_text(bodies, paths) == 1
+    assert f"<i>{want} make" in bodies[0]
+
+
+def test_a_stray_quote_after_the_last_word_goes(vtb, tmp_path):
+    """Gramsci on Tahrir p. 247 ended "full employment.'" where the page
+    prints no quote."""
+    body = "<p>" + " ".join(TAIL) + " of more or less full employment.'</p>"
+    layer = " ".join(TAIL) + " of more or less full employment."
+    bodies, paths = _native(tmp_path, body, layer)
+    vtb.reconcile_native_text(bodies, paths)
+    assert bodies[0].endswith("full employment.</p>")
+
+
+@pytest.mark.parametrize("ours, layer", [
+    ("INDEX", "248"),                           # still somebody else's word
+    ("well-known", "wellknown"),                # a mark inside a word counts
+    ("—", "‘"),                                 # a dash is not a quote
+])
+def test_a_different_word_at_the_edge_is_still_refused(vtb, tmp_path, ours, layer):
+    body = f"<p>{ours} " + " ".join(TAIL) + "</p>"
+    bodies, paths = _native(tmp_path, body, layer + " " + " ".join(TAIL))
+    vtb.reconcile_native_text(bodies, paths)
+    assert bodies[0].startswith(f"<p>{ours} ")
