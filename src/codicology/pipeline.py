@@ -8471,8 +8471,11 @@ def parse_bibliography(bodies: list[str]) -> "dict | None":
             entry = {"id": eid, "page": k, "surnames": surnames,
                      "years": years, "title": title}
             entries.append(entry)
-            for s in surnames:
-                for y in years:
+            # in a fixed order: a set of strings is listed differently in
+            # every process, and the order of the keys is the order their
+            # patterns are tried in (see link_citations)
+            for s in sorted(surnames):
+                for y in sorted(years):
                     # keyed lowercase so Adams and ADAMS collide as they
                     # should, but the ORIGINAL spelling rides along: the
                     # prose is searched for "AFI", not a guessed "Afi"
@@ -9035,8 +9038,14 @@ def link_citations(bodies: list[str], dropped: set) -> dict:
 
         if not edits:
             continue
-        # apply without overlaps, last first so offsets hold
-        edits.sort(key=lambda t: t[0], reverse=True)
+        # apply without overlaps, last first so offsets hold. Two keys can
+        # match from the same place: "Meulemann, H. (2008a) ‘Introduction’,
+        # in Meulemann (ed.) (2008)" keys its entry on 2008a and on 2008,
+        # and "Meulemann (2008a, p.9)" matches both. The longer is the
+        # citation; which came first was the order a set listed the years
+        # in, a different one in every process, and Theories of Social
+        # Capital linked "(2008a" in one build and "(2008" in the next.
+        edits.sort(key=lambda t: (t[0], t[1]), reverse=True)
         taken_from = len(body) + 1
         applied = []
         for a, z, new, kind in edits:

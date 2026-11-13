@@ -228,3 +228,29 @@ def test_a_parenthesised_bibliography_is_untouched(vtb):
     bib = vtb.parse_bibliography(ad_book())
     assert {tuple(sorted(e["years"])) for e in bib["entries"]} == {
         ("2019a",), ("2019",), ("2015",)}
+
+
+def test_the_longer_year_wins_and_every_process_agrees():
+    """An entry that cross-refers to its volume carries two parenthesised
+    years, and a citation of the one matches the other from the same place.
+    The longer is the citation, in every process: the choice used to follow
+    the order a set of strings listed the years in, which Python changes
+    from one process to the next (Theories of Social Capital, p38 and p220)."""
+    import os, subprocess, sys
+    script = (
+        "from codicology import pipeline as P\n"
+        "b = ['<p>And Meulemann (2008a, p.9) agonises; Dale (2005a and b) agrees.</p>',\n"
+        "     '<h1>References</h1>'\n"
+        "     '<p>Dale, A. (2005a) ‘Social Capital’, in Dale and Onyx (2005).</p>'\n"
+        "     '<p>Meulemann, H. (2008a) ‘Introduction’, in Meulemann (ed.) (2008).</p>']\n"
+        "P.link_citations(b, set())\n"
+        "print(b[0])\n")
+    seen = set()
+    for seed in ("0", "1", "2", "3", "7", "11", "42", "1234"):
+        env = dict(os.environ, PYTHONHASHSEED=seed)
+        out = subprocess.run([sys.executable, "-c", script], env=env,
+                             capture_output=True, text=True, check=True).stdout
+        seen.add(out)
+    assert len(seen) == 1, seen
+    out = seen.pop()
+    assert "Meulemann (2008a</a>" in out and "Dale (2005a</a>" in out, out
