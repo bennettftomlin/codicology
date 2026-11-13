@@ -276,6 +276,14 @@ No flags required for any of this.
   "Notes to Chapter 3", "[I.ii]"). A raised figure that is not a call is
   not linked: a power on a unit (km² is set as that), or an edition's
   number on a title (SEHRE², SIG³).
+- **Equations, as MathML.** An equation set on its own line is written as
+  MathML, which is part of EPUB 3 and which every reading system that draws
+  pages must draw, with its plain text as `alttext`. pandoc does the
+  conversion where it is installed (it is optional; `$CODICOLOGY_PANDOC`
+  names one that is not on the PATH). Without it, or for an equation it
+  cannot parse, the equation is set as its plain text inside the same
+  element. pandoc's copy of the TeX is not kept inside: every check counts
+  a page's words. An equation in a line of text is set as text.
 - **Structure.** Chapters come from the printed contents where it parses,
   and otherwise from the book's own running heads, which name the chapter
   on every page of it. The two are also checked against each other: a

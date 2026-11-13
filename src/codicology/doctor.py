@@ -183,6 +183,14 @@ def _third_reader():
             "looked_in": third.DEFAULT_DIR}
 
 
+def _pandoc():
+    """pandoc writes a book's display equations as MathML. Optional: absent,
+    they are set as their plain text (pipeline.write_display_math)."""
+    from .pipeline import _pandoc as find
+    path = find()
+    return {"present": path is not None, "path": path}
+
+
 def _llama_server():
     override = os.environ.get("LLAMA_CPP_BINARY")
     if override and os.path.exists(override):
@@ -227,6 +235,7 @@ def report(full=False, ocr="surya", langs=("en",)):
         "vision": _vision(),
         "second_reader": _second_reader(),
         "third_reader": _third_reader(),
+        "pandoc": _pandoc(),
         "nvidia": _nvidia(),
     }
 
@@ -406,6 +415,11 @@ def _human(rep):
         if sr.get("present") else
         f"none (its two .gguf files go in {sr.get('looked_in')}) — "
         "optional; builds are unaffected"))
+    pd = rep.get("pandoc", {})
+    print("  pandoc: " + (f"{pd['path']} — display equations are set as MathML"
+                          if pd.get("present") else
+                          "not found — display equations are set as their "
+                          "plain text; optional"))
     tr = rep.get("third_reader", {})
     print("  third reader: " + (
         f"{tr.get('name')} ({tr.get('model')}) — votes on a scan's equations "
