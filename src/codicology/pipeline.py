@@ -6033,7 +6033,8 @@ VULGAR = {"1/2": "½", "1/3": "⅓", "2/3": "⅔", "1/4": "¼", "3/4": "¾",
 _RAISED = str.maketrans("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")
 _LOWERED = str.maketrans("0123456789", "₀₁₂₃₄₅₆₇₈₉")
 _FRACTION = re.compile(r"\\[dt]?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}")
-_MATH_FORMS = {"text", "mathrm", "mathit", "frac", "dfrac", "tfrac", "circ"}
+_MATH_FORMS = {"text", "mathrm", "mathit", "mathbf", "frac", "dfrac", "tfrac",
+               "circ"}
 
 
 def _set_fraction(m) -> str:
@@ -6067,7 +6068,7 @@ def _math_as_text(t: str) -> str:
     # Names first, while each still ends where the recogniser ended it:
     # \mu\text{g} is μ and then g, and unwrapped first it is \mug.
     t = re.sub(r"\\([A-Za-z]+)", name, t)
-    t = re.sub(r"\\(?:text|mathrm|mathit)\{([^}]*)\}", r"\1", t)
+    t = re.sub(r"\\(?:text|mathrm|mathit|mathbf)\{([^}]*)\}", r"\1", t)
     while True:     # innermost first, so a fraction over a fraction sets
         t, n = _FRACTION.subn(_set_fraction, t)
         if not n:
@@ -6077,7 +6078,26 @@ def _math_as_text(t: str) -> str:
     return t
 
 
-def normalize_math(body: str) -> str:
+_SUPERSCRIPT = str.maketrans("0123456789+-−=()ni", "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁻⁼⁽⁾ⁿⁱ")
+_SCRIPT = re.compile(r"([_^])\s*(?:\{([^{}]*)\}|([^\s{}_^]))")
+
+
+def _scripts_as_html(t: str) -> str:
+    """TeX's subscripts and powers, in what is otherwise text, as HTML."""
+    def one(m):
+        inner = m.group(2) if m.group(2) is not None else m.group(3)
+        inner = inner.strip()
+        if not inner:
+            return ""
+        if m.group(1) == "_":
+            return f"<sub>{inner}</sub>"
+        if all(ch in "0123456789+-−=()ni" for ch in inner):
+            return inner.translate(_SUPERSCRIPT)
+        return f'<sup class="power">{inner}</sup>'
+    return _SCRIPT.sub(one, t)
+
+
+def normalize_math(body: str, scripts: bool = False) -> str:
     """
     LaTeX out, letters in.
 
@@ -6091,11 +6111,19 @@ def normalize_math(body: str) -> str:
     It wraps a printed fraction the same way — 7<math>\\frac{1}{2}</math>
     inches — in 25 of 151 books, and stripping that left "7frac{1}{2} inches"
     on the page. A fraction, a degree sign and the common operators are set
-    as the characters they are. Subscripts and powers are still left as
-    written (P_1, cm^{-1}): a raised digit in this markup is a note call.
+    as the characters they are.
+
+    With `scripts`, a subscript or a power too, which are otherwise left as
+    written ("P_1", "C_4H_{10}N^+"). A subscript is set as <sub>. A power is
+    set as superscript characters where each of its characters has one (n²,
+    C₄H₁₀N⁺), and otherwise as <sup class="power">: a bare <sup> holding a
+    figure is what every note linker here takes for a call, and a power is
+    not one. The caller asks for it only on a page with no born-digital
+    text (see build_epub).
     """
     def clean(m):
-        return _math_as_text(m.group(1))
+        t = _math_as_text(m.group(1))
+        return _scripts_as_html(t) if scripts else t
     # Display math is exempt: an equation set on its own line is not a Greek
     # letter in a chemical name, and its structure is all it has. The
     # recogniser marks it display="block" itself, on 410 of the 419 blocks
@@ -10122,7 +10150,19 @@ def build_epub(
         print(f"    took out {len(signatures)} signature mark(s) the printer "
               f"set at the foot of a gathering's first page: "
               + ", ".join(f"{mark} (page {i + 1})" for i, mark in signatures))
-    bodies = [normalize_entry_heads(normalize_math(b)) for b in bodies]
+    # Subscripts and powers are set as such only where the page has no
+    # born-digital text. Where it has, the layer is the better reading of
+    # them: the recogniser reads a printed Y₁ as "Y_L" and e_D as "e_p", the
+    # layer holds "Y1" and "eD", and the reconciler below takes the layer's
+    # word. Set as <sub> first, the tag stood between the words and the
+    # layer was no longer asked: 127 subscripts in the three economics
+    # textbooks went back to the recogniser's letters on the first shelf
+    # run of this rule. A flat "Y1" with the right figure is the better of
+    # the two.
+    bodies = [normalize_entry_heads(normalize_math(
+        b, scripts=not (i < len(page_paths)
+                        and os.path.exists(page_paths[i] + ".native"))))
+        for i, b in enumerate(bodies)]
     n_promoted = normalize_note_heads(bodies)
     if n_promoted:
         print(f"    promoted {n_promoted} bold note head(s) to headings")
