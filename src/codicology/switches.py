@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .pipeline import SecondOpinion, ThirdOpinion
+    from .opinions import SecondOpinion, ThirdOpinion
 
 # Set by the command line (--second-reader), like WITNESS_WAIVED: a build
 # either has a second reader for the whole of its run or has none. A third
