@@ -241,8 +241,6 @@ def test_a_build_leaves_the_count_out_fresh_and_from_the_cache(
     """The three that prompted this were all sitting in caches, so the guard
     stands where the book is assembled: the cache keeps what the model said,
     and no build prints it."""
-    monkeypatch.setattr(vtb, "tesseract_words_on_page", lambda p: 12,
-                        raising=False)
     monkeypatch.setattr(witness_mod, "_classical_word_count",
                         lambda p, min_len=2: 200)
     monkeypatch.setattr(witness_mod, "_classical_text", lambda path: "Epilogue")

@@ -48,10 +48,6 @@ def book_pages(tmp_path):
 
 def test_a_full_build_ships_a_valid_epub(vtb, tmp_path, book_pages,
                                          monkeypatch):
-    # the witness guard re-reads pages that look inked but read empty;
-    # scripted pages are inked rectangles, so give the guard its answer
-    monkeypatch.setattr(vtb, "tesseract_words_on_page", lambda p: 12,
-                        raising=False)
     backend = ScriptedBackend(vtb, [
         ["<p>he fled to Rus-</p>"],
         ["<p>sia at last, and the beligerents met him there.</p>"],
@@ -87,8 +83,6 @@ def test_the_calibre_flag_set_survives_a_blank_page(vtb, tmp_path,
     referenced a local the S4 extraction had moved into _read_pages. A
     blank fourth page drives the exact print that NameError'd on a real
     241-page book."""
-    monkeypatch.setattr(vtb, "tesseract_words_on_page", lambda p: 12,
-                        raising=False)
     monkeypatch.setattr(witness_mod, "_classical_word_count", lambda p, min_len=3:
                         None, raising=False)
     import numpy as np, cv2
@@ -146,8 +140,6 @@ def test_a_chapter_title_reaches_the_shipped_page_as_h1(vtb, tmp_path,
     tagged h2 by the layout. The lift has to happen BEFORE the pages are
     written — it once ran forty lines too late, reported three promotions,
     and shipped none of them."""
-    monkeypatch.setattr(vtb, "tesseract_words_on_page", lambda p: 12,
-                        raising=False)
     backend = FurnishedBackend(vtb, [
         ("INTRODUCTION", "Introduction: Going Inside"),
         ("BEING THERE", "Being There"),
@@ -179,8 +171,6 @@ def test_a_build_stops_rather_than_shipping_pages_a_dead_server_blanked(
     and an unserved backend answers with emptiness rather than an error, so
     the pages ship blank and the emptiness is cached. The run must stop
     before writing any of that."""
-    monkeypatch.setattr(vtb, "tesseract_words_on_page", lambda p: 12,
-                        raising=False)
 
     class DeadServer:
         batch_size = 4
