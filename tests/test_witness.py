@@ -13,15 +13,16 @@ accept, but the absence going unmentioned.
 """
 import pytest
 from codicology import switches
+from codicology import witness as witness_mod
 
 
 def test_the_witness_is_detected_by_the_binary_not_the_package(vtb, monkeypatch):
     """pytesseract is a different thing — it drives the tesseract OCR
     backend. The witness is the executable, which no pip install provides."""
     monkeypatch.setattr(vtb.shutil, "which", lambda name: "/usr/bin/" + name)
-    assert vtb.witness_available() is True
+    assert witness_mod.witness_available() is True
     monkeypatch.setattr(vtb.shutil, "which", lambda name: None)
-    assert vtb.witness_available() is False
+    assert witness_mod.witness_available() is False
 
 
 def test_a_missing_witness_yields_no_count_not_a_zero(vtb, monkeypatch, tmp_path):
@@ -30,7 +31,7 @@ def test_a_missing_witness_yields_no_count_not_a_zero(vtb, monkeypatch, tmp_path
     monkeypatch.setattr(vtb.shutil, "which", lambda name: None)
     page = str(tmp_path / "p.png")
     open(page, "wb").close()
-    assert vtb._classical_word_count(page) is None
+    assert witness_mod._classical_word_count(page) is None
 
 
 def test_unwitnessed_pages_are_counted(vtb):

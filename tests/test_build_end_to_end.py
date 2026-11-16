@@ -14,6 +14,7 @@ import zipfile
 import numpy as np
 import cv2
 import pytest
+from codicology import witness as witness_mod
 
 
 class ScriptedBackend:
@@ -88,7 +89,7 @@ def test_the_calibre_flag_set_survives_a_blank_page(vtb, tmp_path,
     241-page book."""
     monkeypatch.setattr(vtb, "tesseract_words_on_page", lambda p: 12,
                         raising=False)
-    monkeypatch.setattr(vtb, "_classical_word_count", lambda p, min_len=3:
+    monkeypatch.setattr(witness_mod, "_classical_word_count", lambda p, min_len=3:
                         None, raising=False)
     import numpy as np, cv2
     blank = tmp_path / "page_0003.png"

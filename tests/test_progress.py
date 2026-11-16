@@ -11,6 +11,7 @@ import json
 import pytest
 
 from codicology import progress
+from codicology import witness as witness_mod
 
 
 @pytest.fixture(autouse=True)
@@ -48,7 +49,7 @@ def test_convert_emits_a_result_event(tmp_path, monkeypatch, capsys, vtb):
     src.write_bytes(b"%PDF-1.4\n")
     out = tmp_path / "book.epub"
 
-    monkeypatch.setattr(vtb, "witness_available", lambda: True)
+    monkeypatch.setattr(witness_mod, "witness_available", lambda: True)
     called = {}
     monkeypatch.setattr(vtb, "process_video", lambda **kw: called.update(kw))
 
@@ -64,7 +65,7 @@ def test_a_refusal_reaches_the_stream_before_the_exit(tmp_path, monkeypatch,
                                                       capsys, vtb):
     """sys.exit(message) is the pipeline's idiom for refusing; the driver
     must receive the reason as an event, not only as a status code."""
-    monkeypatch.setattr(vtb, "witness_available", lambda: True)
+    monkeypatch.setattr(witness_mod, "witness_available", lambda: True)
     with pytest.raises(SystemExit):
         vtb.main(["--pages-from", str(tmp_path / "missing.pdf"),
                   "--epub", str(tmp_path / "out.epub"), "--progress-json"])
@@ -78,7 +79,7 @@ def test_a_crash_reaches_the_stream_before_the_traceback(tmp_path, monkeypatch,
     src = tmp_path / "book.pdf"
     src.write_bytes(b"%PDF-1.4\n")
 
-    monkeypatch.setattr(vtb, "witness_available", lambda: True)
+    monkeypatch.setattr(witness_mod, "witness_available", lambda: True)
 
     def boom(**kw):
         raise RuntimeError("torch fell over")
@@ -97,7 +98,7 @@ def test_without_the_flag_nothing_machine_readable_appears(tmp_path,
                                                            capsys, vtb):
     src = tmp_path / "book.pdf"
     src.write_bytes(b"%PDF-1.4\n")
-    monkeypatch.setattr(vtb, "witness_available", lambda: True)
+    monkeypatch.setattr(witness_mod, "witness_available", lambda: True)
     monkeypatch.setattr(vtb, "process_video", lambda **kw: None)
     vtb.main(["--pages-from", str(src), "--epub", str(tmp_path / "o.epub")])
     assert _events(capsys) == []

@@ -16,6 +16,7 @@ from PIL import Image
 
 import codicology.pipeline as vtb
 from codicology import switches
+from codicology import witness as witness_mod
 
 
 def _paper(path, ink=False):
@@ -42,7 +43,7 @@ GHOST_TEXT = ("The proper text of the statement of the statement is "
 @pytest.fixture
 def fresh_caches():
     vtb._page_core_ink.cache_clear()
-    vtb._classical_word_count.cache_clear()
+    witness_mod._classical_word_count.cache_clear()
     before = dict(switches.UNWITNESSED)
     yield
     switches.UNWITNESSED.update(before)
@@ -50,13 +51,13 @@ def fresh_caches():
 
 def test_ghost_on_blank_paper_is_convicted(tmp_path, monkeypatch, fresh_caches):
     p = _paper(tmp_path / "p.png")
-    monkeypatch.setattr(vtb, "_classical_word_count", lambda *a, **k: 0)
+    monkeypatch.setattr(witness_mod, "_classical_word_count", lambda *a, **k: 0)
     assert vtb._phantom_blank_pages([p], [GHOST_TEXT], [False]) == {0}
 
 
 def test_classical_reader_finding_text_acquits(tmp_path, monkeypatch, fresh_caches):
     p = _paper(tmp_path / "p.png")
-    monkeypatch.setattr(vtb, "_classical_word_count", lambda *a, **k: 7)
+    monkeypatch.setattr(witness_mod, "_classical_word_count", lambda *a, **k: 7)
     assert vtb._phantom_blank_pages([p], [GHOST_TEXT], [False]) == set()
 
 
@@ -65,7 +66,7 @@ def test_real_ink_acquits_even_when_the_reader_is_silent(tmp_path, monkeypatch,
     """The measured page: 50 true words tesseract could not see. Ink must
     veto before the silent witness is even asked."""
     p = _paper(tmp_path / "p.png", ink=True)
-    monkeypatch.setattr(vtb, "_classical_word_count", lambda *a, **k: 0)
+    monkeypatch.setattr(witness_mod, "_classical_word_count", lambda *a, **k: 0)
     assert vtb._phantom_blank_pages([p], [GHOST_TEXT], [False]) == set()
 
 
@@ -74,7 +75,7 @@ def test_six_word_pages_are_never_questioned(tmp_path, monkeypatch, fresh_caches
     inkless AND unwitnessable — still kept, on principle."""
     p = _paper(tmp_path / "p.png")
     asked = []
-    monkeypatch.setattr(vtb, "_classical_word_count",
+    monkeypatch.setattr(witness_mod, "_classical_word_count",
                         lambda *a, **k: asked.append(1) or 0)
     out = vtb._phantom_blank_pages([p], ["For Mary and the old country"],
                                    [False])
@@ -87,7 +88,7 @@ def test_verbose_inventions_are_still_convicted(tmp_path, monkeypatch,
     produced a 140-word invention on a blank verso. Length is evidence of
     nothing — no real page carries a hundred words with no measurable ink."""
     p = _paper(tmp_path / "p.png")
-    monkeypatch.setattr(vtb, "_classical_word_count", lambda *a, **k: 0)
+    monkeypatch.setattr(witness_mod, "_classical_word_count", lambda *a, **k: 0)
     text = " ".join(["invented"] * 140)
     assert vtb._phantom_blank_pages([p], [text], [False]) == {0}
 
@@ -95,14 +96,14 @@ def test_verbose_inventions_are_still_convicted(tmp_path, monkeypatch,
 def test_a_wordy_inked_page_is_acquitted_by_its_ink(tmp_path, monkeypatch,
                                                     fresh_caches):
     p = _paper(tmp_path / "p.png", ink=True)
-    monkeypatch.setattr(vtb, "_classical_word_count", lambda *a, **k: 0)
+    monkeypatch.setattr(witness_mod, "_classical_word_count", lambda *a, **k: 0)
     text = " ".join(["word"] * 140)
     assert vtb._phantom_blank_pages([p], [text], [False]) == set()
 
 
 def test_a_figure_page_is_content(tmp_path, monkeypatch, fresh_caches):
     p = _paper(tmp_path / "p.png")
-    monkeypatch.setattr(vtb, "_classical_word_count", lambda *a, **k: 0)
+    monkeypatch.setattr(witness_mod, "_classical_word_count", lambda *a, **k: 0)
     assert vtb._phantom_blank_pages([p], [GHOST_TEXT], [True]) == set()
 
 
@@ -110,7 +111,7 @@ def test_no_witness_means_no_conviction_and_an_honest_count(tmp_path,
                                                             monkeypatch,
                                                             fresh_caches):
     p = _paper(tmp_path / "p.png")
-    monkeypatch.setattr(vtb, "_classical_word_count", lambda *a, **k: None)
+    monkeypatch.setattr(witness_mod, "_classical_word_count", lambda *a, **k: None)
     before = switches.UNWITNESSED["fabrication"]
     assert vtb._phantom_blank_pages([p], [GHOST_TEXT], [False]) == set()
     assert switches.UNWITNESSED["fabrication"] == before + 1

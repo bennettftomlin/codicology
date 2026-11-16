@@ -14,6 +14,7 @@ from PIL import Image, ImageDraw
 
 from codicology import pipeline as vtb
 from codicology import switches
+from codicology import witness as witness_mod
 
 INVENTED = ("may should inspire all times growing and taking the Birch's - "
             "this ware, she serve & there, I say - sought them, Birch - thing, "
@@ -48,9 +49,9 @@ def _leaf(tmp_path, name="page_0000.png"):
 def witness(monkeypatch):
     """What the classical reader makes of the page, set by the test."""
     said = {"text": ""}
-    monkeypatch.setattr(vtb, "witness_available", lambda: True)
-    monkeypatch.setattr(vtb, "_classical_text", lambda path: said["text"])
-    monkeypatch.setattr(vtb, "_classical_word_count",
+    monkeypatch.setattr(witness_mod, "witness_available", lambda: True)
+    monkeypatch.setattr(witness_mod, "_classical_text", lambda path: said["text"])
+    monkeypatch.setattr(witness_mod, "_classical_word_count",
                         lambda path, min_len=2: len(said["text"].split()))
     return said
 
@@ -95,7 +96,7 @@ def test_a_reading_that_carries_no_confidence_is_not_judged(tmp_path, witness):
 
 
 def test_with_nobody_to_ask_the_page_is_passed_and_counted(tmp_path, monkeypatch):
-    monkeypatch.setattr(vtb, "witness_available", lambda: False)
+    monkeypatch.setattr(witness_mod, "witness_available", lambda: False)
     before = switches.UNWITNESSED["fabrication"]
     assert vtb.unvouched_reading(_blocks(INVENTED, 0.78), _leaf(tmp_path)) is None
     assert switches.UNWITNESSED["fabrication"] == before + 1

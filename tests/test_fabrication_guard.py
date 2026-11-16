@@ -12,6 +12,7 @@ six words whose ink is indistinguishable from a blank one.
 import numpy as np
 import pytest
 from PIL import Image
+from codicology import witness as witness_mod
 
 
 def _page(ink_rows=0, size=(600, 900)):
@@ -107,7 +108,7 @@ SPREAD = ("Concept: any water can be poured into a lister bag and made safe "
 def _no_layer_page(tmp_path, monkeypatch, vtb, witness):
     """A scan with no text layer, whose classical reading is `witness`."""
     p = str(tmp_path / "spread.png"); _page(ink_rows=30).save(p)
-    monkeypatch.setattr(vtb, "_classical_text", lambda path: witness)
+    monkeypatch.setattr(witness_mod, "_classical_text", lambda path: witness)
     return p
 
 
@@ -172,7 +173,7 @@ def test_a_layer_that_can_testify_is_the_witness(vtb, tmp_path, monkeypatch):
     """Where the page has its own words, they are asked, not the reader."""
     img = _page(ink_rows=30)
     p = _with_layer(tmp_path, img, SPREAD)
-    monkeypatch.setattr(vtb, "_classical_text",
+    monkeypatch.setattr(witness_mod, "_classical_text",
                         lambda path: pytest.fail("the layer was enough"))
     be = FakeBackend(vtb, [SPREAD])
     vtb._read_pages_resiliently.refused = []
@@ -504,7 +505,7 @@ def test_classical_silence_plus_unstable_reads_refuses_a_photo_page(vtb, tmp_pat
     """
     img = _page(ink_rows=0)
     p = str(tmp_path / "photo.png"); img.save(p)
-    monkeypatch.setattr(vtb, "_classical_word_count", lambda _: 0)
+    monkeypatch.setattr(witness_mod, "_classical_word_count", lambda _: 0)
     a = " ".join(f"alpha{i} beta{i} gamma{i} delta{i}" for i in range(30))
     b = " ".join(f"omega{i} sigma{i} theta{i} lambda{i}" for i in range(30))
     be = FakeBackend(vtb, [a, b])
@@ -521,7 +522,7 @@ def test_classical_silence_with_stable_reads_keeps_the_page(vtb, tmp_path, monke
     """
     img = _page(ink_rows=20)
     p = str(tmp_path / "photo.png"); img.save(p)
-    monkeypatch.setattr(vtb, "_classical_word_count", lambda _: 0)
+    monkeypatch.setattr(witness_mod, "_classical_word_count", lambda _: 0)
     text = " ".join(f"word{i} follows word{i+1} in line {i//8}" for i in range(80))
     be = FakeBackend(vtb, [text, text])
     vtb._read_pages_resiliently.refused = []
@@ -535,7 +536,7 @@ def test_classical_witness_not_consulted_when_a_layer_exists(vtb, tmp_path, monk
     layer = " ".join(f"word{i} follows word{i+1} in line {i//8}" for i in range(80))
     p = _with_layer(tmp_path, img, layer)
     def boom(_): raise AssertionError("classical witness consulted despite layer")
-    monkeypatch.setattr(vtb, "_classical_word_count", boom)
+    monkeypatch.setattr(witness_mod, "_classical_word_count", boom)
     be = FakeBackend(vtb, [layer])
     got = vtb._read_pages_resiliently([p], [img], be, None)
     assert got[p]
@@ -544,7 +545,7 @@ def test_classical_witness_not_consulted_when_a_layer_exists(vtb, tmp_path, monk
 def test_missing_tesseract_binary_means_no_judgement(vtb, tmp_path, monkeypatch):
     img = _page(ink_rows=0)
     p = str(tmp_path / "photo.png"); img.save(p)
-    monkeypatch.setattr(vtb, "_classical_word_count", lambda _: None)
+    monkeypatch.setattr(witness_mod, "_classical_word_count", lambda _: None)
     text = " ".join(f"word{i} and word{i+1} met in line {i//8}" for i in range(60))
     be = FakeBackend(vtb, [text])
     vtb._read_pages_resiliently.refused = []
@@ -561,7 +562,7 @@ def test_a_broken_three_word_layer_cannot_condemn_a_rich_real_reading(vtb, tmp_p
     """
     img = _page(ink_rows=20)
     p = _with_layer(tmp_path, img, "how many zeros")
-    monkeypatch.setattr(vtb, "_classical_word_count", lambda _: 250)
+    monkeypatch.setattr(witness_mod, "_classical_word_count", lambda _: 250)
     text = " ".join(f"factoid{i} zillion{i} trillion{i} degrees{i}"
                     for i in range(30))
     be = FakeBackend(vtb, [text])
@@ -578,7 +579,7 @@ def test_a_sparse_layer_page_falls_through_to_the_classical_witness(vtb, tmp_pat
     """
     img = _page(ink_rows=1)
     p = _with_layer(tmp_path, img, "384 TIHKAL — The Continuation Epilogue")
-    monkeypatch.setattr(vtb, "_classical_word_count", lambda _: 4)
+    monkeypatch.setattr(witness_mod, "_classical_word_count", lambda _: 4)
     a = " ".join(f"continuation{i} paper{i} dense{i} list{i}" for i in range(25))
     b = " ".join(f"different{i} story{i} entirely{i} here{i}" for i in range(25))
     be = FakeBackend(vtb, [a, b])
@@ -661,12 +662,12 @@ def test_a_page_read_as_empty_but_readable_is_not_dropped_as_blank(vtb, monkeypa
     overrules the emptiness.
     """
     counts = {"/tmp/real.jpg": 40, "/tmp/leaf.jpg": 0, "/tmp/showthrough.jpg": 4}
-    monkeypatch.setattr(vtb, "_classical_word_count",
+    monkeypatch.setattr(witness_mod, "_classical_word_count",
                         lambda p, min_len=2: counts[p])
     paths = ["/tmp/real.jpg", "/tmp/leaf.jpg", "/tmp/showthrough.jpg"]
     blank = {0, 1, 2}
     keep = {i for i in blank
-            if (n := vtb._classical_word_count(paths[i], min_len=3)) and n >= 10}
+            if (n := witness_mod._classical_word_count(paths[i], min_len=3)) and n >= 10}
     assert keep == {0}, "only the page with real text survives the drop"
 
 

@@ -10,6 +10,7 @@ import pytest
 from PIL import Image
 
 from test_counting_tables import PageBackend
+from codicology import witness as witness_mod
 
 
 # ── a chapter's number ends where it ends ────────────────────────────────────
@@ -81,7 +82,7 @@ def _pdf(path):
 @pytest.mark.parametrize("spelling", ["same", "relative", "link"])
 def test_writing_over_the_source_is_refused(vtb, tmp_path, monkeypatch,
                                             spelling):
-    monkeypatch.setattr(vtb, "witness_available", lambda: True)
+    monkeypatch.setattr(witness_mod, "witness_available", lambda: True)
     src = _pdf(tmp_path / "book.pdf")
     before = open(src, "rb").read()
     out = src
@@ -99,7 +100,7 @@ def test_writing_over_the_source_is_refused(vtb, tmp_path, monkeypatch,
 
 def test_an_epub_named_as_the_source_is_refused_too(vtb, tmp_path,
                                                     monkeypatch):
-    monkeypatch.setattr(vtb, "witness_available", lambda: True)
+    monkeypatch.setattr(witness_mod, "witness_available", lambda: True)
     src = _pdf(tmp_path / "book.pdf")
     with pytest.raises(SystemExit) as stop:
         vtb.main(["--pages-from", src, "--epub", src])

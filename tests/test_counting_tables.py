@@ -17,6 +17,7 @@ import cv2
 import numpy as np
 import pytest
 from PIL import Image
+from codicology import witness as witness_mod
 
 
 def _table(rows):
@@ -53,7 +54,7 @@ def _page(tmp_path, layer=None, name="page_0007.png"):
 @pytest.fixture
 def silent(vtb, monkeypatch):
     """A classical reader that finds nothing on the page."""
-    monkeypatch.setattr(vtb, "_classical_text", lambda path: "")
+    monkeypatch.setattr(witness_mod, "_classical_text", lambda path: "")
 
 
 @pytest.mark.parametrize("table, integers", [(LLOYDS, 675), (TIHKAL, 540),
@@ -135,7 +136,7 @@ def test_a_count_the_pages_own_layer_prints_is_kept(vtb, tmp_path,
     troubling the classical reader."""
     def boom(path):
         raise AssertionError("the layer had already answered")
-    monkeypatch.setattr(vtb, "_classical_text", boom)
+    monkeypatch.setattr(witness_mod, "_classical_text", boom)
     layer = "\n".join(" ".join(map(str, range(r, r + 10)))
                       for r in range(1, 101, 10))
     items = [_item(vtb, HUNDRED)]
@@ -148,7 +149,7 @@ def test_a_count_only_the_classical_reader_sees_is_kept(vtb, tmp_path,
     """A scan: the layer is prose from somewhere else or nothing at all
     (four real tables measured 0.00 against theirs), and tesseract reads
     the numbers. Either witness is enough."""
-    monkeypatch.setattr(vtb, "_classical_text", lambda path: " ".join(
+    monkeypatch.setattr(witness_mod, "_classical_text", lambda path: " ".join(
         str(n) for n in range(1, 101) if n % 7))      # and it misses a few
     prose = "the answers to the exercises of this chapter follow " * 9
     items = [_item(vtb, HUNDRED)]
@@ -161,7 +162,7 @@ def test_a_count_neither_witness_holds_is_dropped(vtb, tmp_path, monkeypatch):
     """The grid on the facsimile plate: both witnesses read the plate's own
     figures, which happen to include a few small numbers — 0.22 and 0.28 of
     the count. Half is the bar."""
-    monkeypatch.setattr(vtb, "_classical_text",
+    monkeypatch.setattr(witness_mod, "_classical_text",
                         lambda path: "Anno 1546 the 26 day of April 3 5 9 li")
     page = _page(tmp_path, "Journal of Sir Thomas Gresham 1546 2 7 12 18")
     assert vtb.drop_counting_tables([_item(vtb, GRID)], page) == ([], [36])
@@ -175,7 +176,7 @@ def test_digits_inside_longer_numbers_do_not_vouch(vtb, tmp_path, silent):
 def test_without_a_witness_a_count_stays_refused(vtb, tmp_path, monkeypatch):
     """No tesseract and no layer: the loop guard's rule, for the same
     reason — the shape accuses and nothing can answer for it."""
-    monkeypatch.setattr(vtb, "_classical_text", lambda path: None)
+    monkeypatch.setattr(witness_mod, "_classical_text", lambda path: None)
     assert vtb.drop_counting_tables([_item(vtb, HUNDRED)],
                                     _page(tmp_path)) == ([], [100])
     assert vtb.drop_counting_tables([_item(vtb, HUNDRED)]) == ([], [100])
@@ -242,9 +243,9 @@ def test_a_build_leaves_the_count_out_fresh_and_from_the_cache(
     and no build prints it."""
     monkeypatch.setattr(vtb, "tesseract_words_on_page", lambda p: 12,
                         raising=False)
-    monkeypatch.setattr(vtb, "_classical_word_count",
+    monkeypatch.setattr(witness_mod, "_classical_word_count",
                         lambda p, min_len=2: 200)
-    monkeypatch.setattr(vtb, "_classical_text", lambda path: "Epilogue")
+    monkeypatch.setattr(witness_mod, "_classical_text", lambda path: "Epilogue")
     readings = [
         [("<p>The first page of the book, which reads as it should.</p>",
           "Text")],

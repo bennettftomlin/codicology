@@ -11,6 +11,7 @@ import pytest
 from codicology import pipeline as vtb
 from test_doubled_boxes import _problem_blocks, _problem_page
 from codicology import switches
+from codicology import witness as witness_mod
 
 THIN = ("<table><tr><th>Wage per day</th><th>Number of workers</th></tr>"
         "<tr><td>0</td><td>0</td></tr><tr><td>8</td><td>1</td></tr></table>")
@@ -439,9 +440,9 @@ def test_a_build_that_asked_nothing_takes_an_old_account_away(tmp_path, monkeypa
         def run_items(self, images):
             return [_blocks(PRINTED, 0.995) for _ in images]
 
-    monkeypatch.setattr(vtb, "witness_available", lambda: True)
-    monkeypatch.setattr(vtb, "_classical_text", lambda path: PRINTED)
-    monkeypatch.setattr(vtb, "_classical_word_count",
+    monkeypatch.setattr(witness_mod, "witness_available", lambda: True)
+    monkeypatch.setattr(witness_mod, "_classical_text", lambda path: PRINTED)
+    monkeypatch.setattr(witness_mod, "_classical_word_count",
                         lambda path, min_len=2: len(PRINTED.split()))
     stale = tmp_path / "7-abc.second.txt"
     stale.write_text("an earlier build's account")

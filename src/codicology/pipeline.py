@@ -139,6 +139,7 @@ from . import rectify as _rectify
 from . import progress
 from .markup import _strip_tags
 from . import switches
+from . import witness
 
 
 from .capture import (  # noqa: F401  (moved; kept importable from here)
@@ -6408,7 +6409,7 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
                       f"numbers that only counts, "
                       + ("and neither the page's text layer nor a classical "
                          "reader finds the count on the page"
-                         if witness_available() else
+                         if witness.witness_available() else
                          "which the page's text layer does not hold, and no "
                          "classical reader is installed to ask")
                       + " — left out rather than printed as invention")
@@ -6974,7 +6975,7 @@ def build_epub(
         if blank:
             second_opinion = set()
             for i in sorted(blank):
-                n = _classical_word_count(page_paths[i], min_len=3)
+                n = witness._classical_word_count(page_paths[i], min_len=3)
                 if n is None:
                     # Nothing can tell an empty leaf from a page we failed to
                     # read, so this page is about to be deleted on our own
@@ -8731,7 +8732,7 @@ def _page_witness(page_path: str) -> "str | None":
     if _layer_can_testify(page_path):
         with open(page_path + ".layer.txt", encoding="utf-8") as fh:
             return fh.read()
-    return _classical_text(page_path)
+    return witness._classical_text(page_path)
 
 
 def _looks_fabricated(items, image, page_path: "str | None" = None
@@ -8827,7 +8828,7 @@ def _count_is_on_the_page(numbers: "list[int]", page_path: str) -> bool:
                 return True
     except OSError:
         pass
-    return holds(_classical_text(page_path))
+    return holds(witness._classical_text(page_path))
 
 
 def drop_counting_tables(items: "list[PageItem]",
@@ -9012,13 +9013,13 @@ def unvouched_reading(items, page_path: "str | None"
             layer = fh.read()
     except OSError:
         pass
-    if not witness_available():
+    if not witness.witness_available():
         if not _layer_can_testify(page_path):
             switches.UNWITNESSED["fabrication"] += 1
             return None                 # nobody to ask: not guilt
         witnesses = [layer]
     else:
-        witnesses = [layer, _classical_text(page_path)]
+        witnesses = [layer, witness._classical_text(page_path)]
     best = max(_share_witnessed(text, w) for w in witnesses)
     if best >= VOUCHED_SHARE:
         return None
@@ -9077,54 +9078,6 @@ def _layer_can_testify(page_path: str) -> bool:
                 >= LAYER_MIN_WORDS
     except OSError:
         return False
-
-
-def witness_available() -> bool:
-    """Whether the classical reader this pipeline testifies with is installed."""
-    import shutil
-    return shutil.which("tesseract") is not None
-
-
-
-
-@functools.lru_cache(maxsize=None)
-def _classical_text(page_path: str) -> "str | None":
-    """What the classical reader makes of the page, or None if unavailable."""
-    import shutil
-    import subprocess
-    if not shutil.which("tesseract"):
-        return None
-    try:
-        return subprocess.run(["tesseract", page_path, "stdout", "--psm", "3"],
-                              capture_output=True, text=True,
-                              timeout=300).stdout
-    except Exception:
-        return None
-
-
-@functools.lru_cache(maxsize=None)
-def _classical_word_count(page_path: str, min_len: int = 2) -> "int | None":
-    """
-    How many words a classical OCR finds on the page, or None if unavailable.
-
-    Tesseract has no generator, so it cannot invent: on a blank or bleed-
-    through page it returns nothing at all — measured 0 words on every blank
-    verso, and exactly "TIHKAL The Continuation Epilogue" on the part-title
-    whose ghost text seeded a 91-word invention. That silence makes it a
-    witness against fabrication on pages with no text layer to consult. It
-    also goes silent on some REAL pages (a faded stamp, a dedication), so
-    its silence may only ever raise suspicion, never convict on its own.
-    """
-    import shutil
-    import subprocess
-    if not shutil.which("tesseract"):
-        return None
-    try:
-        r = subprocess.run(["tesseract", page_path, "stdout", "--psm", "3"],
-                           capture_output=True, text=True, timeout=120)
-        return len(re.findall(r"[A-Za-z]{%d,}" % min_len, r.stdout))
-    except Exception:
-        return None
 
 
 # A handful of words on visually blank paper is show-through, not text.
@@ -9226,7 +9179,7 @@ def _phantom_blank_pages(page_paths, texts, has_figure, skip=frozenset()):
         ink = _page_core_ink(path)
         if ink is None or ink >= PHANTOM_CORE_INK:
             continue
-        n = _classical_word_count(path, min_len=3)
+        n = witness._classical_word_count(path, min_len=3)
         if n is None:
             switches.UNWITNESSED["fabrication"] += 1
             continue
@@ -9389,7 +9342,7 @@ def _read_pages_resiliently(paths: list[str], images: list,
                 _strip_tags(it.html) for it in items
                 if it.html and not it.is_furniture).lower()))
             if n_ours >= LAYER_MIN_WORDS:
-                n_tess = _classical_word_count(path)
+                n_tess = witness._classical_word_count(path)
                 if n_tess is None:
                     # The only witness this page had, and it is not here. The
                     # page passes unexamined — which is the honest outcome,
@@ -10923,7 +10876,7 @@ def _convert(args, parser) -> None:
     # late. It is the tesseract BINARY, not the pytesseract package, which is
     # a different thing that only the tesseract OCR backend uses — so no pip
     # install satisfies this and the dependency list cannot enforce it.
-    if not witness_available():
+    if not witness.witness_available():
         if not args.without_witness:
             sys.exit(
                 "codicology needs tesseract installed: it is the witness two "
