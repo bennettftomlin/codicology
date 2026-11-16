@@ -461,6 +461,32 @@ def _entry_anchor(entry: str, note_id: str, back_href: str, n: int):
     return None
 
 
+# An entry the reading lost (a misread number, a dropped line) used to end
+# its group: entries were taken while each was the next number, so after a
+# missing 7 the 8, 9 and 10 were never looked for, and every call after 6
+# stayed plain. 2083 and 2106 lost some ninety links that way. The walk now
+# steps over up to ENTRY_GAP numbers, where what it steps to is borne out:
+# the entry after the gap is followed by its own next number (on its page or
+# the page after), and none of the numbers stepped over turns up later on the
+# page out of order. A lone higher number, a year or a page reference in a
+# note's own text, is followed by nothing and is not taken. The calls whose
+# entries were lost stay as printed.
+ENTRY_GAP = 2
+
+
+def _steps_over_a_lost_entry(n: int, expect: int, later: "list[int]",
+                             next_page) -> bool:
+    """Whether entry number n, met where `expect` was wanted, is the group
+    going on past lost entries. `later` holds the entry numbers after it on
+    its page; `next_page` gives those of the page after, asked only if
+    needed."""
+    if not (expect < n <= expect + ENTRY_GAP):
+        return False
+    if any(expect <= m < n for m in later):
+        return False                    # a skipped number is there after all
+    return (n + 1) in later or (n + 1) in next_page()
+
+
 def link_chapter_notes(bodies: list[str], dropped: set) -> dict:
     """
     Chapter-endnotes layout: a "Notes" section closes each chapter, entries
@@ -508,22 +534,30 @@ def link_chapter_notes(bodies: list[str], dropped: set) -> dict:
         entries: dict[int, tuple[int, int]] = {}
         expect = 1
         pi, from_pos = hp, hpos
-        while pi < len(bodies):
-            found_here = False
+        def entries_on(page: int) -> "list[tuple[int, int]]":
             # all three entry forms gathered FIRST, then walked in page
             # order with one ascending counter — three sequential passes
             # shared the counter and a page whose entries alternate forms
             # (sup 1, plain 2, sup 3) permanently skipped the later sup
-            matches = sorted(
+            return sorted(
                 ((m.start(), int(m.group(1)))
                  for pat in (NOTE_ENTRY, NOTE_ENTRY_PLAIN, NOTE_ENTRY_LI)
-                 for m in pat.finditer(bodies[pi])
-                 if not (pi == hp and m.start() < from_pos)),
+                 for m in pat.finditer(bodies[page])
+                 if not (page == hp and m.start() < from_pos)),
                 key=lambda t: t[0])
-            for pos, n in matches:
-                if n == expect:
+
+        while pi < len(bodies):
+            found_here = False
+            matches = entries_on(pi)
+            for j, (pos, n) in enumerate(matches):
+                if n == expect or _steps_over_a_lost_entry(
+                        n, expect, [m for _, m in matches[j + 1:]],
+                        lambda: [m for _, m in entries_on(pi + 1)]
+                        if pi + 1 < len(bodies)
+                        and not (k + 1 < len(heads) and pi + 1 > heads[k + 1][0])
+                        else []):
                     entries.setdefault(n, (pi, pos))
-                    expect += 1
+                    expect = n + 1
                     found_here = True
             if not found_here and pi > hp:
                 break

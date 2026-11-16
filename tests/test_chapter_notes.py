@@ -179,3 +179,49 @@ def test_a_back_of_book_section_that_says_notes_twice_is_not_two_chapters(vtb):
     vtb.link_notes(read, set())
     assert [re.search(r"#note-g(\d+)-1", read[c]).group(1) for c in range(4)] \
         == ["0", "1", "2", "3"], "each chapter must reach its own notes"
+
+
+# ── a missing entry does not end its group ───────────────────────────────────
+
+def _missing(n_notes=10, gone=(7,), extra=""):
+    """Two chapters of n_notes calls each; in the first chapter's notes the
+    entries numbered in `gone` were not read (a misread, a dropped line)."""
+    bodies = []
+    for c in range(2):
+        bodies.append("<p>text" + "".join(f" word<sup>{k}</sup>"
+                      for k in range(1, n_notes + 1)) + "</p>")
+        bodies.append("<h2>NOTES</h2>" + "".join(
+            f"<p>{k}. c{c} source {k}.</p>" for k in range(1, n_notes + 1)
+            if not (c == 0 and k in gone)) + (extra if c == 0 else ""))
+    return bodies
+
+
+def test_the_entries_after_a_missing_one_still_link(vtb):
+    """2083 and 2106: one entry the reading lost stopped its whole group,
+    and every call after it went unlinked."""
+    bodies = _missing()
+    stats = vtb.link_chapter_notes(bodies, set())
+    assert stats["sections"] == 2
+    for k in (6, 8, 9, 10):
+        assert f'href="page_0001.xhtml#note-c0-{k}"' in bodies[0], k
+    # the call whose entry is gone stays as printed
+    assert 'note-c0-7"' not in bodies[0] and "<sup>7</sup>" in bodies[0]
+    assert stats["linked"] == 19 and stats["unlinked"] == 1
+
+
+def test_two_missing_together_are_stepped_over_and_three_are_not(vtb):
+    bodies = _missing(gone=(4, 5))
+    vtb.link_chapter_notes(bodies, set())
+    assert 'note-c0-6"' in bodies[0] and 'note-c0-10"' in bodies[0]
+    bodies = _missing(gone=(4, 5, 6))
+    vtb.link_chapter_notes(bodies, set())
+    assert 'note-c0-3"' in bodies[0] and 'note-c0-7"' not in bodies[0]
+
+
+def test_a_stray_number_does_not_carry_the_walk_off(vtb):
+    """A number that jumps but is not followed by its own next is not an
+    entry: a year, a page reference, a figure in a note's own text."""
+    bodies = _missing(n_notes=5, gone=(), extra="<p>8. A line that is not a note.</p>")
+    vtb.link_chapter_notes(bodies, set())
+    assert 'id="note-c0-8"' not in bodies[1]
+    assert all(f'note-c0-{k}"' in bodies[0] for k in range(1, 6))
