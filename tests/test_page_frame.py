@@ -81,10 +81,11 @@ def test_a_short_table_is_found_on_a_trimmed_page(vtb, tmp_path):
                              "<tr><td>1991</td><td>4,455</td><td>3,912</td></tr>"
                              "<tr><td>1992</td><td>4,630</td><td>4,003</td></tr></table>", box=box)
     short = full._replace(html="<table><tr><td>1990</td><td>4,210</td></tr></table>")
-    vtb_min = vtb.TABLE_MIN_FIGURES
+    from codicology import figures      # where tables_short_of_figures reads it
+    vtb_min = figures.TABLE_MIN_FIGURES
     try:
-        vtb.TABLE_MIN_FIGURES = 6
+        figures.TABLE_MIN_FIGURES = 6
         assert vtb.tables_short_of_figures([full], page_path) == []
         assert vtb.tables_short_of_figures([short], page_path) == [(9, 2)]
     finally:
-        vtb.TABLE_MIN_FIGURES = vtb_min
+        figures.TABLE_MIN_FIGURES = vtb_min
