@@ -141,7 +141,8 @@ def test_agreement_is_of_words_and_not_of_how_they_are_set(vtb, tmp_path, monkey
         fh.write(layer)
     open(p + ".native", "w").close()
     # one line of type, a word space between its words
-    monkeypatch.setattr(vtb, "_layer_geometry", lambda path: [
+    from codicology import reconcile   # where reconcile_native_text asks it
+    monkeypatch.setattr(reconcile, "_layer_geometry", lambda path: [
         (w, 72 + 30 * k, 498, 72 + 30 * k + 27, 507) for k, w in enumerate(layer.split())])
     bodies = ["<p>They called it the 'jump to the streets' (salto la calle) and overcame "
               "their isolation.</p>"]
