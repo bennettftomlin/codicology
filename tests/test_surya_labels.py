@@ -84,8 +84,9 @@ def _labels_named(path):
 
 def test_the_scan_sees_the_labels_the_pipeline_acts_on():
     """Guard the guard: if the source stops comparing labels this way, the
-    test below would pass by finding nothing."""
-    named = set(_labels_named(SRC / "pipeline.py"))
+    test below would pass by finding nothing. The package as a whole: the
+    label sets live with the backend, the comparisons across the build."""
+    named = set().union(*(_labels_named(p) for p in SRC.glob("*.py")))
     assert {"Picture", "Figure", "Diagram", "Caption", "PageHeader",
             "PageFooter", "SectionHeader", "Footnote", "Form",
             "TableOfContents"} <= named
