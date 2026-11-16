@@ -143,7 +143,7 @@ def test_relabel_repairs_and_stays_guided(stock, monkeypatch, tmp_path):
                         _stub_predictor("surya.layout", "LayoutPredictor",
                                         seen, boxed))
     monkeypatch.setattr(vtb, "load_pages_from_pdf",
-                        lambda pdf, d, former_keys=False: [str(page)])
+                        lambda pdf, d, former_keys=False, turns_path=None: [str(page)])
 
     class Cache:
         entries = {"elsewhere": []}

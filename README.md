@@ -66,7 +66,8 @@ paragraphs, something is wrong. Two checks depend on it entirely:
 Without it, both checks pass without examining anything, so a run refuses to
 start. `--without-witness` overrides that and reports at the end how many
 pages went unexamined. Its word boxes also position the searchable PDF text
-layer far more precisely than layout blocks can.
+layer far more precisely than layout blocks can, and its orientation check
+says which way up a scanned page is.
 
 ### A second reader, where one is installed
 
@@ -284,6 +285,16 @@ No flags required for any of this.
   cannot parse, the equation is set as its plain text inside the same
   element. pandoc's copy of the TeX is not kept inside: every check counts
   a page's words. An equation in a line of text is set as text.
+- **Sideways pages in a two-page scan, turned upright.** In a book scanned
+  two pages to a sheet, a page whose type runs down the sheet has its body
+  turned before it is read, where tesseract's orientation check is sure of
+  it. The page is read first as it lies; what that reading calls furniture
+  (the running head, the page number) is cut out and set back upright above
+  and below the turned body, so page numbers and running heads are read as
+  they always were. The left page is set above the right, so it is still
+  read first. A single page set on its side is left as it lies: the
+  recogniser reads those well. What the check said of each sheet is kept
+  beside the reading cache (`<cache>.turns.json`), so a sheet is asked once.
 - **Structure.** Chapters come from the printed contents where it parses,
   and otherwise from the book's own running heads, which name the chapter
   on every page of it. The two are also checked against each other: a

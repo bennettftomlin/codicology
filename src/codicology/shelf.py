@@ -277,6 +277,32 @@ def _borrow(src: str, dst: str) -> None:
     shutil.copy2(src, dst)
 
 
+# What tesseract's orientation check said of each scanned page is kept
+# beside a book's reading cache (pipeline.TURNS_SUFFIX), so a page is
+# asked once. A run works on borrowed caches, and what a build learns
+# there would go with the run; it is kept beside the shelf file instead,
+# for every run to start from. The check costs a second or more a page,
+# and the shelf has some ten thousand scanned pages.
+TURNS_SUFFIX = ".turns.json"
+
+
+def _turns(path: str) -> dict:
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return dict(json.load(fh).get("pages") or {})
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+def _put_turns(path: str, pages: dict) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump({"check": "tesseract --psm 0", "pages": pages}, fh,
+                  sort_keys=True)
+    os.replace(tmp, path)
+
+
 def _stamp(path: "str | None") -> "dict | None":
     """What tells one state of an input file from another, cheaply."""
     if not path or not os.path.isfile(path):
@@ -326,7 +352,8 @@ def command(book: dict, epub: str, cache: str, python: str,
 def build_one(book: dict, out: str, code: "str | None" = None,
               python: "str | None" = None, verify: bool = False,
               prints_only: bool = False, pdf_workers: "int | None" = None,
-              read: bool = False, run=subprocess.run) -> dict:
+              read: bool = False, run=subprocess.run,
+              turns_dir: "str | None" = None) -> dict:
     """Build one book into `out` and keep its print. Returns its row.
     With `prints_only` the book and the borrowed cache are not kept once
     the print is taken: a base run of a hundred and fifty books is then
@@ -349,6 +376,12 @@ def build_one(book: dict, out: str, code: "str | None" = None,
     _borrow(book["cache"], cache)
     for extra in book["beside"]:
         _borrow(extra, os.path.join(out, "cache", os.path.basename(extra)))
+    kept_turns = (os.path.join(turns_dir, os.path.basename(book["cache"])
+                               + TURNS_SUFFIX) if turns_dir else None)
+    known = {**_turns(book["cache"] + TURNS_SUFFIX),
+             **(_turns(kept_turns) if kept_turns else {})}
+    if known:
+        _put_turns(cache + TURNS_SUFFIX, known)
     if os.path.exists(epub):
         os.remove(epub)
     env = dict(os.environ, PYTHONUNBUFFERED="1")
@@ -367,6 +400,10 @@ def build_one(book: dict, out: str, code: "str | None" = None,
                         stdout=fh, stderr=subprocess.STDOUT,
                         env=env).returncode
     row["seconds"] = round(time.time() - began)
+    if kept_turns:
+        learned = _turns(cache + TURNS_SUFFIX)
+        if learned and learned != known:
+            _put_turns(kept_turns, {**known, **learned})
     if read:
         # how many pages this build had read, as its own record says
         row["read live"] = None
@@ -403,7 +440,7 @@ def build_one(book: dict, out: str, code: "str | None" = None,
         row["said"] = [ln[:300] for ln in lines[-3:]]
     _keep(out, row, print_)
     if prints_only and print_ is not None:
-        for used in (epub, cache, *(os.path.join(
+        for used in (epub, cache, cache + TURNS_SUFFIX, *(os.path.join(
                 out, "cache", os.path.basename(x)) for x in book["beside"])):
             if os.path.exists(used):
                 os.remove(used)
@@ -442,6 +479,7 @@ def build(shelf: str, out: str, jobs: int = JOBS, only=None,
           ) -> dict:
     """Build the shelf (or `only` some of it) into `out`."""
     books = chosen(load(shelf), only)
+    turns_dir = os.path.join(os.path.dirname(os.path.abspath(shelf)), "turns")
     for sub in ("cache", "books", "logs", "prints"):
         os.makedirs(os.path.join(out, sub), exist_ok=True)
     rows: dict = {}
@@ -469,7 +507,7 @@ def build(shelf: str, out: str, jobs: int = JOBS, only=None,
         waiting = [pool.submit(build_one, book, out, code=code,
                                python=python, verify=verify,
                                prints_only=prints_only, pdf_workers=each,
-                               run=run)
+                               run=run, turns_dir=turns_dir)
                    for book in todo]
         for n, done in enumerate(concurrent.futures.as_completed(waiting), 1):
             row = done.result()
@@ -486,7 +524,7 @@ def build(shelf: str, out: str, jobs: int = JOBS, only=None,
             settle()
             row = build_one(book, out, code=code, python=python,
                             verify=verify, prints_only=prints_only,
-                            read=True, run=run)
+                            read=True, run=run, turns_dir=turns_dir)
             rows[row["id"]] = row
             if row["rc"] == 0:
                 read.append(row["id"])

@@ -464,3 +464,32 @@ def test_a_real_book_built_twice_from_its_cache_is_the_same_book(tmp_path, monke
     assert one["print"]["facts"]["pages"] == 3 and "--typography" in one["print"]["built_by"]
     assert json.load(open(os.path.join(a, "cache", "book-1a2b.build.json")))["pages_sent_to_be_read"] == 0
     assert shelf.tell(shelf.compare(a, b), say=lambda s: None) == 0
+
+
+def test_what_the_orientation_check_said_outlives_the_run(tmp_path):
+    """A build asks tesseract which way up each scanned page is and keeps
+    the answers beside its (borrowed) cache; the shelf keeps them for the
+    next run, which starts from them, and the book's own cache is not
+    written."""
+    books = _three(tmp_path)[:1]
+
+    class Learns(_Builder):
+        def __call__(self, cmd, stdout=None, stderr=None, env=None, **kw):
+            turns = cmd[cmd.index("--ocr-cache") + 1] + shelf.TURNS_SUFFIX
+            self.started_with = shelf._turns(turns)
+            shelf._put_turns(turns, {**self.started_with, "page-b": {"whole": [0, 7.1]}})
+            return super().__call__(cmd, stdout=stdout, stderr=stderr, env=env, **kw)
+
+    (tmp_path / "7-ab.ocr.gz.turns.json").write_text(
+        json.dumps({"pages": {"page-a": {"whole": [270, 9.0]}}}))
+    first = Learns(tmp_path)
+    shelf.build(_shelf(tmp_path, books), str(tmp_path / "one"), run=first, say=lambda s: None,
+                prints_only=True)
+    assert first.started_with == {"page-a": {"whole": [270, 9.0]}}
+    kept = shelf._turns(str(tmp_path / "turns" / "7-ab.ocr.gz.turns.json"))
+    assert set(kept) == {"page-a", "page-b"}
+    assert set(shelf._turns(str(tmp_path / "7-ab.ocr.gz.turns.json"))) == {"page-a"}
+    assert not os.path.exists(tmp_path / "one" / "cache" / "7-ab.ocr.gz.turns.json")
+    again = Learns(tmp_path)
+    shelf.build(_shelf(tmp_path, books), str(tmp_path / "two"), run=again, say=lambda s: None)
+    assert set(again.started_with) == {"page-a", "page-b"}

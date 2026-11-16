@@ -2917,6 +2917,8 @@ def better_figure(page_path: str, box, crop: "Image.Image") -> "Image.Image":
     try:
         with open(page_path + ".source.json") as fh:
             src = json.load(fh)
+        if src.get("turned"):
+            return crop     # the page was turned: the PDF draws it otherwise
         import pypdfium2 as pdfium
         doc = pdfium.PdfDocument(src["pdf"])
         page = doc[src["page"]]
@@ -8687,7 +8689,8 @@ def relabel_cache(cache_path: str, pdf_path: str, backend_name: str = "surya",
     tmp = tempfile.mkdtemp(prefix="relabel_")
     try:
         page_paths = load_pages_from_pdf(
-            pdf_path, tmp, former_keys=OCRCache.filed_by_bytes(cache_path))
+            pdf_path, tmp, former_keys=OCRCache.filed_by_bytes(cache_path),
+            turns_path=cache_path + TURNS_SUFFIX)
         cache = OCRCache(cache_path, backend_name, langs)
         if not cache.entries:
             print(f"  [!] cache is cold or tagged differently: {cache_path}")
@@ -8800,7 +8803,8 @@ def rekey_cache(cache_path: str, pdf_path: str, backend_name: str = "surya",
     before = fingerprints(cache.entries)
     tmp = tempfile.mkdtemp(prefix="rekey_")
     try:
-        page_paths = load_pages_from_pdf(pdf_path, tmp, former_keys=True)
+        page_paths = load_pages_from_pdf(pdf_path, tmp, former_keys=True,
+                                         turns_path=cache_path + TURNS_SUFFIX)
         st["pages"] = len(page_paths)
         for pp in page_paths:
             if cache._entry(pp) is None:
@@ -10039,6 +10043,10 @@ def build_epub(
                      if serve_stale_cache else
                      " and will be read again, which is what puts the "
                      "labels there"))
+
+    # A page printed sideways is turned once it has been read as it lies,
+    # its head and page number kept upright (see TURN_MIN_CONFIDENCE).
+    turn_sideways_bodies(page_paths, cache, backend)
 
     if CACHE_ONLY:
         # Said before anything is done, and of every page at once: a
@@ -11345,6 +11353,19 @@ def _scanned_pages(doc) -> set:
     return found if 2 * len(found) > len(doc) else set()
 
 
+def _scans_are_spreads(doc, scanned: set) -> bool:
+    """Whether a scanned book holds two pages to a sheet: most of its scans
+    are wider than tall (see TURN_SPREAD_ASPECT)."""
+    wide = 0
+    for i in scanned:
+        try:
+            w, h = doc[i].get_size()
+        except Exception:
+            continue
+        wide += w / max(1e-6, h) >= TURN_SPREAD_ASPECT
+    return bool(scanned) and 2 * wide > len(scanned)
+
+
 # Pages are rendered in worker processes once a book is long enough to repay
 # starting them. A warm rebuild of Kill or Get Killed (440 pages, every page
 # already read) spent 126 of its 202 seconds here, one page at a time, on a
@@ -11368,10 +11389,286 @@ _PDF_WORKER = (
     "json.dump(_load_pdf_share(json.load(sys.stdin)), sys.stdout)")
 
 
+# A scanned page printed sideways is read sideways. The ST 31-91B medical
+# handbook is scanned two pages to a sheet, and on two sheets a page is
+# drawings captioned in type that runs down the page: how to wrap dry
+# goods, fold gauze, make cotton balls. The recogniser read those captions
+# in a different order every time it was asked, dropping a heading one
+# time and a measurement the next, and no reading could be kept. Upright,
+# the page reads as a page.
+#
+# Which way is up is tesseract's orientation check (`--psm 0`); tesseract
+# is already what the adjudicator reads with, and without it nothing is
+# turned. It says how far to turn the picture clockwise and how sure it
+# is. Only a quarter turn either way is taken, and only where it is sure:
+# TURN_MIN_CONFIDENCE.
+#
+# What is turned is the page's body, not the page. Its running head and
+# its page number are printed upright above and below the turned type, and
+# the first reading of the page knows them for what they are; turned with
+# the body they were read as neither. The medical handbook's appendices are
+# known by the letters of their page numbers (F-4, G-1), and with three of
+# those lying on their side its chapters could no longer be told, its
+# contents came out as every heading in the book, and two page numbers sat
+# in the text as words. So the page is read first as it lies, the blocks
+# that reading calls furniture are cut out and set back upright above and
+# below, and only what is left is turned (turn_sideways_bodies).
+#
+# A sheet of two pages is turned a page at a time, the left page set above
+# the right: turned whole, the right-hand page would come out on top and
+# be read first. A single page set on its side is left as it lies. The
+# check was put to all 10,616 scanned pages on the shelf, and outside the
+# medical handbook it found four: a register and a table in the history of
+# Lloyd's, a chart in KGB, a plate in Kill or Get Killed. Each was already
+# read well as it lay. Nothing else on the shelf was called sideways with
+# any confidence at all.
+TURN_MIN_CONFIDENCE = 5.0
+TURN_SPREAD_ASPECT = 1.15
+TURN_CHECK_LONGEST = 2400       # pixels: the check needs no more than this
+TURN_FURNITURE_PAD = 0.006      # of the sheet: room kept round a cut-out head
+_TURNS = {90: Image.Transpose.ROTATE_270, 270: Image.Transpose.ROTATE_90}
+
+
+def _which_way_up(im: "Image.Image") -> "tuple[int, float] | None":
+    """How far tesseract's orientation check says to turn a picture
+    clockwise to read it (0, 90, 180 or 270) and how sure it is. None where
+    it cannot say: not installed, no type to judge by, a failed call."""
+    import shutil
+    import subprocess
+    import tempfile
+    if shutil.which("tesseract") is None:
+        return None
+    g = im.convert("L")
+    scale = TURN_CHECK_LONGEST / max(g.size)
+    if scale < 1:
+        g = g.resize((max(1, int(g.width * scale)), max(1, int(g.height * scale))),
+                     Image.LANCZOS)
+    with tempfile.TemporaryDirectory() as td:
+        f = os.path.join(td, "page.png")
+        g.save(f)
+        try:
+            r = subprocess.run(["tesseract", f, "-", "--psm", "0"],
+                               capture_output=True, text=True, timeout=120,
+                               env=dict(os.environ, OMP_THREAD_LIMIT="1"))
+        except (OSError, subprocess.SubprocessError):
+            return None
+    said = r.stdout + r.stderr
+    turn = re.search(r"Rotate: (\d+)", said)
+    sure = re.search(r"Orientation confidence: ([\d.]+)", said)
+    if not (turn and sure):
+        return None
+    return int(turn.group(1)), float(sure.group(1))
+
+
+def _halves(im: "Image.Image") -> "list[tuple[Image.Image, int]]":
+    """The two pages of a sheet, each with where it starts across the sheet;
+    one part, the whole sheet, where no gutter divides it."""
+    parts = split_spread(np.asarray(im.convert("RGB")),
+                         min_aspect=TURN_SPREAD_ASPECT)
+    if len(parts) != 2:
+        return [(im.convert("RGB"), 0)]
+    return [(Image.fromarray(parts[0]), 0),
+            (Image.fromarray(parts[1]), im.width - parts[1].shape[1])]
+
+
+def _sideways(im: "Image.Image", spread: bool, said: dict) -> "list[int] | None":
+    """How far to turn each page of a sheet, left and right (0 where it reads
+    as it lies); None where nothing is to be turned, it cannot be judged, or
+    it is not a sheet of two pages. `said` holds what the check has already
+    said of this picture, by half ("left", "right"), and gains what it says
+    now."""
+    def turn_of(part, name):
+        if name not in said:
+            got = _which_way_up(part)
+            if got is None:
+                return 0            # cannot say, and is asked again next time
+            said[name] = list(got)
+        turn, sure = said[name]
+        return turn if turn in _TURNS and sure >= TURN_MIN_CONFIDENCE else 0
+
+    if not spread or im.width / max(1, im.height) < TURN_SPREAD_ASPECT:
+        return None                     # a single page is left as it lies
+    halves = _halves(im)
+    if len(halves) != 2:
+        return None
+    turns = [turn_of(h, n) for (h, _), n in zip(halves, ("left", "right"))]
+    return turns if any(turns) else None
+
+
+def _body_turned(im: "Image.Image", turns: "list[int]",
+                 furniture: "list[tuple]") -> "Image.Image":
+    """A sheet of two pages with the body of each sideways page turned to
+    read, its furniture (boxes, as fractions of the sheet) set back upright
+    above and below it as it was printed, and the left page above the
+    right."""
+    pad = TURN_FURNITURE_PAD
+    out = []
+    for (half, x0), turn in zip(_halves(im), turns):
+        if not turn:
+            out.append(half)
+            continue
+        w, h = half.size
+        paper = tuple(int(v) for v in np.median(
+            np.asarray(half).reshape(-1, 3), axis=0))
+        body = half.copy()
+        heads, feet = [], []
+        for bx in furniture:
+            l = bx[0] * im.width - x0
+            r = bx[2] * im.width - x0
+            if not (0 <= (l + r) / 2 < w):
+                continue                # the other page's
+            box = (max(0, int(l - pad * im.width)), max(0, int((bx[1] - pad) * im.height)),
+                   min(w, int(r + pad * im.width)), min(h, int((bx[3] + pad) * im.height)))
+            if box[2] <= box[0] or box[3] <= box[1]:
+                continue
+            (heads if (box[1] + box[3]) / 2 < h / 2 else feet).append(
+                (box[0], half.crop(box)))
+            body.paste(paper, box)
+        body = body.transpose(_TURNS[turn])
+
+        def band(cuts):
+            if not cuts:
+                return None
+            strip = Image.new("RGB", (body.width, max(c.height for _, c in cuts)), paper)
+            for x, c in cuts:
+                strip.paste(c, (min(max(0, int(x * body.width / w)),
+                                    max(0, body.width - c.width)), 0))
+            return strip
+        parts = [p for p in (band(heads), body, band(feet)) if p is not None]
+        page = Image.new("RGB", (body.width, sum(p.height for p in parts)), paper)
+        y = 0
+        for p in parts:
+            page.paste(p, (0, y))
+            y += p.height
+        out.append(page)
+    sheet = Image.new("RGB", (max(p.width for p in out),
+                              sum(p.height for p in out)), "white")
+    y = 0
+    for p in out:                       # the left page above the right
+        sheet.paste(p, (0, y))
+        y += p.height
+    return sheet
+
+
+# What the check said of each scanned page, kept beside the book's reading
+# cache under the page's name: the check costs a second or more a page,
+# every page of a scan is asked, and the answer for a picture never
+# changes. What is kept is what tesseract said, not what was done with it,
+# so a change of TURN_MIN_CONFIDENCE needs no page checked again.
+TURNS_SUFFIX = ".turns.json"
+
+
+def load_turns(path: "str | None") -> dict:
+    if not path:
+        return {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return dict(json.load(fh).get("pages") or {})
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+def save_turns(path: "str | None", pages: dict) -> None:
+    if not path:
+        return
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"check": "tesseract --psm 0", "pages": pages}, fh,
+                      sort_keys=True)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def _note_sideways(out: str, spread: bool,
+                   remembered: "dict | None") -> "dict | None":
+    """Whether a scanned page's sheet has a page printed sideways: how far to
+    turn each, or None. What the check said is left beside the image
+    (.turn.json) for the caller to remember. Nothing is turned here: that
+    waits for the page's first reading (turn_sideways_bodies)."""
+    try:
+        name = page_key(out)
+        said = dict((remembered or {}).get(name) or {})
+        with Image.open(out) as im:
+            im.load()
+            turns = _sideways(im, spread, said)
+    except Exception:
+        return None
+    if said:
+        with open(out + ".turn.json", "w", encoding="utf-8") as fh:
+            json.dump({"page": name, "said": said}, fh)
+    return {"degrees": turns, "spread": True} if turns else None
+
+
+def turn_sideways_bodies(page_paths: list, cache: "OCRCache | None",
+                         backend) -> list:
+    """Turn the body of each page noted sideways (see TURN_MIN_CONFIDENCE),
+    from its first reading as it lies, and put the turned sheet in its
+    place in `page_paths`. Returns the pages turned, by index.
+
+    The first reading is the cache's, or one made now; with --cache-only
+    and none in the cache the page is left, and refused with the rest."""
+    turned = []
+    for k, path in enumerate(page_paths):
+        try:
+            with open(path + ".source.json", encoding="utf-8") as fh:
+                src = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        how = src.get("sideways")
+        if not how or src.get("turned"):
+            continue
+        items = cache.get(path) if cache is not None else None
+        if items is None:
+            if CACHE_ONLY or backend is None:
+                continue
+            if warm_backend(backend) is not None:
+                continue
+            with Image.open(path) as im:
+                img = im.convert("RGB")
+            items = _read_pages_resiliently([path], [img], backend, cache).get(path)
+            img.close()
+            if items is None:
+                continue
+        furniture = [it.box for it in items if it.is_furniture and it.box]
+        with Image.open(path) as im:
+            sheet = _body_turned(im.convert("RGB"), how["degrees"], furniture)
+        target = os.path.splitext(path)[0] + ".png"
+        for old in (path + ".key", path + ".key1"):
+            if os.path.exists(old):
+                os.remove(old)
+        if target != path and os.path.exists(path):
+            os.remove(path)
+        with open(target + ".key", "w", encoding="ascii") as fh:
+            fh.write(_pixel_key(sheet))
+        sheet.save(target, "PNG", dpi=(300, 300), compress_level=1)
+        for side in (".source.json", ".layer.txt"):
+            if target != path and os.path.exists(path + side):
+                os.replace(path + side, target + side)
+        # The turned sheet is the page and nothing else, as a facsimile is,
+        # and it no longer stands where the PDF draws it: nothing may be
+        # asked of the PDF by position on it.
+        src.update(turned={**how, "furniture": len(furniture)}, facsimile=True)
+        with open(target + ".source.json", "w", encoding="utf-8") as fh:
+            json.dump(src, fh)
+        page_paths[k] = target
+        turned.append(k)
+    if turned:
+        print(f"    turned upright, printed sideways: page(s) "
+              + ", ".join(f"{k + 1}" for k in turned)
+              + " (the body turned; head and page number kept as printed)")
+    return turned
+
+
 def _load_pdf_page(doc, i: int, pdf_path: str, pages_dir: str,
-                   is_scan: bool, former_keys: bool = False) -> str:
+                   is_scan: bool, former_keys: bool = False,
+                   spreads: bool = False,
+                   turns: "dict | None" = None) -> str:
     """Write page `i` of an open PDF as the image the recogniser will read,
-    with its sidecars, and return the image's path."""
+    with its sidecars, and return the image's path. `spreads`: the book's
+    scans hold two pages to a sheet (see TURN_SPREAD_ASPECT); `turns`, what
+    the orientation check said of pages before (see TURNS_SUFFIX)."""
     import pypdfium2 as pdfium
     page = doc[i]
     stem = os.path.join(pages_dir, f"page_{i:04d}")
@@ -11464,6 +11761,13 @@ def _load_pdf_page(doc, i: int, pdf_path: str, pages_dir: str,
             with open(out + ".key1", "w", encoding="ascii") as fh:
                 fh.write(hashlib.sha256(_as_formerly_written(im)).hexdigest())
         im.save(out, "PNG", dpi=(300, 300), compress_level=1)
+    # A scan printed sideways is set upright before anything reads it (see
+    # TURN_MIN_CONFIDENCE). The turned picture is still the page and
+    # nothing else, as a facsimile is, but it no longer stands where the
+    # PDF draws it: nothing may be asked of the PDF by position on it.
+    # A page printed sideways is noted here and turned once it has been
+    # read as it lies (see turn_sideways_bodies).
+    sideways = _note_sideways(out, spreads, turns) if (is_scan and spreads) else None
     # The page's own text layer rides along as a sidecar. It is never used
     # as content — this pipeline reads the ink — but it is a witness: a
     # recognition that shares almost no vocabulary with what the page says
@@ -11524,7 +11828,8 @@ def _load_pdf_page(doc, i: int, pdf_path: str, pages_dir: str,
         with open(out + ".source.json", "w") as fh:
             json.dump({"pdf": os.path.abspath(pdf_path), "page": i,
                        "facsimile": bool(extracted),
-                       "scan": is_scan}, fh)
+                       "scan": is_scan,
+                       **({"sideways": sideways} if sideways else {})}, fh)
     except OSError:
         pass
 
@@ -11540,7 +11845,9 @@ def _load_pdf_share(job: dict) -> dict:
     try:
         return {str(i): os.path.basename(
                     _load_pdf_page(doc, i, job["pdf"], job["dir"], i in scanned,
-                                   job.get("former_keys", False)))
+                                   job.get("former_keys", False),
+                                   job.get("spreads", False),
+                                   job.get("turns")))
                 for i in job["pages"]}
     finally:
         try:
@@ -11551,7 +11858,9 @@ def _load_pdf_share(job: dict) -> dict:
 
 def _load_pdf_pages_in_workers(pdf_path: str, pages_dir: str, n_pages: int,
                                scanned: set, workers: int,
-                               former_keys: bool = False) -> "list[str] | None":
+                               former_keys: bool = False,
+                               spreads: bool = False,
+                               turns: "dict | None" = None) -> "list[str] | None":
     """Render a PDF's pages across `workers` processes. None if any of them
     failed, and the caller renders the book itself."""
     import subprocess
@@ -11563,7 +11872,8 @@ def _load_pdf_pages_in_workers(pdf_path: str, pages_dir: str, n_pages: int,
     jobs = [json.dumps({"pdf": pdf_path, "dir": pages_dir,
                         "pages": list(range(k, n_pages, workers)),
                         "scanned": sorted(scanned),
-                        "former_keys": former_keys})
+                        "former_keys": former_keys, "spreads": spreads,
+                        "turns": turns or {}})
             for k in range(workers)]
 
     def run(job: str) -> "dict | None":
@@ -11601,7 +11911,8 @@ def _pdf_pool_workers(n_pages: int) -> int:
 
 
 def load_pages_from_pdf(pdf_path: str, pages_dir: str,
-                        former_keys: bool = False) -> list[str]:
+                        former_keys: bool = False,
+                        turns_path: "str | None" = None) -> list[str]:
     """
     Take the page images straight back out of a PDF this script wrote earlier.
 
@@ -11614,6 +11925,10 @@ def load_pages_from_pdf(pdf_path: str, pages_dir: str,
     reading had in a cache written before pages were named for their pixels
     (see page_key). It costs the encoding that naming used to cost, so it is
     asked for only when such a cache is about to be read.
+
+    A scanned page printed sideways is turned upright (see
+    TURN_MIN_CONFIDENCE); `turns_path` is where what the check said of each
+    page is remembered (see TURNS_SUFFIX).
     """
     try:
         import pypdfium2 as pdfium
@@ -11623,22 +11938,46 @@ def load_pages_from_pdf(pdf_path: str, pages_dir: str,
     doc = pdfium.PdfDocument(pdf_path)
     scanned = _scanned_pages(doc)
     n_pages = len(doc)
+    spreads = _scans_are_spreads(doc, scanned)
+    turns = load_turns(turns_path) if spreads else {}
     page_paths: list[str] = []
     workers = _pdf_pool_workers(n_pages)
     if workers > 1:
         page_paths = _load_pdf_pages_in_workers(pdf_path, pages_dir, n_pages,
-                                                scanned, workers, former_keys)
+                                                scanned, workers, former_keys,
+                                                spreads, turns)
         if page_paths is None:
             print("  [~] a page-rendering worker failed; rendering the pages "
                   "one at a time instead")
             workers = 1
     if workers == 1:
         page_paths = [_load_pdf_page(doc, i, pdf_path, pages_dir, i in scanned,
-                                     former_keys)
+                                     former_keys, spreads, turns)
                       for i in range(n_pages)]
 
     if not page_paths:
         sys.exit(f"No pages found in {pdf_path}")
+    if spreads:
+        learned, upright = dict(turns), []
+        for k, p in enumerate(page_paths):
+            try:
+                with open(p + ".turn.json", encoding="utf-8") as fh:
+                    said = json.load(fh)
+                learned[said["page"]] = said["said"]
+            except (OSError, ValueError, KeyError):
+                pass
+            try:
+                with open(p + ".source.json", encoding="utf-8") as fh:
+                    how = json.load(fh).get("sideways")
+                if how:
+                    upright.append(f"{k + 1} ({'/'.join(map(str, how['degrees']))})")
+            except (OSError, ValueError):
+                pass
+        if learned != turns:
+            save_turns(turns_path, learned)
+        if upright:
+            print(f"  printed sideways, to be turned once read as they lie: "
+                  f"page(s) {', '.join(upright)}")
     print(f"  {len(page_paths)} pages loaded from {pdf_path}")
     return page_paths
 
@@ -13630,7 +13969,8 @@ def process_video(
             page_paths = load_pages_from_pdf(
                 pages_from, pages_dir,
                 former_keys=bool(ocr_cache)
-                and OCRCache.filed_by_bytes(ocr_cache))
+                and OCRCache.filed_by_bytes(ocr_cache),
+                turns_path=(ocr_cache + TURNS_SUFFIX) if ocr_cache else None)
             if dewarp_scans:
                 dewarp_scan_pages(page_paths, pages_dir)
             ids = page_map or load_page_map(pages_from)

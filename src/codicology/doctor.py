@@ -393,6 +393,9 @@ def _human(rep):
                                         if len(langs) > 8 else "")
         print(f"  tesseract {t.get('version', '?')} at {t['path']} — "
               f"languages: {shown or '?'}")
+        if "osd" not in langs:
+            print("  tesseract has no orientation data (osd): a scan printed "
+                  "sideways is read as it lies")
     else:
         print("  tesseract: NOT FOUND")
     l = rep["llama_server"]
