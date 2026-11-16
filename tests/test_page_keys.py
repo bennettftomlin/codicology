@@ -186,7 +186,8 @@ def test_an_old_cache_serves_its_pages_and_is_refiled(book, tmp_path,
     assert vtb.OCRCache.filed_by_bytes(path) is False
 
     # the next build never asks what a page used to be called
-    monkeypatch.setattr(vtb, "former_page_key",
+    from codicology import cache as cache_module   # where OCRCache asks it
+    monkeypatch.setattr(cache_module, "former_page_key",
                         lambda p: pytest.fail("the old name was asked for"))
     again = vtb.OCRCache(path, "surya", ["fr"])
     assert all(again.get(p) is not None for p in pages)
