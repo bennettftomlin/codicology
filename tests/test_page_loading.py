@@ -3,6 +3,7 @@ import os
 import pytest
 pdfium = pytest.importorskip("pypdfium2")
 from PIL import Image
+from codicology import pdf_pages
 
 SHADOW = "/Users/Bennett1/claude_knowledge/assets/books/Shadow Libraries - Joe Karaganis.pdf"
 
@@ -287,10 +288,10 @@ def test_worker_processes_write_what_one_process_writes(vtb, tmp_path,
     alone, shared = tmp_path / "alone", tmp_path / "shared"
     alone.mkdir(); shared.mkdir()
 
-    monkeypatch.setattr(vtb, "PDF_POOL_MIN_PAGES", 10 ** 9)
+    monkeypatch.setattr(pdf_pages, "PDF_POOL_MIN_PAGES", 10 ** 9)
     one = vtb.load_pages_from_pdf(book, str(alone))
-    monkeypatch.setattr(vtb, "PDF_POOL_MIN_PAGES", 2)
-    monkeypatch.setattr(vtb, "PDF_POOL_WORKERS", 3)
+    monkeypatch.setattr(pdf_pages, "PDF_POOL_MIN_PAGES", 2)
+    monkeypatch.setattr(pdf_pages, "PDF_POOL_WORKERS", 3)
     assert vtb._pdf_pool_workers(7) == min(3, os.cpu_count() or 1)
     # whoever runs several builds at once may say how many each starts
     monkeypatch.setenv(vtb.PDF_WORKERS_ENV, "1")
@@ -315,9 +316,9 @@ def test_a_failed_worker_costs_time_and_not_the_book(vtb, tmp_path,
                                                      monkeypatch, capsys):
     book = make_book(tmp_path / "book.pdf", [typeset_page() for _ in range(3)])
     d = tmp_path / "pages"; d.mkdir()
-    monkeypatch.setattr(vtb, "PDF_POOL_MIN_PAGES", 2)
-    monkeypatch.setattr(vtb, "PDF_POOL_WORKERS", 2)
-    monkeypatch.setattr(vtb, "_PDF_WORKER", "import sys; sys.exit(3)")
+    monkeypatch.setattr(pdf_pages, "PDF_POOL_MIN_PAGES", 2)
+    monkeypatch.setattr(pdf_pages, "PDF_POOL_WORKERS", 2)
+    monkeypatch.setattr(pdf_pages, "_PDF_WORKER", "import sys; sys.exit(3)")
     pages = vtb.load_pages_from_pdf(book, str(d))
     assert "a page-rendering worker failed" in capsys.readouterr().out
     assert len(pages) == 3 and all(os.path.exists(p) for p in pages)

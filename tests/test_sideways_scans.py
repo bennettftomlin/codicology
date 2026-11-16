@@ -22,7 +22,7 @@ import pytest
 pymupdf = pytest.importorskip("pymupdf")
 from PIL import Image, ImageDraw, ImageFont
 
-from codicology import pipeline as P
+from codicology import pdf_pages, pipeline as P
 from codicology import switches
 
 needs_tesseract = pytest.mark.skipif(shutil.which("tesseract") is None,
@@ -217,7 +217,7 @@ def test_what_the_check_said_is_not_asked_again(tmp_path, monkeypatch):
     pdf = _book(tmp_path)
     turns = str(tmp_path / "book.ocr.gz") + P.TURNS_SUFFIX
     first = P.load_pages_from_pdf(pdf, _dir(tmp_path, "one"), turns_path=turns)
-    monkeypatch.setattr(P, "_which_way_up", lambda im: pytest.fail("asked again"))
+    monkeypatch.setattr(pdf_pages, "_which_way_up", lambda im: pytest.fail("asked again"))
     again = P.load_pages_from_pdf(pdf, _dir(tmp_path, "two"), turns_path=turns)
     assert [P.page_key(p) for p in first] == [P.page_key(p) for p in again]
     assert _source(again[2])["sideways"]["degrees"] == [270, 270]
@@ -228,7 +228,7 @@ def test_a_single_page_on_its_side_is_left_as_it_lies(tmp_path, monkeypatch):
     lies, its running head upright above it."""
     upright = _typed_page(PROSE)
     pdf = _scan_pdf(tmp_path, [upright, upright.rotate(-90, expand=True), upright])
-    monkeypatch.setattr(P, "_which_way_up", lambda im: pytest.fail("a single page was checked"))
+    monkeypatch.setattr(pdf_pages, "_which_way_up", lambda im: pytest.fail("a single page was checked"))
     paths = P.load_pages_from_pdf(pdf, _dir(tmp_path, "pages"))
     assert all("sideways" not in _source(p) for p in paths)
 
@@ -242,7 +242,7 @@ def test_without_tesseract_nothing_is_turned(tmp_path, monkeypatch):
 
 def test_an_unsure_check_turns_nothing(tmp_path, monkeypatch):
     pdf = _book(tmp_path)
-    monkeypatch.setattr(P, "_which_way_up", lambda im: (270, P.TURN_MIN_CONFIDENCE - 0.5))
+    monkeypatch.setattr(pdf_pages, "_which_way_up", lambda im: (270, P.TURN_MIN_CONFIDENCE - 0.5))
     paths = P.load_pages_from_pdf(pdf, _dir(tmp_path, "pages"))
     assert all("sideways" not in _source(p) for p in paths)
 
@@ -254,7 +254,7 @@ def test_a_typeset_page_is_never_asked(tmp_path, monkeypatch):
         page.insert_textbox(pymupdf.Rect(54, 54, 1170, 738), PROSE * 4, fontsize=11)
     pdf = str(tmp_path / "typeset.pdf")
     doc.save(pdf)
-    monkeypatch.setattr(P, "_which_way_up", lambda im: pytest.fail("a typeset page was checked"))
+    monkeypatch.setattr(pdf_pages, "_which_way_up", lambda im: pytest.fail("a typeset page was checked"))
     P.load_pages_from_pdf(pdf, _dir(tmp_path, "pages"))
 
 
