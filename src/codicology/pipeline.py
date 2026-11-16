@@ -217,7 +217,13 @@ RUNNING_HEAD = re.compile(r"""
          |  \d{1,3}\s*$               # a bare folio on its own line
     )""", re.X)
 RUNNING_FOOT = re.compile(r"[•·|:]\s*\d{1,3}\s*$")   # "Chapter 13 • 199"
-RUNNING_HEAD_MAX_CHARS = 60
+
+
+from .markup import (  # noqa: F401  (moved; kept importable from here)
+    RUNNING_HEAD_MAX_CHARS, BODY_MARKER, _roman_to_int, _SETTING,
+)
+
+
 
 
 # A picture the layout declined to call one. Surya sometimes returns a block
@@ -3553,7 +3559,6 @@ def find_numbered_entries(bodies: list[str]) -> list[tuple[int, str, int]]:
 
 
 NOTE_ENTRY = re.compile(r"<p>\s*<sup>\s*(\d{1,3})\s*</sup>")
-BODY_MARKER = re.compile(r"<sup>\s*(\d{1,3})\s*</sup>")
 # FOOTNOTES and ENDNOTES included: one book heads every chapter-end notes
 # section "FOOTNOTES", and the bare word blocked all of them — the linker,
 # the group walk, and the rank probe all gate on this one pattern. The word
@@ -4249,28 +4254,6 @@ GROUP_HEAD_ROMAN = re.compile(r"<h\d[^>]*>\s*([IVXL]{1,6})\.\s")
 # in exactly the literature this pattern reads.
 GROUP_HEAD_ROMAN_P = re.compile(
     r"<p[^>]*>\s*([IVXL]{1,6})\.\s+(?![A-Z]\.)(?:<[^>]+>|[^<]){1,70}</p>")
-
-
-def _roman_to_int(s: str) -> "int | None":
-    """The value of a Roman numeral, or None if it is not one.
-
-    Strict: it must re-render to exactly what was read, so "IIII", "VX" and
-    other things that merely use the letters are refused rather than guessed
-    at. A misread group number would scope a whole chapter's notes wrongly.
-    """
-    values = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100}
-    total = prev = 0
-    for ch in reversed(s.upper()):
-        if ch not in values:
-            return None
-        v = values[ch]
-        total = total - v if v < prev else total + v
-        prev = max(prev, v)
-    if not 1 <= total <= 99:
-        return None
-    tens = ["", "X", "XX", "XXX", "XL", "L", "LX", "LXX", "LXXX", "XC"]
-    ones = ["", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX"]
-    return total if tens[total // 10] + ones[total % 10] == s.upper() else None
 # A bold block standing on its own where a numbered group head belongs — at
 # the fragment start or hard against another block's close, never bold inside
 # running text, which is emphasis and must not be promoted.
@@ -8933,19 +8916,6 @@ _read_pages_resiliently.silent = []     # the run of pages now without text
 # reviewed corrections were refused as recorded against another count. The
 # proof is asked for at the first such page now.
 SILENT_RUN = 3          # in a run of such pages, how often the proof is asked
-
-
-# How one word can be set two ways: the publisher's curly quotes and primes
-# where the recogniser read straight ones, a true minus for a hyphen, a
-# ligature, an ellipsis as one character. None of them changes which word
-# it is, so none of them needs the pairing proven.
-_SETTING = str.maketrans({
-    "‘": "'", "’": "'", "‚": "'", "‛": "'", "′": "'",
-    "“": '"', "”": '"', "„": '"', "‟": '"', "″": "''",
-    "–": "-", "—": "-", "‒": "-", "−": "-", "…": "...",
-    "ﬀ": "ff", "ﬁ": "fi", "ﬂ": "fl", "ﬃ": "ffi", "ﬄ": "ffl",
-    "ﬅ": "st", "ﬆ": "st",
-})
 # What some layers write where they broke a line: "Air\x02borne".
 _CONTROL = re.compile(r"[\x00-\x1f]")
 # What a layer holds for a glyph set in a symbol font: a private-use code
