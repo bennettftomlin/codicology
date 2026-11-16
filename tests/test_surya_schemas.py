@@ -142,7 +142,8 @@ def test_relabel_repairs_and_stays_guided(stock, monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "surya.layout",
                         _stub_predictor("surya.layout", "LayoutPredictor",
                                         seen, boxed))
-    monkeypatch.setattr(vtb, "load_pages_from_pdf",
+    from codicology import cache_tools   # where relabel_cache looks them up
+    monkeypatch.setattr(cache_tools, "load_pages_from_pdf",
                         lambda pdf, d, former_keys=False, turns_path=None: [str(page)])
 
     class Cache:
@@ -158,7 +159,7 @@ def test_relabel_repairs_and_stays_guided(stock, monkeypatch, tmp_path):
 
         def _entry(self, p):
             return None                 # this page is not in the cache
-    monkeypatch.setattr(vtb, "OCRCache", Cache)
+    monkeypatch.setattr(cache_tools, "OCRCache", Cache)
     from surya.settings import settings
     monkeypatch.setattr(settings, "SURYA_GUIDED_LAYOUT", True)
 
