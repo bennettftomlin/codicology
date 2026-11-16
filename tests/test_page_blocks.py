@@ -88,3 +88,49 @@ def test_a_kind_is_the_label_in_the_assembly_half_s_words():
     assert kind_of(PageItem(whole_page=True)) == "figure"
     b = Block.of(PageItem(html="<p>a</p>", label="ListItem", box=(0, 0, 1, 1), conf=0.5))
     assert (b.kind, b.label, b.box, b.conf) == ("list-item", "ListItem", (0, 0, 1, 1), 0.5)
+
+
+# ── a page carried through a pass that rewrote its string ────────────────────
+
+from codicology.model import sync_page, sync_pages  # noqa: E402
+
+
+def _firm():
+    return Page(0, "p", [Block("heading", "<h2>The Firm</h2>", label="SectionHeader"),
+                         Block("text", "<p>Its books were kept.</p>", label="Text"),
+                         Block("footnote", "<p>1 So.</p>", label="Footnote")])
+
+
+def test_an_edit_inside_a_block_stays_in_that_block():
+    page = _firm()
+    new = "<h2>The Firm</h2><p>Its books were <i>kept</i>.</p><p>1 So said.</p>"
+    assert sync_page(page, new) == 0
+    assert [b.html for b in page.blocks] == [
+        "<h2>The Firm</h2>", "<p>Its books were <i>kept</i>.</p>", "<p>1 So said.</p>"]
+    assert [b.label for b in page.blocks] == ["SectionHeader", "Text", "Footnote"]
+    assert page.render() == new
+
+
+def test_two_paragraphs_a_pass_joined_go_whole_to_the_first():
+    page = _firm()
+    new = "<h2>The Firm</h2><p>Its books were kept. 1 So.</p>"
+    assert sync_page(page, new) == 1          # counted: the carrying was a judgement
+    assert [(b.kind, b.html) for b in page.blocks] == [
+        ("heading", "<h2>The Firm</h2>"), ("text", "<p>Its books were kept. 1 So.</p>"),
+        ("footnote", "")]
+
+
+def test_a_wrapper_a_pass_put_round_blocks_keeps_every_block_whole():
+    page = Page(0, "p", [Block("list-item", "<li>a</li>"), Block("list-item", "<li>b</li>"),
+                         Block("text", "<p>c</p>")])
+    sync_page(page, "<ol><li>a</li><li>b</li></ol><p>c</p>")
+    assert [b.html for b in page.blocks] == ["<ol><li>a</li><li>b</li></ol>", "", "<p>c</p>"]
+
+
+def test_every_page_is_its_body_after_carrying():
+    pages = [_firm(), _firm()]
+    bodies = ["<h2>The Firm</h2><p>Its books were kept.</p><p>1 So.</p>",
+              "<h2>THE FIRM</h2><p>Its books<br/> were kept.</p><hr/><p>1 So.</p>"]
+    sync_pages(pages, bodies)
+    assert [p.render() for p in pages] == bodies
+    assert pages[1].blocks[0].html == "<h2>THE FIRM</h2>"
