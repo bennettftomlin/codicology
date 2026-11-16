@@ -138,6 +138,7 @@ from . import rectify as _rectify
 
 from . import progress
 from .markup import _strip_tags
+from . import switches
 
 
 from .capture import (  # noqa: F401  (moved; kept importable from here)
@@ -1246,19 +1247,7 @@ class ThirdOpinion(SecondOpinion):
                    f"ask again" if self.unanswered else ""))
 
 
-# Set by the command line (--second-reader), like WITNESS_WAIVED: a build
-# either has a second reader for the whole of its run or has none. A third
-# is there where one is installed beside it.
-SECOND_OPINION: "SecondOpinion | None" = None
-THIRD_OPINION: "ThirdOpinion | None" = None
 
-# --cache-only: this run reads no page. What the cache holds is the book.
-CACHE_ONLY = False
-# Pages sent to the recogniser on this run, counting a page sent twice twice.
-READ_THIS_RUN = {"pages": 0}
-# What built the book, for the book to carry: set by the command, written
-# into the package as <meta name="codicology:build">.
-BUILD_NOTE: "str | None" = None
 
 # A rebuilt table is questioned where it holds less than this share of the
 # figures the PDF prints in its place, and the second reader's table is
@@ -2142,7 +2131,7 @@ class SuryaBackend(OCRBackend):
                                      "named surya.recognition")
 
     def _load(self) -> None:
-        if CACHE_ONLY:
+        if switches.CACHE_ONLY:
             # Not an exception a retry could catch: the promise of the flag
             # is that nothing is read, whatever asked.
             sys.exit("--cache-only: a page was sent to be read. Nothing "
@@ -2159,7 +2148,7 @@ class SuryaBackend(OCRBackend):
     def _predict(self, images: list[Image.Image]):
         if self._rec is None:
             self._load()
-        READ_THIS_RUN["pages"] += len(images)
+        switches.READ_THIS_RUN["pages"] += len(images)
         return self._rec(images)
 
     def _page_fragments(self, images: list[Image.Image]) -> list[list[str]]:
@@ -8064,26 +8053,26 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
                          "which the page's text layer does not hold, and no "
                          "classical reader is installed to ask")
                       + " — left out rather than printed as invention")
-            items, _mended = mend_tables(items, path, SECOND_OPINION)
-            items, _eqs, _differ = mend_equations(items, path, SECOND_OPINION,
-                                                  THIRD_OPINION)
-            if SECOND_OPINION is not None:
+            items, _mended = mend_tables(items, path, switches.SECOND_OPINION)
+            items, _eqs, _differ = mend_equations(items, path, switches.SECOND_OPINION,
+                                                  switches.THIRD_OPINION)
+            if switches.SECOND_OPINION is not None:
                 _page = os.path.splitext(os.path.basename(path))[0]
-                SECOND_OPINION.tables += len(_mended)
+                switches.SECOND_OPINION.tables += len(_mended)
                 _own = sum(1 for _e in _eqs if len(_e) > 2
                            and _e[2].startswith("the third reader's own"))
-                SECOND_OPINION.equations += len(_eqs) - _own
-                SECOND_OPINION.by_third += _own
-                SECOND_OPINION.differ += len(_differ)
-                SECOND_OPINION.changed += [(_page, "equation", *_e)
+                switches.SECOND_OPINION.equations += len(_eqs) - _own
+                switches.SECOND_OPINION.by_third += _own
+                switches.SECOND_OPINION.differ += len(_differ)
+                switches.SECOND_OPINION.changed += [(_page, "equation", *_e)
                                            for _e in _eqs]
-                SECOND_OPINION.changed += [
+                switches.SECOND_OPINION.changed += [
                     (_page, "table", f"held {_w} of the {_p} figures the PDF "
                      f"prints in its place", f"holds {_n}"
                      + (f"; also prints {', '.join(_o)}, which the PDF does "
                         f"not" if _o else ""))
                     for _p, _w, _n, _o in _mended]
-                SECOND_OPINION.listed += [(_page, *_d) for _d in _differ]
+                switches.SECOND_OPINION.listed += [(_page, *_d) for _d in _differ]
             for _was, _now, *_why in _eqs:
                 print(f"    [+] {os.path.basename(path)}: an equation "
                       + (f"is set by a vote of three readers ({_why[0]})"
@@ -8299,7 +8288,7 @@ def build_epub(
     # its head and page number kept upright (see TURN_MIN_CONFIDENCE).
     turn_sideways_bodies(page_paths, cache, backend)
 
-    if CACHE_ONLY:
+    if switches.CACHE_ONLY:
         # Said before anything is done, and of every page at once: a
         # rebuild that must not read should not get as far as page 206 to
         # find that out.
@@ -8318,9 +8307,9 @@ def build_epub(
     book = epub.EpubBook()
     book.set_title(title)
     book.set_language(backend.langs[0] if backend.langs else "en")
-    if BUILD_NOTE:
+    if switches.BUILD_NOTE:
         book.add_metadata("OPF", "meta", "", {"name": "codicology:build",
-                                              "content": BUILD_NOTE})
+                                              "content": switches.BUILD_NOTE})
 
     # Load each batch from disk rather than holding every page in memory: a
     # 300-page book at full resolution is several GB of decoded pixels. Figures
@@ -8352,14 +8341,14 @@ def build_epub(
     if n_phantoms:
         print(f"    suppressed {n_phantoms} phantom digit block(s) the "
               f"layout invented over prose — verified against the ink")
-    if SECOND_OPINION is not None:
-        if SECOND_OPINION.summary():
-            print("    " + SECOND_OPINION.summary())
-        if THIRD_OPINION is not None and THIRD_OPINION.summary():
-            print("    " + THIRD_OPINION.summary())
+    if switches.SECOND_OPINION is not None:
+        if switches.SECOND_OPINION.summary():
+            print("    " + switches.SECOND_OPINION.summary())
+        if switches.THIRD_OPINION is not None and switches.THIRD_OPINION.summary():
+            print("    " + switches.THIRD_OPINION.summary())
         # also when it was asked nothing: an earlier build's account would
         # otherwise stay beside a book it no longer describes
-        _sheet = SECOND_OPINION.write_sheet()
+        _sheet = switches.SECOND_OPINION.write_sheet()
         if _sheet:
             print(f"    second reader: its changes and the differences it "
                   f"did not settle are written out in full: {_sheet}")
@@ -8631,7 +8620,7 @@ def build_epub(
                     # Nothing can tell an empty leaf from a page we failed to
                     # read, so this page is about to be deleted on our own
                     # word alone. Counted, and reported at the end.
-                    UNWITNESSED["blank"] += 1
+                    switches.UNWITNESSED["blank"] += 1
                 elif n >= 10:
                     second_opinion.add(i)
             if second_opinion:
@@ -9139,10 +9128,10 @@ def build_epub(
     book.spine = ["nav"] + chapters
     epub.write_epub(output_epub, book)
     print(f"  EPUB saved: {output_epub}")
-    if UNWITNESSED["fabrication"] or UNWITNESSED["blank"]:
+    if switches.UNWITNESSED["fabrication"] or switches.UNWITNESSED["blank"]:
         print(f"  [!] built without a witness: "
-              f"{UNWITNESSED['fabrication']} page(s) passed the fabrication "
-              f"check unexamined, {UNWITNESSED['blank']} page(s) were "
+              f"{switches.UNWITNESSED['fabrication']} page(s) passed the fabrication "
+              f"check unexamined, {switches.UNWITNESSED['blank']} page(s) were "
               f"deleted as blank on this pipeline's word alone. Install "
               f"tesseract and rebuild to have either checked.")
     restored = len(_read_pages_resiliently.restored)
@@ -9872,7 +9861,7 @@ def turn_sideways_bodies(page_paths: list, cache: "OCRCache | None",
             continue
         items = cache.get(path) if cache is not None else None
         if items is None:
-            if CACHE_ONLY or backend is None:
+            if switches.CACHE_ONLY or backend is None:
                 continue
             if warm_backend(backend) is not None:
                 continue
@@ -10666,7 +10655,7 @@ def unvouched_reading(items, page_path: "str | None"
         pass
     if not witness_available():
         if not _layer_can_testify(page_path):
-            UNWITNESSED["fabrication"] += 1
+            switches.UNWITNESSED["fabrication"] += 1
             return None                 # nobody to ask: not guilt
         witnesses = [layer]
     else:
@@ -10737,12 +10726,6 @@ def witness_available() -> bool:
     return shutil.which("tesseract") is not None
 
 
-# Set when the operator has said, in as many words, to run without a witness.
-# Nothing consults it to decide anything; it exists so the count of checks
-# that went unwitnessed can be reported at the end of the run instead of the
-# checks quietly not happening.
-WITNESS_WAIVED = False
-UNWITNESSED = {"fabrication": 0, "blank": 0}
 
 
 @functools.lru_cache(maxsize=None)
@@ -10886,7 +10869,7 @@ def _phantom_blank_pages(page_paths, texts, has_figure, skip=frozenset()):
             continue
         n = _classical_word_count(path, min_len=3)
         if n is None:
-            UNWITNESSED["fabrication"] += 1
+            switches.UNWITNESSED["fabrication"] += 1
             continue
         if n == 0:
             out.add(i)
@@ -11052,7 +11035,7 @@ def _read_pages_resiliently(paths: list[str], images: list,
                     # The only witness this page had, and it is not here. The
                     # page passes unexamined — which is the honest outcome,
                     # but it must be counted and said, not simply skipped.
-                    UNWITNESSED["fabrication"] += 1
+                    switches.UNWITNESSED["fabrication"] += 1
                 elif n_tess < 5:
                     second = backend.run_items([img])[0]
                     if _reading_agrees(items, second) < 0.5:
@@ -12408,11 +12391,11 @@ def main(argv: "list[str] | None" = None) -> None:
                      "builds from")
     record = None
     try:
-        globals()["CACHE_ONLY"] = bool(args.cache_only)
-        READ_THIS_RUN["pages"] = 0
+        switches.CACHE_ONLY = bool(args.cache_only)
+        switches.READ_THIS_RUN["pages"] = 0
         if args.ocr_cache and args.epub:
             record = _BuildRecord(args, argv)
-            globals()["BUILD_NOTE"] = record.note()
+            switches.BUILD_NOTE = record.note()
             record.open()
         _convert(args, parser)
         if record:
@@ -12431,8 +12414,8 @@ def main(argv: "list[str] | None" = None) -> None:
     finally:
         if record:
             record.close()
-        globals()["CACHE_ONLY"] = False
-        globals()["BUILD_NOTE"] = None
+        switches.CACHE_ONLY = False
+        switches.BUILD_NOTE = None
 
 
 # What built a book, kept where the next person to wonder will look: beside
@@ -12549,7 +12532,7 @@ class _BuildRecord:
                "source": os.path.abspath(source) if source else None,
                "cache": os.path.abspath(a.ocr_cache),
                "decisions": a.apply_decisions,
-               "pages_sent_to_be_read": READ_THIS_RUN["pages"],
+               "pages_sent_to_be_read": switches.READ_THIS_RUN["pages"],
                "cache_only": bool(a.cache_only),
                "seconds": round(time.time() - self.began),
                "log": os.path.abspath(self.log_path)}
@@ -12593,7 +12576,7 @@ def _convert(args, parser) -> None:
                 "    Debian: apt install tesseract-ocr\n"
                 "Or pass --without-witness to build anyway, accepting that "
                 "those pages go unchecked. The run will say how many did.")
-        globals()["WITNESS_WAIVED"] = True
+        switches.WITNESS_WAIVED = True
         print("[!] Running WITHOUT a witness. Pages with no text layer will "
               "pass the fabrication check unexamined, and pages deleted as "
               "blank will be deleted on this pipeline's word alone.")
@@ -12614,7 +12597,7 @@ def _convert(args, parser) -> None:
             _reader2,
             _second.SecondCache(_second.SecondCache.beside(args.ocr_cache))
             if args.ocr_cache else None)
-        globals()["SECOND_OPINION"] = _opinion
+        switches.SECOND_OPINION = _opinion
         import atexit
         atexit.register(_opinion.close)
         from . import third as _third
@@ -12628,7 +12611,7 @@ def _convert(args, parser) -> None:
                 _second.SecondCache(_second.SecondCache.beside(
                     args.ocr_cache, ".third.gz"), tag=_third.NAME)
                 if args.ocr_cache else None)
-            globals()["THIRD_OPINION"] = _vote
+            switches.THIRD_OPINION = _vote
             atexit.register(_vote.close)
 
     if args.pages_from or args.from_images:

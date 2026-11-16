@@ -12,6 +12,7 @@ to prevent: not the absence of the witness, which an operator may knowingly
 accept, but the absence going unmentioned.
 """
 import pytest
+from codicology import switches
 
 
 def test_the_witness_is_detected_by_the_binary_not_the_package(vtb, monkeypatch):
@@ -35,14 +36,14 @@ def test_a_missing_witness_yields_no_count_not_a_zero(vtb, monkeypatch, tmp_path
 def test_unwitnessed_pages_are_counted(vtb):
     """The counters are what make the silence impossible; they are read at
     the end of a run and printed."""
-    before = dict(vtb.UNWITNESSED)
-    vtb.UNWITNESSED["fabrication"] += 1
-    vtb.UNWITNESSED["blank"] += 2
+    before = dict(switches.UNWITNESSED)
+    switches.UNWITNESSED["fabrication"] += 1
+    switches.UNWITNESSED["blank"] += 2
     try:
-        assert vtb.UNWITNESSED["fabrication"] == before["fabrication"] + 1
-        assert vtb.UNWITNESSED["blank"] == before["blank"] + 2
+        assert switches.UNWITNESSED["fabrication"] == before["fabrication"] + 1
+        assert switches.UNWITNESSED["blank"] == before["blank"] + 2
     finally:
-        vtb.UNWITNESSED.update(before)
+        switches.UNWITNESSED.update(before)
 
 
 def test_the_run_refuses_to_start_without_a_witness(vtb, monkeypatch):

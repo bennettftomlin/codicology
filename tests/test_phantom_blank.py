@@ -15,6 +15,7 @@ import pytest
 from PIL import Image
 
 import codicology.pipeline as vtb
+from codicology import switches
 
 
 def _paper(path, ink=False):
@@ -42,9 +43,9 @@ GHOST_TEXT = ("The proper text of the statement of the statement is "
 def fresh_caches():
     vtb._page_core_ink.cache_clear()
     vtb._classical_word_count.cache_clear()
-    before = dict(vtb.UNWITNESSED)
+    before = dict(switches.UNWITNESSED)
     yield
-    vtb.UNWITNESSED.update(before)
+    switches.UNWITNESSED.update(before)
 
 
 def test_ghost_on_blank_paper_is_convicted(tmp_path, monkeypatch, fresh_caches):
@@ -110,9 +111,9 @@ def test_no_witness_means_no_conviction_and_an_honest_count(tmp_path,
                                                             fresh_caches):
     p = _paper(tmp_path / "p.png")
     monkeypatch.setattr(vtb, "_classical_word_count", lambda *a, **k: None)
-    before = vtb.UNWITNESSED["fabrication"]
+    before = switches.UNWITNESSED["fabrication"]
     assert vtb._phantom_blank_pages([p], [GHOST_TEXT], [False]) == set()
-    assert vtb.UNWITNESSED["fabrication"] == before + 1
+    assert switches.UNWITNESSED["fabrication"] == before + 1
 
 
 def test_asides_alone_read_as_empty():

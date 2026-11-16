@@ -20,6 +20,7 @@ import pytest
 from PIL import Image, ImageDraw
 
 from codicology import binding, pipeline as vtb
+from codicology import switches
 
 
 def _page(path, rows=12):
@@ -57,7 +58,7 @@ def _build(tmp_path, reader, cache, n=2):
 
 @pytest.fixture
 def cache_only(monkeypatch):
-    monkeypatch.setattr(vtb, "CACHE_ONLY", True)
+    monkeypatch.setattr(switches, "CACHE_ONLY", True)
 
 
 # ── --cache-only ─────────────────────────────────────────────────────────────
@@ -67,7 +68,7 @@ def test_a_build_from_a_full_cache_reads_nothing(tmp_path, monkeypatch, capsys):
     first = _Reader()
     _build(tmp_path, first, cache)
     assert first.asked == 2
-    monkeypatch.setattr(vtb, "CACHE_ONLY", True)
+    monkeypatch.setattr(switches, "CACHE_ONLY", True)
     again = _Reader()
     _, out = _build(tmp_path, again, cache)
     assert again.asked == 0
@@ -97,10 +98,10 @@ def test_the_recogniser_is_not_started_until_a_page_must_be_read(monkeypatch):
                         types.SimpleNamespace(RecognitionPredictor=Predictor))
     backend = vtb.SuryaBackend(["en"])
     assert not built                       # a server would have started here
-    monkeypatch.setitem(vtb.READ_THIS_RUN, "pages", 0)
+    monkeypatch.setitem(switches.READ_THIS_RUN, "pages", 0)
     backend.run_items([Image.new("RGB", (40, 40), "white")] * 3)
     backend.run_items([Image.new("RGB", (40, 40), "white")])
-    assert len(built) == 1 and vtb.READ_THIS_RUN["pages"] == 4
+    assert len(built) == 1 and switches.READ_THIS_RUN["pages"] == 4
 
 
 def test_nothing_starts_the_recogniser_on_a_run_that_reads_nothing(monkeypatch, cache_only):
@@ -173,7 +174,7 @@ def test_a_build_that_stops_keeps_its_log_and_writes_no_record(tmp_path, monkeyp
         _convert(tmp_path, monkeypatch, fail="the witness is not installed")
     assert "[stopped] the witness is not installed" in (tmp_path / "book-1a2b.build.log").read_text()
     assert not (tmp_path / "book-1a2b.build.json").exists()
-    assert not isinstance(sys.stdout, vtb._Tee) and vtb.BUILD_NOTE is None and vtb.CACHE_ONLY is False
+    assert not isinstance(sys.stdout, vtb._Tee) and switches.BUILD_NOTE is None and switches.CACHE_ONLY is False
 
 
 def test_cache_only_is_a_switch_of_the_command_and_wants_a_cache(tmp_path, monkeypatch, capsys):
@@ -182,7 +183,7 @@ def test_cache_only_is_a_switch_of_the_command_and_wants_a_cache(tmp_path, monke
     assert "every page has a reading in the cache" in log.read_text()
     assert json.loads(record.read_text())["cache_only"] is True
     assert "--cache-only" in json.loads(record.read_text())["options"]
-    assert vtb.CACHE_ONLY is False                   # it does not outlive the run
+    assert switches.CACHE_ONLY is False                   # it does not outlive the run
     with pytest.raises(SystemExit):
         vtb.main(["--from-images", str(tmp_path / "scans"), "--epub", out, "--cache-only"])
     assert "--cache-only needs --ocr-cache" in capsys.readouterr().err

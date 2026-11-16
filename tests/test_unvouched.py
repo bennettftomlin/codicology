@@ -13,6 +13,7 @@ import pytest
 from PIL import Image, ImageDraw
 
 from codicology import pipeline as vtb
+from codicology import switches
 
 INVENTED = ("may should inspire all times growing and taking the Birch's - "
             "this ware, she serve & there, I say - sought them, Birch - thing, "
@@ -95,10 +96,10 @@ def test_a_reading_that_carries_no_confidence_is_not_judged(tmp_path, witness):
 
 def test_with_nobody_to_ask_the_page_is_passed_and_counted(tmp_path, monkeypatch):
     monkeypatch.setattr(vtb, "witness_available", lambda: False)
-    before = vtb.UNWITNESSED["fabrication"]
+    before = switches.UNWITNESSED["fabrication"]
     assert vtb.unvouched_reading(_blocks(INVENTED, 0.78), _leaf(tmp_path)) is None
-    assert vtb.UNWITNESSED["fabrication"] == before + 1
-    vtb.UNWITNESSED["fabrication"] = before
+    assert switches.UNWITNESSED["fabrication"] == before + 1
+    switches.UNWITNESSED["fabrication"] = before
 
 
 def test_a_plate_with_a_printed_caption_is_still_unvouched(tmp_path, witness):

@@ -10,6 +10,7 @@ import pytest
 
 from codicology import pipeline as vtb
 from test_doubled_boxes import _problem_blocks, _problem_page
+from codicology import switches
 
 THIN = ("<table><tr><th>Wage per day</th><th>Number of workers</th></tr>"
         "<tr><td>0</td><td>0</td></tr><tr><td>8</td><td>1</td></tr></table>")
@@ -446,7 +447,7 @@ def test_a_build_that_asked_nothing_takes_an_old_account_away(tmp_path, monkeypa
     stale.write_text("an earlier build's account")
     opinion = vtb.SecondOpinion(_Reader(), second_.SecondCache(
         str(tmp_path / "7-abc.second.gz")))
-    monkeypatch.setattr(vtb, "SECOND_OPINION", opinion)
+    monkeypatch.setattr(switches, "SECOND_OPINION", opinion)
     vtb.build_epub([_leaf(tmp_path)], str(tmp_path / "book.epub"), Reads(),
                    "Print", False, dedupe=False, drop_blank=False)
     assert opinion.reader.read_count == 0, "a page of prose is not put to it"

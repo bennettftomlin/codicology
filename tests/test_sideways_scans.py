@@ -23,6 +23,7 @@ pymupdf = pytest.importorskip("pymupdf")
 from PIL import Image, ImageDraw, ImageFont
 
 from codicology import pipeline as P
+from codicology import switches
 
 needs_tesseract = pytest.mark.skipif(shutil.which("tesseract") is None,
                                      reason="tesseract is not installed")
@@ -205,7 +206,7 @@ def test_without_a_first_reading_and_reading_refused_nothing_is_turned(tmp_path,
     class Empty:
         def get(self, path):
             return None
-    monkeypatch.setattr(P, "CACHE_ONLY", True)
+    monkeypatch.setattr(switches, "CACHE_ONLY", True)
     paths = [p]
     assert P.turn_sideways_bodies(paths, Empty(), backend=object()) == []
     assert "turned" not in _source(p)
