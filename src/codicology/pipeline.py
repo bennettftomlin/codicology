@@ -203,6 +203,7 @@ from .backends import (  # noqa: F401  (moved; kept importable from here)
 )
 
 
+from .contents import labelled_contents_pages, labelled_heads
 from .furniture import furniture_texts
 from .furniture import (  # noqa: F401  (moved; kept importable from here)
     RUNNING_HEAD, RUNNING_FOOT, FURNITURE_PAGES, strip_running_heads,
@@ -5325,8 +5326,6 @@ class ReadPages(NamedTuple):
     n_phantoms: int
     n_forms: int
     n_hand_figures: int
-    label_heads: list
-    toc_label_pages: set
     n_doubled: int = 0
     foot_labelled: "list | None" = None
     # The same pages before they were joined: their blocks and furniture
@@ -5358,8 +5357,6 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
     foot_labelled: list = []    # per page: how much of its foot the layout
                                 # itself called footnotes (see link_footnotes)
     marker_seq_state: dict = {"last": None}
-    label_heads: list = []      # (page, rank, text) from SectionHeader
-    toc_label_pages: set = set()
     pages: list[Page] = []      # each page before it is joined (model.Page)
     total = len(page_paths)
 
@@ -5586,18 +5583,6 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
                         furniture=[Block.of(it) for it in items if it.is_furniture],
                         furniture_known=(hit is None) or (
                             cache is not None and cache.knows_furniture(path)))
-            page_no_for_labels = len(bodies)
-            for it in items:
-                if it.label == "SectionHeader" and it.html \
-                        and not it.is_furniture:
-                    _t = re.sub(r"\s+", " ", _strip_tags(it.html)).strip()
-                    _rk = re.match(r"\s*<h([1-6])", it.html)
-                    if _t and not re.fullmatch(r"\d{1,3}", _t):
-                        label_heads.append((page_no_for_labels,
-                                            int(_rk.group(1)) if _rk else 3,
-                                            _t[:90]))
-                if it.label == "TableOfContents" and not it.is_furniture:
-                    toc_label_pages.add(page_no_for_labels)
             furn_numbers = {m for it in items if it.is_furniture and it.html
                             for m in re.findall(r"\d{1,3}",
                                                 _strip_tags(it.html))}
@@ -5693,7 +5678,7 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
     return ReadPages(bodies, page_figures, figure_data,
                      n_figures, n_blank_figures,
                      n_label_rules, n_reattached, n_phantoms, n_forms,
-                     n_hand_figures, label_heads, toc_label_pages, n_doubled,
+                     n_hand_figures, n_doubled,
                      foot_labelled, pages)
 
 
@@ -5776,12 +5761,16 @@ def build_epub(
     rp = _read_pages(page_paths, backend, cache, book, strip_furniture)
     (bodies, page_figures, figure_data,
      n_figures, n_blank_figures, n_label_rules, n_reattached, n_phantoms,
-     n_forms, n_hand_figures, label_heads, toc_label_pages,
+     n_forms, n_hand_figures,
      n_doubled, foot_labelled, pages) = rp
     # Running heads and feet are read from the pages, where they were set
     # aside as blocks; a page cached before heads were kept says so.
     page_furniture = furniture_texts(pages)
     furniture_known = [p.furniture_known for p in pages]
+    # What the layout labelled a heading or a printed contents, as the pages
+    # hold it when read: the contents falls back on these.
+    label_heads = labelled_heads(pages)
+    toc_label_pages = labelled_contents_pages(pages)
     # Before anything reads the pages as text: what an unclosed address
     # swallowed is text again from here on.
     n_swallowed = mend_swallowed_links(bodies)
