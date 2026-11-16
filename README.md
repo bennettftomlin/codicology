@@ -579,6 +579,29 @@ right before the rules were kept.
 `tools/linkprobe.py` remains the quick instrument for the note linkers
 alone (seconds, from the installed copies); the shelf run is the proof.
 
+## The code
+
+A build is two halves. The reading half turns each page into a
+`model.Page` of blocks (each with the layout's label, its box and the
+recogniser's confidence); the assembly half turns the pages into a book.
+`pipeline.py` keeps every name it once held importable, so old imports
+still work, but the code lives here:
+
+| Module | What it holds |
+|---|---|
+| `convert.py` | the command: options, the run's switches, the build record, binding |
+| `reading.py` | the reading half: cache or recogniser, the resilient read, `Page`s handed over |
+| `assemble.py` | the assembly half: `build_epub` and the passes not yet given a module |
+| `model.py` | `PageItem`, `Page`, `Block`, and carrying a page through a pass that rewrote its string |
+| `switches.py` | what the command sets once for the whole run (`CACHE_ONLY`, the readers…) |
+| `backends.py`, `cache.py`, `cache_tools.py` | the recogniser, the reading cache, repairs to a cache |
+| `pdf_pages.py`, `pdf_frame.py`, `capture.py`, `photos.py` | pages from a PDF, video or photographs; one PDF coordinate frame |
+| `witness.py`, `guards.py`, `opinions.py` | tesseract's word; the checks on a reading; the second and third readers |
+| `reconcile.py` | a born-digital page held to its own text layer |
+| `furniture.py`, `folios.py`, `contents.py`, `notes.py` | running heads, page numbers, the contents, notes |
+| `figures.py`, `equations.py`, `tex.py`, `typography.py`, `citations.py`, `index_links.py` | pictures, mathematics, typography, citations, the index |
+| `page_review.py`, `decisions.py`, `searchable_pdf.py`, `markup.py` | the review sheet, reviewers' decisions, the text-layer PDF, small helpers |
+
 ## Tests
 
 ```bash
