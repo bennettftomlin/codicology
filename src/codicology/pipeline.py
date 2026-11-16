@@ -110,13 +110,9 @@ from __future__ import annotations
 
 import argparse
 import base64
-import functools
 import glob
-import gzip
-import zlib
 import hashlib
 import json
-import difflib
 import html
 import io
 import os
@@ -132,7 +128,7 @@ from typing import NamedTuple
 
 import cv2
 import numpy as np
-from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+from PIL import Image, ImageFilter, ImageOps
 
 from . import rectify as _rectify
 
