@@ -194,7 +194,7 @@ from .cache import (  # noqa: F401  (moved; kept importable from here)
 
 
 
-from .model import PageItem  # noqa: F401  (moved; kept importable from here)
+from .model import Block, Page, PageItem  # noqa: F401  (PageItem moved; kept importable from here)
 
 
 from .backends import (  # noqa: F401  (moved; kept importable from here)
@@ -6248,6 +6248,9 @@ class ReadPages(NamedTuple):
     toc_label_pages: set
     n_doubled: int = 0
     foot_labelled: "list | None" = None
+    # The same pages before they were joined: their blocks and furniture
+    # (model.Page). bodies[i] is pages[i].render().
+    pages: "list | None" = None
 
 
 def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
@@ -6278,6 +6281,7 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
     marker_seq_state: dict = {"last": None}
     label_heads: list = []      # (page, rank, text) from SectionHeader
     toc_label_pages: set = set()
+    pages: list[Page] = []      # each page before it is joined (model.Page)
     total = len(page_paths)
 
     nonlocal_page_i = [0]      # the page emit_figure is currently working on
@@ -6304,7 +6308,10 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
         if not names:
             return
         named = re.compile(r'(?<=<img src=")images/fig_\d{4}\.encoding(?=")')
-        bodies[:] = [named.sub(lambda m: names[m.group(0)], b) for b in bodies]
+        for page in pages:
+            for b in page.blocks:
+                b.html = named.sub(lambda m: names[m.group(0)], b.html)
+        bodies[:] = [page.render() for page in pages]
         page_figures[:] = [[names[n] for n in figs] for figs in page_figures]
 
     def emit_figure(item: PageItem, caption: PageItem | None, caption_first: bool) -> str:
@@ -6500,6 +6507,9 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
                                    if it.is_furniture and it.html])
             furniture_known.append((hit is None)
                                    or (cache is not None and cache.knows_furniture(path)))
+            page = Page(index=len(bodies), path=path,
+                        furniture=[Block.of(it) for it in items if it.is_furniture],
+                        furniture_known=furniture_known[-1])
             page_no_for_labels = len(bodies)
             for it in items:
                 if it.label == "SectionHeader" and it.html \
@@ -6536,8 +6546,20 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
             items = recover_placeholder_figures(items, path)
             items = recover_orphan_artwork(items, path, _held)
             items = recover_vector_artwork(items, path, _held)
-            parts: list[str] = []
             current_figures: list[str] = []
+
+            def figure_block(fig: PageItem, cap: "PageItem | None",
+                             caption_first: bool) -> None:
+                """The figure, with its caption, as one block; its caption
+                alone where the figure is not worth keeping; nothing where
+                neither is."""
+                html_ = emit_figure(fig, cap, caption_first=caption_first)
+                if html_.startswith("<figure>"):
+                    page.blocks.append(Block.of(
+                        fig, html=html_, caption=cap.html if cap is not None else None))
+                elif html_:
+                    page.blocks.append(Block.of(cap, html=html_))
+
             i = 0
             while i < len(items):
                 item = items[i]
@@ -6546,16 +6568,16 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
                 # Books caption above as well as below, so bind a caption on
                 # either side of the image rather than assuming one convention.
                 if item.is_caption and nxt is not None and nxt.figure is not None:
-                    parts.append(emit_figure(nxt, item, caption_first=True))
+                    figure_block(nxt, item, caption_first=True)
                     i += 2
                     continue
 
                 if item.figure is not None:
                     if nxt is not None and nxt.is_caption:
-                        parts.append(emit_figure(item, nxt, caption_first=False))
+                        figure_block(item, nxt, caption_first=False)
                         i += 2
                     else:
-                        parts.append(emit_figure(item, None, caption_first=False))
+                        figure_block(item, None, caption_first=False)
                         i += 1
                     continue
 
@@ -6569,13 +6591,14 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
                 # primary witness, the heuristic stays as the fallback for
                 # every cache written before labels were kept.
                 if item.label == "Footnote" \
-                        and "<hr/>" not in "".join(parts) \
+                        and "<hr/>" not in page.render() \
                         and not any(it.label == "Footnote" for it in items[:i]):
-                    parts.append("<hr/>")
+                    page.blocks.append(Block(kind="rule", html="<hr/>"))
                     n_label_rules += 1
-                parts.append(item.html)
+                page.blocks.append(Block.of(item))
                 i += 1
-            bodies.append("".join(parts))
+            pages.append(page)
+            bodies.append(page.render())
             page_figures.append(current_figures)
         done = min(start + len(chunk_paths), total)
         note = f" ({cache.hits} from cache)" if cache and cache.hits else ""
@@ -6595,7 +6618,7 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
                      furniture_known, n_figures, n_blank_figures,
                      n_label_rules, n_reattached, n_phantoms, n_forms,
                      n_hand_figures, label_heads, toc_label_pages, n_doubled,
-                     foot_labelled)
+                     foot_labelled, pages)
 
 
 def build_epub(
@@ -6678,7 +6701,7 @@ def build_epub(
     (bodies, page_figures, figure_data, page_furniture, furniture_known,
      n_figures, n_blank_figures, n_label_rules, n_reattached, n_phantoms,
      n_forms, n_hand_figures, label_heads, toc_label_pages,
-     n_doubled, foot_labelled) = rp
+     n_doubled, foot_labelled, pages) = rp
     # Before anything reads the pages as text: what an unclosed address
     # swallowed is text again from here on.
     n_swallowed = mend_swallowed_links(bodies)

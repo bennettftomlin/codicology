@@ -4,6 +4,7 @@ plan (PLAN-2026-11-12.md) are to live here too.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from PIL import Image
 from typing import NamedTuple
 
@@ -41,3 +42,72 @@ class PageItem(NamedTuple):
     # given when what was read from it is not fit to print. Never cached;
     # it is decided each time the page is assembled.
     whole_page: bool = False
+
+
+# ── a page as the assembly half receives it ──────────────────────────────────
+#
+# The reading half has always known, of every block, the layout's name for
+# it, where it stands and how sure the recogniser was, and then joined each
+# page into one string of markup for the assembly half, which re-derived by
+# pattern what that string no longer said: which paragraphs are footnotes,
+# where a running head stood, which table is which. A Page is that page
+# before it is joined: its blocks in reading order, each as the markup it
+# contributes and what the reading knew of it, and the furniture set aside
+# from it. Its rendering is the string the assembly half has always had.
+#
+# A block's kind is the label in the words the assembly half will ask in;
+# the label itself is kept verbatim beside it. "rule" is the line the build
+# itself draws above a page's footnotes where the layout named them and
+# the recogniser drew none.
+KIND_OF_LABEL = {
+    "Footnote": "footnote", "SectionHeader": "heading", "PageHeader": "furniture",
+    "PageFooter": "furniture", "Table": "table", "Form": "form",
+    "TableOfContents": "toc", "Caption": "caption", "ListItem": "list-item",
+    "Equation": "equation", "Formula": "equation", "Code": "code",
+    "Handwriting": "handwriting", "Picture": "figure", "Figure": "figure",
+    "Diagram": "figure", "Text": "text",
+}
+
+
+def kind_of(item: PageItem) -> str:
+    """The kind of block a reading's item makes: a figure where it holds one,
+    furniture where it was set aside as such, else what its label says, and
+    "text" where it has no label the build knows."""
+    if item.figure is not None or item.whole_page:
+        return "figure"
+    if item.is_furniture:
+        return "furniture"
+    return KIND_OF_LABEL.get(item.label or "", "text")
+
+
+@dataclass
+class Block:
+    """One piece of a page's body: the markup it contributes, and what the
+    reading knew of it. A figure's block holds the figure with its caption,
+    as one <figure>."""
+    kind: str
+    html: str
+    label: "str | None" = None
+    box: "tuple | None" = None
+    conf: "float | None" = None
+    caption: "str | None" = None        # a figure's caption, as read
+
+    @classmethod
+    def of(cls, item: PageItem, html: "str | None" = None, **more) -> "Block":
+        return cls(kind=kind_of(item), html=item.html if html is None else html,
+                   label=item.label, box=item.box, conf=item.conf, **more)
+
+
+@dataclass
+class Page:
+    """A page as the assembly half receives it: its blocks in reading order
+    and the furniture set aside from it."""
+    index: int
+    path: str
+    blocks: "list[Block]" = field(default_factory=list)
+    furniture: "list[Block]" = field(default_factory=list)
+    furniture_known: bool = True        # False: cached before heads were kept
+
+    def render(self) -> str:
+        """The page as one string of markup, as the assembly half reads it."""
+        return "".join(b.html for b in self.blocks)
