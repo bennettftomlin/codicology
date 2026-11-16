@@ -11,6 +11,8 @@ import os
 import pytest
 from PIL import Image
 
+from codicology import searchable_pdf  # where build_searchable_pdf looks up the word boxes
+
 pdfium = pytest.importorskip("pypdfium2")
 pytest.importorskip("pymupdf")
 
@@ -141,7 +143,7 @@ def test_words_take_tesseract_geometry_when_both_engines_agree(vtb, tmp_path, mo
     the block — and unmatched words must still be present via the block.
     """
     page = _page_png(tmp_path)          # 600x900 at 150dpi -> 288x432pt
-    monkeypatch.setattr(vtb, "_tesseract_word_boxes", lambda _: [
+    monkeypatch.setattr(searchable_pdf, "_tesseract_word_boxes", lambda _: [
         {"t": "altgeld", "x": 100, "y": 200, "w": 120, "h": 24, "used": False},
     ])
     items = [[vtb.PageItem(html="<p>Governor Altgeld pardoned them.</p>",
@@ -166,7 +168,7 @@ def test_words_take_tesseract_geometry_when_both_engines_agree(vtb, tmp_path, mo
 
 def test_without_tesseract_the_block_path_carries_everything(vtb, tmp_path, monkeypatch):
     page = _page_png(tmp_path)
-    monkeypatch.setattr(vtb, "_tesseract_word_boxes", lambda _: None)
+    monkeypatch.setattr(searchable_pdf, "_tesseract_word_boxes", lambda _: None)
     items = [[vtb.PageItem(html="<p>Governor Altgeld pardoned them.</p>",
                            box=(0.1, 0.1, 0.9, 0.3))]]
     out = str(tmp_path / "book.pdf")
@@ -183,7 +185,7 @@ def test_partial_matches_keep_reading_order_and_interpolate_between_anchors(vtb,
     word must sit BETWEEN them, and extraction must read straight through.
     """
     page = _page_png(tmp_path)          # 600x900 @150dpi -> 288x432pt
-    monkeypatch.setattr(vtb, "_tesseract_word_boxes", lambda _: [
+    monkeypatch.setattr(searchable_pdf, "_tesseract_word_boxes", lambda _: [
         {"t": "governor", "x": 100, "y": 200, "w": 130, "h": 24, "used": False},
         {"t": "pardoned", "x": 330, "y": 200, "w": 130, "h": 24, "used": False},
     ])
@@ -209,7 +211,7 @@ def test_phrase_search_across_the_seam_survives(vtb, tmp_path, monkeypatch):
     """The user-visible consequence of order: a phrase spanning a matched and
     an unmatched word must be findable as a contiguous string."""
     page = _page_png(tmp_path)
-    monkeypatch.setattr(vtb, "_tesseract_word_boxes", lambda _: [
+    monkeypatch.setattr(searchable_pdf, "_tesseract_word_boxes", lambda _: [
         {"t": "pardoned", "x": 330, "y": 200, "w": 130, "h": 24, "used": False},
     ])
     items = [[vtb.PageItem(html="<p>Governor Altgeld pardoned them fully.</p>",
