@@ -12,6 +12,7 @@ import pytest
 
 from codicology import progress
 from codicology import witness as witness_mod
+from codicology import convert  # where main looks it up
 
 
 @pytest.fixture(autouse=True)
@@ -51,7 +52,7 @@ def test_convert_emits_a_result_event(tmp_path, monkeypatch, capsys, vtb):
 
     monkeypatch.setattr(witness_mod, "witness_available", lambda: True)
     called = {}
-    monkeypatch.setattr(vtb, "process_video", lambda **kw: called.update(kw))
+    monkeypatch.setattr(convert, "process_video", lambda **kw: called.update(kw))
 
     vtb.main(["--pages-from", str(src), "--epub", str(out), "--progress-json"])
 
@@ -84,7 +85,7 @@ def test_a_crash_reaches_the_stream_before_the_traceback(tmp_path, monkeypatch,
     def boom(**kw):
         raise RuntimeError("torch fell over")
 
-    monkeypatch.setattr(vtb, "process_video", boom)
+    monkeypatch.setattr(convert, "process_video", boom)
     with pytest.raises(RuntimeError):
         vtb.main(["--pages-from", str(src), "--epub",
                   str(tmp_path / "out.epub"), "--progress-json"])
@@ -99,6 +100,6 @@ def test_without_the_flag_nothing_machine_readable_appears(tmp_path,
     src = tmp_path / "book.pdf"
     src.write_bytes(b"%PDF-1.4\n")
     monkeypatch.setattr(witness_mod, "witness_available", lambda: True)
-    monkeypatch.setattr(vtb, "process_video", lambda **kw: None)
+    monkeypatch.setattr(convert, "process_video", lambda **kw: None)
     vtb.main(["--pages-from", str(src), "--epub", str(tmp_path / "o.epub")])
     assert _events(capsys) == []

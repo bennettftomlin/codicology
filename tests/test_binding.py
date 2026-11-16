@@ -13,6 +13,7 @@ import zipfile
 import pytest
 
 from codicology import binding as B
+from codicology import convert  # where main looks it up
 
 FOLIO = '<span epub:type="pagebreak" role="doc-pagebreak" id="pgb-%04d" aria-label="%d"></span>'
 
@@ -508,7 +509,7 @@ def test_convert_binds_the_book_it_built_unless_asked_not_to(tmp_path, monkeypat
     def stands_in_for_the_build(**kw):
         import shutil
         shutil.copy(built, kw["output_epub"])
-    monkeypatch.setattr(P, "process_video", stands_in_for_the_build)
+    monkeypatch.setattr(convert, "process_video", stands_in_for_the_build)
 
     out = str(tmp_path / "bound.epub")
     P.main(["--from-images", str(tmp_path / "scans"), "--epub", out])

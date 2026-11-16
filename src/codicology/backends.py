@@ -635,3 +635,10 @@ def reflow_paragraphs(text: str) -> list[str]:
     if buf:
         paragraphs.append(buf)
     return paragraphs
+
+
+def _ocr_one(image: Image.Image, backend: "OCRBackend") -> str:
+    try:
+        return _strip_tags(backend.run([image])[0]).strip()
+    except Exception:
+        return ""

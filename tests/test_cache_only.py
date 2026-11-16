@@ -21,6 +21,7 @@ from PIL import Image, ImageDraw
 
 from codicology import binding, pipeline as vtb
 from codicology import switches
+from codicology import convert  # where main looks it up
 
 
 def _page(path, rows=12):
@@ -137,7 +138,7 @@ def _convert(tmp_path, monkeypatch, *flags, fail=None):
         paths = [_page(tmp_path / f"page_{k:04d}.png", rows=10 + k) for k in range(2)]
         vtb.build_epub(paths, kw["output_epub"], _Reader(), "A Book", False, dedupe=False,
                        drop_blank=False, ocr_cache=kw.get("ocr_cache"))
-    monkeypatch.setattr(vtb, "process_video", stands_in_for_the_build)
+    monkeypatch.setattr(convert, "process_video", stands_in_for_the_build)
     out = str(tmp_path / "book.epub")
     vtb.main(["--from-images", str(tmp_path / "scans"), "--epub", out,
               "--ocr-cache", str(cache), *flags])
