@@ -22,6 +22,7 @@ import pytest
 from PIL import Image
 
 from codicology import binding as B, cli, shelf
+from codicology import reading  # where the reading half looks these up
 
 FOLIO = ('<span epub:type="pagebreak" role="doc-pagebreak" id="pgb-%04d" '
          'aria-label="%d"></span>')
@@ -449,7 +450,7 @@ def test_a_real_book_built_twice_from_its_cache_is_the_same_book(tmp_path, monke
                                        "in a fair hand by a clerk who had been with it from the first.</p>",
                                   label="Text", box=(0.1, 0.1, 0.9, 0.5))] for _ in images]
     monkeypatch.setitem(vtb.OCR_BACKENDS, "surya", Reader)
-    monkeypatch.setattr(vtb, "warm_backend", lambda backend: None)      # it is asked to prove it reads
+    monkeypatch.setattr(reading, "warm_backend", lambda backend: None)      # it is asked to prove it reads
     vtb.main(["--pages-from", pdf, "--epub", str(tmp_path / "first.epub"), "--ocr-cache", cache,
               "--without-witness"])
     monkeypatch.undo()

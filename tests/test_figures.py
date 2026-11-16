@@ -7,6 +7,7 @@ were blank leaves.
 """
 import numpy as np
 from PIL import Image
+from codicology import reading  # where the reading half looks these up
 
 
 def paper(width=1400, height=2300, tone=228, grain=4, seed=0):
@@ -382,7 +383,7 @@ def test_a_books_figures_come_out_in_order_whatever_order_they_finish(
             [photo(3), drawing(6)]]
     want = [vtb.encode_figure(make()) for page in plan for make in page]
 
-    monkeypatch.setattr(vtb, "FIGURE_ENCODERS", 2)     # so that some must wait
+    monkeypatch.setattr(reading, "FIGURE_ENCODERS", 2)     # so that some must wait
     out = tmp_path / "album.epub"
     vtb.build_epub(paths, str(out), _FigureBackend(vtb, plan), "Album", False,
                    dedupe=False, drop_blank=False)

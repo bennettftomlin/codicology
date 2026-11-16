@@ -7,6 +7,7 @@ from PIL import Image, ImageDraw
 
 from codicology import pipeline as P
 from codicology.model import Block, Page, PageItem, kind_of
+from codicology import reading  # where the reading half looks these up
 
 
 def _drawing():
@@ -56,7 +57,7 @@ def test_the_pages_are_the_blocks_and_the_bodies_their_rendering(tmp_path, monke
         PageItem(html="<p>It stood by the river.</p>", label="Text", box=(0.1, 0.6, 0.9, 0.8)),
     ]
     paths = _pages(tmp_path, 2)
-    monkeypatch.setattr(P, "better_figure", lambda path, box, crop: crop)
+    monkeypatch.setattr(reading, "better_figure", lambda path, box, crop: crop)
     rp = P._read_pages(paths, Reader([first, second]), None, epub.EpubBook(), False)
 
     assert len(rp.pages) == 2 and all(isinstance(p, Page) for p in rp.pages)
