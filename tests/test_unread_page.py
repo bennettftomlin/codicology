@@ -11,6 +11,7 @@ import zipfile
 from PIL import Image, ImageDraw
 
 from codicology import pipeline as vtb
+from codicology import assemble  # where build_epub looks it up
 
 
 class _Silent:
@@ -108,7 +109,7 @@ def test_a_printed_page_number_does_not_make_an_unread_page_look_read(
     paths = [_printed(tmp_path / "page_0000.png"),
              _written(tmp_path / "page_0001.png"),
              _part_title(tmp_path / "page_0002.png")]
-    monkeypatch.setattr(vtb, "fill_folio_gaps",
+    monkeypatch.setattr(assemble, "fill_folio_gaps",
                         lambda folios: ({0: 11, 1: 12, 2: 13}, [], []))
     out = tmp_path / "book.epub"
     vtb.build_epub(paths, str(out), _Silent(), "Knights", False, dedupe=False,
