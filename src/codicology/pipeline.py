@@ -366,7 +366,6 @@ EQUATION_SAME_BLOCK = 0.75   # likeness of two readings of one block
 # a small distance, so the test is which is nearer and by what proportion,
 # not by how much.
 EQUATION_NEARER = 0.5
-_DISPLAY_MATH = re.compile(r'<math display="block">(.*?)</math>', re.S)
 _TEX_DOTS = {"ldots": "...", "dots": "...", "cdots": "...", "sum": "Σ"}
 
 
