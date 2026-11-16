@@ -117,7 +117,8 @@ def test_a_spread_is_cut_straight_when_the_seam_finder_is_absent(
 
     monkeypatch.setitem(sys.modules, "skimage", None)
     monkeypatch.setitem(sys.modules, "skimage.graph", None)
-    monkeypatch.setattr(vtb, "_SEAM_UNAVAILABLE_SAID", False)
+    from codicology import capture
+    monkeypatch.setattr(capture, "_SEAM_UNAVAILABLE_SAID", False)
     without = vtb._gutter_path(spread)
     assert without.shape == with_it.shape
     assert float(without.max()) == float(without.min()), "a straight cut"
