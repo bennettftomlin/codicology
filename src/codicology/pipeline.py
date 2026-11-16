@@ -204,6 +204,7 @@ from .backends import (  # noqa: F401  (moved; kept importable from here)
 
 
 from .contents import labelled_contents_pages, labelled_heads
+from .notes import footnote_share
 from .furniture import furniture_texts
 from .furniture import (  # noqa: F401  (moved; kept importable from here)
     RUNNING_HEAD, RUNNING_FOOT, FURNITURE_PAGES, strip_running_heads,
@@ -5327,7 +5328,6 @@ class ReadPages(NamedTuple):
     n_forms: int
     n_hand_figures: int
     n_doubled: int = 0
-    foot_labelled: "list | None" = None
     # The same pages before they were joined: their blocks and furniture
     # (model.Page). bodies[i] is pages[i].render().
     pages: "list | None" = None
@@ -5354,8 +5354,6 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
     n_forms = 0
     n_doubled = 0
     n_unvouched = 0
-    foot_labelled: list = []    # per page: how much of its foot the layout
-                                # itself called footnotes (see link_footnotes)
     marker_seq_state: dict = {"last": None}
     pages: list[Page] = []      # each page before it is joined (model.Page)
     total = len(page_paths)
@@ -5587,15 +5585,6 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
                             for m in re.findall(r"\d{1,3}",
                                                 _strip_tags(it.html))}
             items = [it for it in items if not it.is_furniture]
-            _first = next((k for k, it in enumerate(items)
-                           if it.label == "Footnote"), None)
-            _after = sum(len(_strip_tags(it.html).split())
-                         for it in items[_first:] if it.html) \
-                if _first is not None else 0
-            foot_labelled.append(
-                sum(len(_strip_tags(it.html).split()) for it in items[_first:]
-                    if it.html and it.label == "Footnote") / _after
-                if _after else 0.0)
             _ra, _sp = reattach_orphan_markers(items, furn_numbers,
                                                marker_seq_state)
             n_reattached += _ra
@@ -5679,7 +5668,7 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
                      n_figures, n_blank_figures,
                      n_label_rules, n_reattached, n_phantoms, n_forms,
                      n_hand_figures, n_doubled,
-                     foot_labelled, pages)
+                     pages)
 
 
 def build_epub(
@@ -5762,7 +5751,7 @@ def build_epub(
     (bodies, page_figures, figure_data,
      n_figures, n_blank_figures, n_label_rules, n_reattached, n_phantoms,
      n_forms, n_hand_figures,
-     n_doubled, foot_labelled, pages) = rp
+     n_doubled, pages) = rp
     # Running heads and feet are read from the pages, where they were set
     # aside as blocks; a page cached before heads were kept says so.
     page_furniture = furniture_texts(pages)
@@ -5771,6 +5760,8 @@ def build_epub(
     # hold it when read: the contents falls back on these.
     label_heads = labelled_heads(pages)
     toc_label_pages = labelled_contents_pages(pages)
+    # How much of each page's foot the layout itself called footnotes.
+    foot_labelled = footnote_share(pages)
     # Before anything reads the pages as text: what an unclosed address
     # swallowed is text again from here on.
     n_swallowed = mend_swallowed_links(bodies)

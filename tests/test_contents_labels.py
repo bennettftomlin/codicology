@@ -30,3 +30,16 @@ def test_the_layout_s_headings_with_their_rank_and_page():
 
 def test_the_pages_labelled_a_contents():
     assert labelled_contents_pages(_pages()) == {0}
+
+
+def test_how_much_of_a_page_s_foot_the_layout_called_footnotes():
+    from codicology.notes import footnote_share
+    pages = [
+        Page(0, "a", [Block("text", "<p>one two three</p>", label="Text")]),
+        Page(1, "b", [Block("text", "<p>body words here</p>", label="Text"),
+                      Block("rule", "<hr/>"),
+                      Block("footnote", "<p>1 note one two</p>", label="Footnote"),
+                      Block("text", "<p>stray four</p>", label="Text"),
+                      Block("footnote", "<p>2 note</p>", label="Footnote")]),
+    ]
+    assert footnote_share(pages) == [0.0, 6 / 8]
