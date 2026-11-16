@@ -207,6 +207,7 @@ from .backends import (  # noqa: F401  (moved; kept importable from here)
 )
 
 
+from .furniture import furniture_texts
 from .furniture import (  # noqa: F401  (moved; kept importable from here)
     RUNNING_HEAD, RUNNING_FOOT, FURNITURE_PAGES, strip_running_heads,
     head_shape, _LEAF_BLOCK, _FIRST_LEAF, _LAST_LEAF, _INLINE,
@@ -5321,8 +5322,6 @@ class ReadPages(NamedTuple):
     bodies: list
     page_figures: list
     figure_data: dict
-    page_furniture: list
-    furniture_known: list
     n_figures: int
     n_blank_figures: int
     n_label_rules: int
@@ -5351,8 +5350,6 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
     bodies: list[str] = []
     page_figures: list[list[str]] = []  # figure files each page put in the book
     figure_data: dict[str, bytes] = {}  # their bytes, for spotting repeats
-    page_furniture: list[list[str]] = []   # running head/foot text, per page
-    furniture_known: list[bool] = []       # False = cached before heads were kept
     n_figures = 0
     n_blank_figures = 0
     n_hand_figures = 0
@@ -5589,13 +5586,10 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
                              if _unsure[2] else ""))
             # Furniture is set aside, never merely deleted: its text is the
             # folio audit's evidence, already recognised at full resolution.
-            page_furniture.append([_strip_tags(it.html) for it in items
-                                   if it.is_furniture and it.html])
-            furniture_known.append((hit is None)
-                                   or (cache is not None and cache.knows_furniture(path)))
             page = Page(index=len(bodies), path=path,
                         furniture=[Block.of(it) for it in items if it.is_furniture],
-                        furniture_known=furniture_known[-1])
+                        furniture_known=(hit is None) or (
+                            cache is not None and cache.knows_furniture(path)))
             page_no_for_labels = len(bodies)
             for it in items:
                 if it.label == "SectionHeader" and it.html \
@@ -5700,8 +5694,8 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
                   f"their pages' pixels; a later build finds them without "
                   f"the old encoding")
         cache.save()
-    return ReadPages(bodies, page_figures, figure_data, page_furniture,
-                     furniture_known, n_figures, n_blank_figures,
+    return ReadPages(bodies, page_figures, figure_data,
+                     n_figures, n_blank_figures,
                      n_label_rules, n_reattached, n_phantoms, n_forms,
                      n_hand_figures, label_heads, toc_label_pages, n_doubled,
                      foot_labelled, pages)
@@ -5784,10 +5778,14 @@ def build_epub(
     # 300-page book at full resolution is several GB of decoded pixels. Figures
     # go straight into the book for the same reason.
     rp = _read_pages(page_paths, backend, cache, book, strip_furniture)
-    (bodies, page_figures, figure_data, page_furniture, furniture_known,
+    (bodies, page_figures, figure_data,
      n_figures, n_blank_figures, n_label_rules, n_reattached, n_phantoms,
      n_forms, n_hand_figures, label_heads, toc_label_pages,
      n_doubled, foot_labelled, pages) = rp
+    # Running heads and feet are read from the pages, where they were set
+    # aside as blocks; a page cached before heads were kept says so.
+    page_furniture = furniture_texts(pages)
+    furniture_known = [p.furniture_known for p in pages]
     # Before anything reads the pages as text: what an unclosed address
     # swallowed is text again from here on.
     n_swallowed = mend_swallowed_links(bodies)

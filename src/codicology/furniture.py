@@ -10,7 +10,7 @@ import re
 from typing import NamedTuple
 from .folios import parse_folio
 from .markup import RUNNING_HEAD_MAX_CHARS, _SETTING, _strip_tags
-from .model import PageItem
+from .model import Page, PageItem
 
 
 # A running head that the layout pass missed, recognised by its shape instead:
@@ -473,3 +473,9 @@ def chapters_from_furniture(page_furniture: list[list[str]]
             a -= 1
         out.append(Chapter(t, a, b))
     return out, stats
+
+
+def furniture_texts(pages: "list[Page]") -> "list[list[str]]":
+    """The text of each page's running heads and feet, as the folio audit and
+    the chapter reading take it."""
+    return [[_strip_tags(b.html) for b in p.furniture if b.html] for p in pages]

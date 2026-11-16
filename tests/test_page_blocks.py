@@ -68,7 +68,8 @@ def test_the_pages_are_the_blocks_and_the_bodies_their_rendering(tmp_path, monke
     assert one.blocks[1].box == (0.1, 0.2, 0.9, 0.5)
     assert one.blocks[2].html == "<hr/>" and one.blocks[2].label is None
     assert [(b.kind, b.html) for b in one.furniture] == [("furniture", "<p>12</p>")]
-    assert rp.page_furniture[0] == ["12"]
+    from codicology.furniture import furniture_texts
+    assert furniture_texts(rp.pages)[0] == ["12"]
 
     two = rp.pages[1]
     assert [b.kind for b in two.blocks] == ["figure", "text"]
