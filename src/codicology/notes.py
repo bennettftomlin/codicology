@@ -992,6 +992,74 @@ def _opens_with_a_foot(below: str) -> bool:
         and bool(FOOT_SHAPE.match(below[first.start():]))
 
 
+# A table's own notes: the table, then straight after it paragraphs that open
+# with superscripts numbered from one, answering superscripts in its cells.
+# The Modern Corporation and Private Property sets some forty tables that way,
+# and none of their notes linked: there is no rule above them, and the page's
+# feet, where a page has any, are somewhere else.
+TABLE_NOTE = re.compile(r"\s*<p[^>]*>\s*<sup>\s*(\d{1,3})\s*</sup>\s*\S.*?</p>",
+                        re.S)
+_TABLE = re.compile(r"<table\b[^>]*>.*?</table>", re.S)
+_CELL_CALL = re.compile(r"<sup>\s*(\d{1,3})\s*</sup>")
+TITLE_WORDS = 40        # a table's title line, not a paragraph of prose
+
+
+def _table_notes(body: str, pi: int) -> "tuple[str, int]":
+    """Link each table's notes on page PI to the calls in that table.
+
+    The scope is the table, and it is settled by the page: the notes number
+    from one and climb by one, and each is called from the table itself or
+    from the title line set directly above it (a note on the whole table
+    hangs there). A note cited from several cells is linked from each — in
+    a table that is ordinary, and nothing else in so small a scope could
+    claim the number. A number met as a bare superscript anywhere else on
+    the page is left alone: the page's own feet, or another table's, may be
+    using it."""
+    edits: list[tuple[int, int, str]] = []
+    claimed: list[tuple[int, int]] = []      # call spans this pass took
+    for t, tm in enumerate(_TABLE.finditer(body)):
+        notes, pos = [], tm.end()
+        while (m := TABLE_NOTE.match(body, pos)) and \
+                int(m.group(1)) == len(notes) + 1:
+            notes.append(m)
+            pos = m.end()
+        if not notes:
+            continue
+        # the title line: the block that ends where the table begins
+        lo = tm.start()
+        title = re.search(r"<p[^>]*>(?:(?!<p[\s>]).)*</p>\s*$",
+                          body[max(0, lo - 600):lo], re.S)
+        if title is not None and not TABLE_NOTE.match(title.group(0)) \
+                and len(_strip_tags(title.group(0)).split()) <= TITLE_WORDS:
+            lo -= len(title.group(0))
+        calls: dict[int, list] = {}
+        for c in _CELL_CALL.finditer(body, lo, tm.end()):
+            calls.setdefault(int(c.group(1)), []).append(c)
+        outside = {}
+        for c in _CELL_CALL.finditer(body):
+            if not (lo <= c.start() < pos):
+                outside[int(c.group(1))] = True
+        for m in notes:
+            n = int(m.group(1))
+            if n not in calls or n in outside:
+                continue
+            nid, rid = f"tn-p{pi}-t{t}-{n}", f"tnref-p{pi}-t{t}-{n}"
+            s = m.start(1)
+            open_ = body.rfind("<p", 0, s)
+            head = re.match(r"<p[^>]*>\s*<sup>\s*\d{1,3}\s*</sup>", body[open_:])
+            edits.append((open_, open_ + head.end(),
+                          f'<p id="{nid}"><sup><a href="#{rid}">{n}</a></sup>'))
+            for j, c in enumerate(calls[n]):
+                id_attr = f' id="{rid}"' if j == 0 else ""
+                edits.append((c.start(), c.end(),
+                              f'<sup><a epub:type="noteref"{id_attr} '
+                              f'href="#{nid}">{n}</a></sup>'))
+                claimed.append((c.start(), c.end()))
+    for a, z, new in sorted(edits, reverse=True):
+        body = body[:a] + new + body[z:]
+    return body, len(claimed)
+
+
 def link_footnotes(bodies: list[str], allow_numbered: bool = False,
                    foot_labelled: "list | None" = None) -> dict:
     """
@@ -1026,11 +1094,26 @@ def link_footnotes(bodies: list[str], allow_numbered: bool = False,
     is nearly all of them and the block opens with a foot, the paragraphs
     with no number are the notes going on, and the block stands.
     """
-    stats = {"linked": 0, "numbered": 0, "skipped": 0, "ruleless": 0}
+    stats = {"linked": 0, "numbered": 0, "skipped": 0, "ruleless": 0,
+             "table": 0}
     for pi, body in enumerate(bodies):
+        body, tn = _table_notes(body, pi)
+        if tn:
+            bodies[pi] = body
+            stats["linked"] += tn
+            stats["table"] += tn
         rule = "<hr/>"
         if rule in body:
             above, below = body.split(rule, 1)
+            # The end of a note carried over from the page before can come
+            # first, set above a rule of its own, and then the page's prose
+            # and its own feet under a second rule. The feet are under the
+            # last rule, so that is the one the page divides at when what
+            # follows the first is not feet.
+            last = body.rfind(rule)
+            if last != body.find(rule) and not _looks_like_foot_block(below) \
+                    and _looks_like_foot_block(body[last + len(rule):]):
+                above, below = body[:last], body[last + len(rule):]
         else:
             # No rule drawn. Only the numbered pass goes on without one, and
             # only where the page's own shape says where the feet begin —

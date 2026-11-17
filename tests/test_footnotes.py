@@ -303,3 +303,64 @@ def test_without_the_layouts_word_the_shape_still_decides(vtb):
     assert vtb.link_footnotes(bodies, allow_numbered=True,
                               foot_labelled=[0.4])["numbered"] == 0
 
+
+
+# ── a table's own notes ──────────────────────────────────────────────────────
+
+GROWTH = "<p>" + "The corporations grew faster than the national wealth. " * 6 + "</p>"
+
+
+def _table(cells=("$63,303<sup>1</sup>", "90,507<sup>2</sup>", "102,658<sup>2</sup>")):
+    return ("<p>TABLE III: Growth of Large Corporations</p><table><tbody>"
+            + "".join(f"<tr><td>19{20 + k}</td><td>{c}</td></tr>"
+                      for k, c in enumerate(cells))
+            + "</tbody></table>")
+
+
+NOTES = ("<p><sup>1</sup> Estimate from capital stocks.</p>"
+         "<p><sup>2</sup> Federal Trade Commission figures.</p>")
+
+
+def test_a_table_s_notes_link_to_its_cells(vtb):
+    """The Modern Corporation: notes straight after a table, numbered from
+    one, answering superscripts in its cells — with no rule over them."""
+    bodies = [GROWTH + _table() + NOTES + GROWTH]
+    stats = vtb.link_footnotes(bodies)          # whatever the book's endnotes
+    b = bodies[0]
+    assert stats["table"] == 3 and stats["linked"] == 3
+    assert b.count('href="#tn-p0-t0-2"') == 2   # cited from two cells
+    assert b.count('id="tnref-p0-t0-2"') == 1   # the note returns to the first
+    # the note keeps its superscript: nothing is written the book did not print
+    assert '<p id="tn-p0-t0-1"><sup><a href="#tnref-p0-t0-1">1</a></sup> Estimate' in b
+
+
+def test_a_call_in_the_table_s_title_line_links(vtb):
+    bodies = [GROWTH + _table().replace("Corporations</p>", "Corporations<sup>1</sup></p>")
+              .replace("$63,303<sup>1</sup>", "$63,303") + NOTES]
+    vtb.link_footnotes(bodies)
+    assert 'Corporations<sup><a epub:type="noteref" id="tnref-p0-t0-1"' in bodies[0]
+
+
+def test_a_number_the_page_uses_elsewhere_stays_plain(vtb):
+    # the prose above calls a page foot 2 of its own: the table's 2 is unsure
+    bodies = [GROWTH.replace("wealth.", "wealth.<sup>2</sup>", 1) + _table() + NOTES]
+    stats = vtb.link_footnotes(bodies)
+    assert stats["table"] == 1 and 'tn-p0-t0-2' not in bodies[0]
+
+
+def test_notes_that_do_not_count_from_one_are_not_the_table_s(vtb):
+    notes = NOTES.replace("<sup>1</sup>", "<sup>7</sup>").replace("<sup>2</sup>", "<sup>8</sup>")
+    bodies = [GROWTH + _table(("1<sup>7</sup>", "2<sup>8</sup>", "3")) + notes]
+    assert vtb.link_footnotes(bodies)["table"] == 0
+
+
+# ── the end of a note carried over, above a rule of its own ─────────────────
+
+def test_the_page_divides_at_the_rule_its_feet_are_under(vtb):
+    bodies = ["<p>companies to make a total of 1,000, so the error is small.</p><hr/>"
+              + GROWTH.replace("wealth.", "wealth.<sup>21</sup>", 1)
+              .replace("faster", "faster<sup>22</sup>", 1)
+              + "<hr/><p><sup>21</sup> The 1899 census.</p><p><sup>22</sup> Bulletin No. 38.</p>"]
+    stats = vtb.link_footnotes(bodies, allow_numbered=True)
+    assert stats["numbered"] == 2
+    assert bodies[0].count("<hr/>") == 2

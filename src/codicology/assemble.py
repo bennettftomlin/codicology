@@ -828,6 +828,8 @@ def build_epub(
             print(f"    footnotes: {fstats['linked']} same-page notes linked"
                   + (f" ({fstats['numbered']} numbered)"
                      if fstats["numbered"] else "")
+                  + (f" ({fstats['table']} in tables)"
+                     if fstats["table"] else "")
                   + f", {fstats['skipped']} left unsure")
         if n_note_heads >= 2:
             # Several "Notes" heads SUGGEST chapter-endnotes, where each
