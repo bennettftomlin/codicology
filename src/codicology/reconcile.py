@@ -99,6 +99,26 @@ def _same_but_its_marks(ours: str, layer: str) -> bool:
     return bool(ours) and bool(layer) and all(c in dashes for c in ours + layer)
 
 
+# And the recogniser's slips between glyphs that look alike: the letter o
+# for a zero, l or I for a one. When Protest Becomes Crime ends a page on a
+# note's address, "www.archivochile.com/tesis/03_tpo/03po0004.pdf", read as
+# "o3_tpo/o3p00004" — the last word on the page, so the layer's word was
+# refused, and the address shipped with letters for its figures. Two words
+# of one length that differ only where one has a glyph and the other its
+# look-alike are one word misread: a folio or a running head pasted over a
+# heading is a different word, not the same one with an o for a 0.
+_LOOK_ALIKE = [set("0oO"), set("1lI|"), set("5S"), set("8B")]
+LOOK_ALIKE_SHORTEST = 6     # a short word has too few letters to prove it
+
+
+def _same_but_look_alikes(ours: str, layer: str) -> bool:
+    if len(ours) != len(layer) or len(ours) < LOOK_ALIKE_SHORTEST \
+            or ours == layer:
+        return False
+    return all(a == b or any(a in g and b in g for g in _LOOK_ALIKE)
+               for a, b in zip(ours, layer))
+
+
 # Words the publisher prints and the reading passed over.
 #
 # A recogniser that writes a page out word by word does what a copyist
@@ -422,7 +442,8 @@ def reconcile_native_text(bodies: list[str], page_paths: list[str]) -> int:
                         len(mine) == 1 or mine[1:] != cand[1:]):
                     continue
                 if open_side and not (_same_word(mine, cand)
-                                      or _same_but_its_marks(mine, cand)):
+                                      or _same_but_its_marks(mine, cand)
+                                      or _same_but_look_alikes(mine, cand)):
                     continue
                 if mine != cand:
                     subs.append((ti, cand))
@@ -433,6 +454,19 @@ def reconcile_native_text(bodies: list[str], page_paths: list[str]) -> int:
         # recorded offsets stay valid.
         edits = [(toks[ti][0], toks[ti][1], toks[ti][2], html.escape(word))
                  for ti, word in subs]
+        # A word that is the text of a link is the link's address too, as
+        # the recogniser wrote it: correcting the text and not the address
+        # left When Protest Becomes Crime showing the right address and
+        # linking to the misread one.
+        tags: dict[int, str] = {}
+        for ti, word in subs:
+            k = toks[ti][0]
+            tag = tags.get(k - 1, parts[k - 1] if k else "")
+            old_word = html.escape(ours[ti])
+            if tag.startswith("<a ") and re.search(
+                    r'href="[^"]*' + re.escape(old_word), tag):
+                tags[k - 1] = tag.replace(old_word, html.escape(word))
+        edits += [(k, 0, len(parts[k]), tag) for k, tag in tags.items()]
         edits += [(toks[ti][0], toks[ti][2], toks[ti][2],
                    " " + html.escape(" ".join(words))) for ti, words in puts]
         for k, a, z, new in sorted(edits, reverse=True):

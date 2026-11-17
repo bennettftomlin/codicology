@@ -557,3 +557,27 @@ def test_a_different_word_at_the_edge_is_still_refused(vtb, tmp_path, ours, laye
     bodies, paths = _native(tmp_path, body, layer + " " + " ".join(TAIL))
     vtb.reconcile_native_text(bodies, paths)
     assert bodies[0].startswith(f"<p>{ours} ")
+
+
+def test_look_alike_glyphs_are_one_word_misread(vtb):
+    """When Protest Becomes Crime p168: the page's last word, a note's
+    address, read with the letter o for each zero."""
+    from codicology.reconcile import _same_but_look_alikes as same
+    assert same("www.archivochile.com/tesis/o3_tpo/o3p00004.pdf",
+                "www.archivochile.com/tesis/03_tpo/03po0004.pdf")
+    assert same("l99l-2O1O", "1991-2010")
+    assert not same("248", "2A8")                 # too short to prove it
+    assert not same("CONCLUSION", "Conclusion")   # setting, not a misread
+    assert not same("Chapter", "Charter")
+    assert not same("barter-free", "barter-tech")
+
+
+def test_a_misread_address_at_the_page_s_end_is_corrected_link_and_all(vtb, tmp_path):
+    good = "www.archivochile.com/tesis/03_tpo/03po0004.pdf"
+    bad = "www.archivochile.com/tesis/o3_tpo/o3p00004.pdf"
+    p = _native_page(tmp_path, "who claimed that the private sector would act 6 " + good)
+    bodies = [f'<p>who claimed that the private sector would act</p><p>6 '
+              f'<a href="http://{bad}">{bad}</a></p>']
+    assert vtb.reconcile_native_text(bodies, [p]) == 1
+    assert f'<a href="http://{good}">{good}</a>' in bodies[0]
+    assert "o3" not in bodies[0]
