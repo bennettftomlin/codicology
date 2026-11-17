@@ -714,6 +714,10 @@ def _read_pages_resiliently(paths: list[str], images: list,
         # page's own layer because the reader failed. A restore is the right
         # thing to ship and the wrong thing to keep: see the cache write.
         provisional = False
+        # What of the reading to keep when the page itself cannot be read
+        # and its own text stands in: kept with that outcome, the page is
+        # served the same way by every later build (see the cache write).
+        keep: "list | None" = None
         # The page came back without its words although words were sent to
         # be read: the recogniser failed, whatever else it returned.
         silent = False
@@ -795,6 +799,7 @@ def _read_pages_resiliently(paths: list[str], images: list,
                         restored = _native_layer_body(path)
                         items = restored or []
                         provisional = bool(restored)
+                        keep = []
                         print(f"    [!] {os.path.basename(path)}: {why} — "
                               + ("restored from the page's own born-digital "
                                  "text" if restored else
@@ -816,6 +821,7 @@ def _read_pages_resiliently(paths: list[str], images: list,
                        f"{why}, and again on a second look ({why2})")
                 items = _native_layer_body(path) or []
                 provisional = bool(items)
+                keep = []
             if why is not None:
                 restored = bool(items)
                 print(f"    [!] {os.path.basename(path)}: {why} — "
@@ -852,7 +858,26 @@ def _read_pages_resiliently(paths: list[str], images: list,
                         f"healthy carries on from {first}.")
         elif has_words(items):
             _read_pages_resiliently.silent.clear()
-        if provisional:
+        if keep is not None and cache is not None:
+            # The reader read this page twice and both times told a story
+            # the page does not hold: it looped on itself, or read nothing
+            # like the page's own text. A recogniser gives a page the same
+            # reading every time, so asking again at every build only re-ran
+            # this, and the book could never be built from its cache: four
+            # on the shelf, for one such page each. A recogniser that
+            # answers with text is reading, so the outcome is kept — the
+            # page's own text standing in, or nothing where it has none —
+            # and served by every later build without asking.
+            #
+            # Not so a page that came back EMPTY. That is also what a
+            # recogniser failing on and off looks like, and one that passed
+            # its test page between two failures once left a book 64 pages
+            # of drawings without their text, replayed by every rebuild.
+            # Those stay unkept, and are read again.
+            cache.put(path, keep, outcome="layer")
+            print(f"    [~] {os.path.basename(path)}: remembered as a page the "
+                  f"reader cannot give, so later builds need not ask again")
+        elif provisional:
             # The guard above already refuses to cache an EMPTY read, for
             # exactly this reason — but a page restored from its own layer
             # is not empty, so it walked past that guard into the cache.

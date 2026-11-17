@@ -947,3 +947,44 @@ def test_a_real_reading_is_still_cached(vtb, tmp_path):
     vtb._read_pages_resiliently([path], [Image.open(path)], Reader(), cache)
     assert cache.kept == [path]
     assert vtb._read_pages_resiliently.restored == []
+
+
+def test_a_refused_page_is_remembered_and_served_without_the_reader(vtb, tmp_path):
+    """Utopia and Modernity in China p160: the reader loops on the page at
+    every build, the page's own text is restored, and nothing was kept — so
+    the book could never be built from its cache. The outcome is kept now,
+    and the next build serves the restore without asking."""
+    from PIL import Image
+    text = ("Index entries for the chapter on utopian thought and the "
+            "modern state, with the names of the reformers and the dates "
+            "of their principal works, gathered from the whole of the book "
+            "and arranged in the order a reader would look for them first.")
+    path = _native_page(tmp_path, "page_0160.png", text)
+    loop = "The design step is then to determine the support strength " * 12
+    cache_file = str(tmp_path / "book.ocr.gz")
+    cache = vtb.OCRCache(cache_file, "fake", ["en"])
+    vtb._read_pages_resiliently.restored = []
+    vtb._read_pages_resiliently.refused = []
+    first = vtb._read_pages_resiliently([path], [Image.open(path)],
+                                        FakeBackend(vtb, [loop]), cache)
+    assert "utopian thought" in first[path][0].html
+    cache.save()
+
+    again = vtb.OCRCache(cache_file, "fake", ["en"])
+    served = again.get(path)
+    assert served is not None, "the outcome was not kept"
+    assert [it.html for it in served] == [it.html for it in first[path]]
+    assert again.layer_served == ["page_0160.png"]
+
+
+def test_an_empty_read_is_still_not_remembered(vtb, tmp_path):
+    """The other refusal stays as it was: a page that comes back empty may
+    be a recogniser failing on and off, and is read again."""
+    from PIL import Image
+    path = _native_page(tmp_path, "page_0000.png", "A page of the publisher's own words, " * 6)
+    cache_file = str(tmp_path / "book.ocr.gz")
+    cache = vtb.OCRCache(cache_file, "fake", ["en"])
+    vtb._read_pages_resiliently.restored = []
+    vtb._read_pages_resiliently.silent.clear()
+    vtb._read_pages_resiliently([path], [Image.open(path)], _CannotReadThisPage(), cache)
+    assert cache.get(path) is None

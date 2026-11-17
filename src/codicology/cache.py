@@ -154,6 +154,7 @@ class OCRCache:
         self._key_memo: dict = {}
         self.hits = 0
         self.stale = 0
+        self.layer_served: list[str] = []   # pages remembered as unreadable
         self.serve_stale = serve_stale
         self.dirty = False
         self.unsaved = 0
@@ -256,13 +257,31 @@ class OCRCache:
                                   box=tuple(it["box"]) if it.get("box") else None,
                                   conf=it.get("conf"),
                                   label=it.get("lab")))
+        if isinstance(entry, dict) and entry.get("outcome") == "layer":
+            # A page the reader could not give, remembered as such (see
+            # put): what was kept of its reading, and the page's own text
+            # standing in for the rest, exactly as the build that read it.
+            from .guards import _native_layer_body
+            served = _native_layer_body(page_path) or []
+            items += served
+            self.layer_served.append(os.path.basename(page_path))
+            print(f"    [~] {os.path.basename(page_path)}: remembered as a page "
+                  f"the reader cannot give — "
+                  + ("its own text layer stands in" if served else
+                     "left without its text, as when it was read"))
         return items
 
     def knows_furniture(self, page_path: str) -> bool:
         """Whether this entry was written by a version that keeps running heads."""
         return isinstance(self._entry(page_path), dict)
 
-    def put(self, page_path: str, items: list[PageItem]) -> None:
+    def put(self, page_path: str, items: list[PageItem],
+            outcome: "str | None" = None) -> None:
+        """Keep a page's reading. `outcome` "layer" keeps instead the fact
+        that the reader could not give this page, with what was worth
+        keeping of its reading (its pictures), so that a later build serves
+        the page's own text layer in its place without asking the reader
+        again; see _read_pages_resiliently."""
         raw = []
         for it in items:
             enc = None
@@ -282,8 +301,10 @@ class OCRCache:
         # cache would silently audit as a book with no folios anywhere. It
         # now also carries the same distinction for layout labels, which is
         # what lets a stale page be re-read exactly once.
-        self.entries[self._key(page_path)] = {"v": CACHE_VERSION,
-                                              "items": raw}
+        entry = {"v": CACHE_VERSION, "items": raw}
+        if outcome:
+            entry["outcome"] = outcome
+        self.entries[self._key(page_path)] = entry
         self.dirty = True
         self.unsaved += 1
         # Checkpoint as we go. Reading a book takes the better part of an hour,
