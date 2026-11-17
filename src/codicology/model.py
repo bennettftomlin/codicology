@@ -1,6 +1,6 @@
 """What a page's reading is made of. Today one PageItem per block in reading
-order, as the reader and the cache hold it; the typed Page and Block of the
-plan (PLAN-2026-11-12.md) are to live here too.
+order, as the reader and the cache hold it; and the typed Page and Block the
+assembly half is moving onto.
 """
 from __future__ import annotations
 
