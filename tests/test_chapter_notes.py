@@ -256,3 +256,51 @@ def test_a_bare_number_out_of_sequence_is_not_an_entry(vtb):
     vtb.link_chapter_notes(bodies, set())
     assert 'id="note-c0-7"' not in bodies[1]
     assert 'note-c0-9"' in bodies[0]          # the gap step still carries on
+
+
+# ── notes heads and entries the reader set unusually ────────────────────────
+
+def _two_chapters(head1, entries1):
+    return ["<p>One.<sup>1</sup> Two.<sup>2</sup> Three.<sup>3</sup></p>",
+            head1 + entries1,
+            "<p>Next.<sup>1</sup> b.<sup>2</sup> c.<sup>3</sup></p>",
+            "<h2>Notes</h2><ol><li>1. x</li><li>2. y</li><li>3. z</li></ol>"]
+
+
+def test_a_notes_head_read_as_a_paragraph_still_opens_the_section(vtb):
+    """Decolonising the University: "<p>Notes</p>", and the chapter's calls
+    were bound to the next chapter's notes."""
+    bodies = _two_chapters("<p>Notes</p>", "<ol><li>1. a</li><li>2. b</li><li>3. c</li></ol>")
+    stats = vtb.link_chapter_notes(bodies, set())
+    assert stats["sections"] == 2 and stats["linked"] == 6
+    assert 'href="page_0001.xhtml#note-c0-1"' in bodies[0]
+    assert 'href="page_0003.xhtml#note-c1-1"' in bodies[2]
+
+
+def test_a_paragraph_saying_notes_without_entries_from_one_is_not_a_head(vtb):
+    bodies = _two_chapters("<p>Notes</p>", "<p>On the sources used here.</p>")
+    assert vtb.count_notes_heads(bodies) == 1
+
+
+def test_entries_a_list_numbers_itself_are_counted(vtb):
+    """Revolutionary Movements in Africa ch. 10: notes 1-4 numbered by the
+    list, "5." onwards in text."""
+    bodies = ["<p>a<sup>1</sup> b<sup>2</sup> c<sup>3</sup> d<sup>4</sup> e<sup>5</sup> f<sup>6</sup></p>",
+              "<h2>NOTES</h2><ol><li>Kurita.</li><li>Leftist.</li><li>Sikainga.</li>"
+              "<li>Johnson.</li></ol><ol style=\"list-style-type: none;\">"
+              "<li>5. Vezzadini.</li><li>6. Young.</li></ol>",
+              "<p>z<sup>1</sup></p>", "<h2>NOTES</h2><ol><li>1. q</li><li>2. r</li><li>3. s</li></ol>"]
+    stats = vtb.link_chapter_notes(bodies, set())
+    assert all(f'#note-c0-{k}"' in bodies[0] for k in range(1, 7))
+    assert '<li id="note-c0-1">Kurita.' in bodies[1]
+
+
+def test_a_list_the_page_broke_does_not_count_from_one_again(vtb):
+    """Decolonising the University ch. 8: note 1 under the head, notes 2 on
+    as a fresh list on the next page. Counted from 1 they were each one low."""
+    bodies = ["<p>a<sup>1</sup> b<sup>2</sup> c<sup>3</sup></p>",
+              "<h2>Notes</h2><ol style=\"list-style-type: none;\"><li>1. Tomaselli.</li></ol>",
+              "<p>(eds) Handbook, p. 352.</p><ol><li>Kovach.</li><li>Clandinin.</li></ol>",
+              "<p>z<sup>1</sup></p>", "<h2>Notes</h2><ol><li>1. q</li><li>2. r</li><li>3. s</li></ol>"]
+    vtb.link_chapter_notes(bodies, set())
+    assert 'id="note-c0-2"' not in bodies[2]       # no numbers it cannot know

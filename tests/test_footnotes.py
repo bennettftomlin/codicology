@@ -376,3 +376,46 @@ def test_a_linked_foot_keeps_the_dress_it_was_printed_in(vtb):
     assert '<p id="fn-p0-n21"><sup><a href="#fnref-p0-n21">21</a></sup> The census.' in b
     assert '<p id="fn-p0-n22"><a href="#fnref-p0-n22">22)</a> A bulletin.' in b
     assert '<p id="fn-p0-n23"><a href="#fnref-p0-n23">23.</a> Ibid.' in b
+
+
+# ── a foot the reader set down out of place ─────────────────────────────────
+
+def test_a_foot_set_between_paragraphs_still_links(vtb):
+    """The Modern Corporation p253: no rule, and the foot read in between
+    two paragraphs of the page's prose."""
+    prose = "The directors were held to a standard of care in every case. " * 4
+    bodies = [f"<p>{prose}The question of interlocking directors.<sup>5</sup></p>"
+              "<p><sup>5</sup> Robotham v. Prudential Insurance Co., 64 N.J. Eq. 673.</p>"
+              f"<p>There is real confusion of thought here. {prose}</p>"]
+    stats = vtb.link_footnotes(bodies, allow_numbered=True)
+    assert stats["scattered"] == 1
+    assert 'href="#fn-p0-n5"' in bodies[0] and 'id="fn-p0-n5"' in bodies[0]
+
+
+def test_a_foot_above_the_rule_links_and_one_below_is_left_to_the_shape(vtb):
+    prose = "Stock was dispersed among a great many holders by then. " * 4
+    above = f"<p><sup>2</sup> Standard Corporation Records.</p><hr/><p>{prose}<sup>2</sup></p>"
+    bodies = [above]
+    assert vtb.link_footnotes(bodies, allow_numbered=True)["scattered"] == 1
+    bodies = [TWO_PARAS]
+    assert vtb.link_footnotes(bodies, allow_numbered=True)["numbered"] == 0
+
+
+def test_a_raised_foot_number_needs_no_space_after_it(vtb):
+    """Gilded Rage: "<sup>1</sup><a href=…>", the address hard against it."""
+    prose = "Thiel donated a large sum to the campaign that autumn. " * 4
+    bodies = [f"<p>{prose}accurate.<sup>1</sup></p><hr/>"
+              '<p><sup>1</sup><a href="https://example.org/a">https://example.org/a</a></p>']
+    assert vtb.link_footnotes(bodies, allow_numbered=True)["numbered"] == 1
+
+
+def test_feet_set_as_a_list_closing_the_page(vtb):
+    """Disturbing Times: no rule, the feet a list of "10 During…" items."""
+    prose = "Scholars in the field have long argued over the term itself. " * 4
+    bodies = [f"<p>{prose}one.<sup>10</sup> And another.<sup>11</sup></p>"
+              '<ol style="list-style-type: none;"><li>10 During one incident.</li>'
+              "<li>11 Those few that spoke out.</li></ol>"]
+    stats = vtb.link_footnotes(bodies, allow_numbered=True)
+    assert stats["numbered"] == 2
+    assert '<li style="list-style-type: none;"' not in bodies[0]
+    assert '<li id="fn-p0-n10"><a href="#fnref-p0-n10">10</a> During' in bodies[0]

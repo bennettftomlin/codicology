@@ -146,17 +146,22 @@ def test_a_shifted_book_is_never_bound_across_the_shift(vtb):
         "<li>5. e</li><li>6. f</li><li>7. g</li><li>8. h</li></ol>"
         "<h2>Chapter Two</h2><ol><li>1. x</li><li>2. y</li><li>3. z</li></ol>",
     ]
+    # Since 17 November a heading ahead of the first recognised one, with
+    # entry 1 straight under it, is the group of the matter before chapter
+    # one (How America Became Capitalist's epigraph and introduction): so
+    # this book is no longer shifted at all, and every chapter reaches its
+    # own notes. That a section with NO readable head is still refused is
+    # the test above.
     stats = vtb.link_notes(bodies, dropped=set())
-    assert stats["misaligned"] is True
-    assert "noteref" not in bodies[0], "a chapter with no parsed notes was bound"
-    # chapter one's eight markers reach chapter one's notes, a…h
+    assert not stats["misaligned"]
+    assert bodies[0].count('href="page_0003.xhtml#note-g0-') == 3   # i…iii
     assert bodies[1].count("noteref") == 8
-    assert 'href="page_0003.xhtml#note-g0-8"' in bodies[1]
-    assert '<li id="note-g0-8"><a href="page_0001.xhtml#ref-g0-8">8.</a> h</li>' \
+    assert 'href="page_0003.xhtml#note-g1-8"' in bodies[1]           # a…h
+    assert '<li id="note-g1-8"><a href="page_0001.xhtml#ref-g1-8">8.</a> h</li>' \
         in bodies[3]
     # and chapter two's three reach x…z, not chapter one's
-    assert 'href="page_0003.xhtml#note-g1-3"' in bodies[2]
-    assert '<li id="note-g1-3"><a href="page_0002.xhtml#ref-g1-3">3.</a> z</li>' \
+    assert 'href="page_0003.xhtml#note-g2-3"' in bodies[2]
+    assert '<li id="note-g2-3"><a href="page_0002.xhtml#ref-g2-3">3.</a> z</li>' \
         in bodies[3]
 
 
@@ -554,3 +559,34 @@ def test_a_br_run_at_a_chapter_tail_keeps_its_own_group(vtb):
     assert [[n for _, n, _ in g] for g in groups] == [[1, 2, 3, 4], [1, 2]]
     stats = vtb.link_notes(bodies, set())
     assert stats["linked"] == 6 and not stats["misaligned"]
+
+
+def test_title_heads_in_front_of_chapter_one_open_groups(vtb):
+    """How America Became Capitalist: the epigraph's and introduction's
+    notes headed by their titles alone, ahead of "1. The Origins…"."""
+    bodies = ["<p>Epigraph.<sup>1</sup></p>",
+              "<p>Intro.<sup>1</sup> b.<sup>2</sup> c.<sup>3</sup> d.<sup>4</sup></p>",
+              "<p>Ch1.<sup>1</sup> b.<sup>2</sup> c.<sup>3</sup></p>",
+              "<h1>Notes</h1><h2><i>On the Prospect of Planting Arts</i></h2>"
+              "<ol><li>1. Berkeley.</li></ol>"
+              "<h3><i>Introduction: The Embrace of Empire</i></h3>"
+              "<ol><li>1. a</li><li>2. b</li><li>3. c</li><li>4. d</li></ol>"
+              "<h2>1. <i>The Origins of Colonial Society</i></h2>"
+              "<ol><li>1. x</li><li>2. y</li><li>3. z</li></ol>"]
+    _, groups = vtb.parse_notes_section(bodies)
+    assert [len(g) for g in groups] == [1, 4, 3]
+
+
+def test_a_section_of_title_heads_alone_links_only_when_it_matches_the_body(vtb):
+    """Behind the Cold War on China: every group headed by a chapter title."""
+    def book(ch2_calls):
+        return ["<p>A.<sup>1</sup> B.<sup>2</sup> C.<sup>3</sup> D.<sup>4</sup></p>",
+                "<p>" + "".join(f"x.<sup>{k}</sup> " for k in range(1, ch2_calls + 1)) + "</p>",
+                "<h1>Notes</h1><h2>Behind the Hysteria</h2>"
+                "<ol><li>1. a</li><li>2. b</li><li>3. c</li><li>4. d</li></ol>"
+                "<h2>Putting the Campaign in Context</h2>"
+                "<ol><li>1. e</li><li>2. f</li></ol>"]
+    bodies = book(2)
+    assert vtb.link_notes(bodies, dropped=set())["linked"] == 6
+    bodies = book(5)            # the body does not say what the notes say
+    assert vtb.link_notes(bodies, dropped=set())["linked"] == 0

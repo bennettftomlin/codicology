@@ -146,6 +146,13 @@ GROUP_HEAD_SECTION = re.compile(
     r"\s*(?:</[a-zA-Z]+>\s*)*</\1>")
 
 
+_HEAD_THEN_FIRST = re.compile(
+    r"<(h[1-6])\b[^>]*>(?:(?!</\1>).){1,300}</\1>\s*"
+    r"(?:<(?:ol|ul)\b[^>]*>\s*)?<(?:p|li)\b[^>]*>\s*(?:<sup>\s*)?1"
+    r"(?:\.|\s*</sup>|\s+(?=[^\W\d_]))",
+    re.S)
+
+
 def _notes_follow(bodies: list[str], page: int, pos: int) -> bool:
     """Whether what stands under a NOTES head is notes: a numbered entry,
     in any dress the parsers read, before the page after next begins.
@@ -165,11 +172,36 @@ def _notes_follow(bodies: list[str], page: int, pos: int) -> bool:
         NOTE_ENTRY, NOTE_ENTRY_PLAIN, NOTE_ENTRY_LI, NOTE_ENTRY_BARE))
 
 
+# The head may come back as a plain paragraph that says "Notes": Decolonising
+# the University sets three of its chapters' notes under one, and the
+# calls of each were bound to the next chapter's notes that had a heading
+# — notes 1 to 12 of another chapter, confidently and wrongly — and the
+# rest left plain. A paragraph is weaker evidence than a heading, so it
+# stands for one only where the entries under it count 1, 2, 3, the floor
+# the headless sections are held to.
+PARA_NOTES_HEAD = re.compile(
+    rf"<p[^>]*>\s*(?:<(b|i|strong|em)>\s*)?{_NOTES_WORDS}\s*(?:</\1>\s*)?</p>",
+    re.I)
+
+
+def _counts_from_one(bodies: list[str], page: int, pos: int) -> bool:
+    tail = bodies[page][pos:pos + 1200]
+    ns = [n for _, n in sorted(
+        (m.start(), int(m.group(1)))
+        for pat in (NOTE_ENTRY, NOTE_ENTRY_PLAIN, NOTE_ENTRY_LI)
+        for m in pat.finditer(tail))]
+    return ns[:3] == [1, 2, 3]
+
+
 def notes_head_on(bodies: list[str], page: int, pattern=None):
     """The first NOTES head on this page that notes follow, or None."""
     for m in (pattern or NOTES_HEAD).finditer(bodies[page]):
         if _notes_follow(bodies, page, m.end()):
             return m
+    if pattern is None:
+        for m in PARA_NOTES_HEAD.finditer(bodies[page]):
+            if _counts_from_one(bodies, page, m.end()):
+                return m
     return None
 
 
@@ -216,7 +248,8 @@ def _bare_numbered(bodies: list[str], start: int) -> bool:
     return bare >= 10
 
 
-def parse_notes_section(bodies: list[str]) -> tuple[int, list[list[tuple[int, int, int]]]]:
+def parse_notes_section(bodies: list[str], title_heads: bool = False
+                        ) -> tuple[int, list[list[tuple[int, int, int]]]]:
     """
     The book's endnotes, grouped as the book groups them.
 
@@ -269,6 +302,22 @@ def parse_notes_section(bodies: list[str]) -> tuple[int, list[list[tuple[int, in
                 heads.append((m.start(), "group", no))
         for m in GROUP_HEAD_SECTION.finditer(b):
             heads.append((m.start(), "group", None))
+        # A heading with nothing to say it is a chapter's, whose first
+        # entry follows at once: How America Became Capitalist heads the
+        # notes to its epigraph and its introduction with their titles
+        # alone, before "1. The Origins of Colonial Society", and entries
+        # are kept only once a group is open, so 56 notes were read past
+        # and the 56 calls in front of chapter one had nothing to pair with.
+        # The entry that follows must be the first, as a group's is, and
+        # such a heading counts only AHEAD of the first group a pattern
+        # does recognise — a preface's, an epigraph's, an introduction's.
+        # A section none of whose heads can be read must still be refused
+        # rather than guessed at (see the test of that name).
+        taken = {pos for pos, _, _ in heads}
+        for m in _HEAD_THEN_FIRST.finditer(b):
+            if m.start() not in taken \
+                    and not NOTES_SECTION_HEAD.match(b, m.start()):
+                heads.append((m.start(), "front", None))
         events = sorted(heads + sup_notes + plain_notes, key=lambda e: e[0])
         if i > start and not events and open_notes:
             # one event-less page may be a blank leaf inside the notes; two
@@ -281,9 +330,16 @@ def parse_notes_section(bodies: list[str]) -> tuple[int, list[list[tuple[int, in
         for pos, kind, n in events:
             if kind == "group":
                 seen_group, open_notes = True, False
-            elif seen_group:
+            elif seen_group and kind != "front":
                 open_notes = True
             stream.append((i, pos, kind, n))
+    first_group = next((at for at, e in enumerate(stream) if e[2] == "group"),
+                       None)
+    stream = [(i, pos, "group" if title_heads or at < (first_group or 0)
+               else None, n)
+              if kind == "front" else (i, pos, kind, n)
+              for at, (i, pos, kind, n) in enumerate(stream)]
+    stream = [e for e in stream if e[2] is not None]
     skip = _lists_inside_notes(stream)
     for at, (i, pos, kind, n) in enumerate(stream):
         if at in skip:
@@ -452,6 +508,12 @@ def _entry_anchor(entry: str, note_id: str, back_href: str, n: int):
     if bb is not None and int(bb.group(3)) == n:
         return bb.end(), (f'{bb.group(1)}{bb.group(2)}'
                           f'<a id="{note_id}" href="{back_href}">{n}</a>')
+    # An item its list numbers: the list draws the figure, so there is none
+    # to make a link of; the item takes the id, and the call reaches it.
+    lm = re.match(r"<li\b([^>]*)>", entry)
+    if lm is not None and "id=" not in lm.group(1) \
+            and not re.match(r"<li\b[^>]*>\s*(?:<[^>]+>\s*)*\d", entry):
+        return lm.end(), f'<li{lm.group(1)} id="{note_id}">'
     sm = re.match(r"(<br\s*/?>)(\s*)<sup>\s*(\d{1,3})\s*</sup>", entry)
     if sm is not None:
         # the superscript is the book's own typesetting and stays; only the
@@ -498,6 +560,41 @@ def _bare_in_sequence(n: int, expect: int, taken: dict, after) -> bool:
     was taken, and `after()` (the number of the next entry, dotted or
     superscript, on its page or the page after) is n + 1."""
     return n == expect and (n - 1) in taken and after() == n + 1
+
+
+# A notes section may open with entries the list numbers itself: an <ol>
+# whose items carry no figure, the reader having left the numbering to the
+# list. Revolutionary Movements in Africa's chapter 10 sets notes 1 to 4
+# that way and "5." onwards in text, so its walk found no 1 and all 57
+# calls stayed plain. Such an item is entry (start + its place).
+_COUNTING_LIST = re.compile(
+    r"<ol(?![^>]*list-style-type:\s*none)([^>]*)>((?:(?!</ol>).)*)</ol>", re.S)
+
+
+def _counted_list_entries(body: str) -> "list[tuple[int, int]]":
+    """(position, number) of each item a numbering list numbers itself."""
+    out = []
+    for lm in _COUNTING_LIST.finditer(body):
+        # Only a list standing directly under the notes head counts from
+        # its own start. Further on it is a list the page broke: Decolonising
+        # the University's chapter 8 sets note 1 under its head and notes 2
+        # to 21 on the next page as a fresh list, which counted from 1 put
+        # every one of them a number low.
+        heads = [m.end() for pat in (NOTES_HEAD, PARA_NOTES_HEAD)
+                 for m in pat.finditer(body, 0, lm.start())]
+        if not heads or len(_strip_tags(body[max(heads):lm.start()]).split()) > 12 \
+                or re.search(r"<li\b", body[max(heads):lm.start()]):
+            continue
+        items = list(re.finditer(r"<li\b[^>]*>", lm.group(2)))
+        texts = [lm.group(2)[it.end():it.end() + 12] for it in items]
+        if len(items) < 2 or any(re.match(r"\s*(?:<[^>]+>\s*)*\d", t)
+                                 for t in texts):
+            continue
+        start = re.search(r'start="(\d+)"', lm.group(1))
+        first = int(start.group(1)) if start else 1
+        base = lm.start(2)
+        out += [(base + it.start(), first + k) for k, it in enumerate(items)]
+    return out
 
 
 def link_chapter_notes(bodies: list[str], dropped: set) -> dict:
@@ -553,10 +650,12 @@ def link_chapter_notes(bodies: list[str], dropped: set) -> dict:
             # shared the counter and a page whose entries alternate forms
             # (sup 1, plain 2, sup 3) permanently skipped the later sup
             return sorted(
-                ((m.start(), int(m.group(1)))
+                [(m.start(), int(m.group(1)))
                  for pat in (NOTE_ENTRY, NOTE_ENTRY_PLAIN, NOTE_ENTRY_LI)
                  for m in pat.finditer(bodies[page])
-                 if not (page == hp and m.start() < from_pos)),
+                 if not (page == hp and m.start() < from_pos)]
+                + [(pos, n) for pos, n in _counted_list_entries(bodies[page])
+                   if not (page == hp and pos < from_pos)],
                 key=lambda t: t[0])
 
         def bare_on(page: int) -> "list[tuple[int, int]]":
@@ -874,8 +973,13 @@ FOOT_SHAPE = re.compile(r"<p[^>]*>\s*" + FOOT_MARK + r"\s*\S")
 
 # The same thing with its number captured: what a foot entry is, wherever the
 # page happens to put the block.
-FOOT_ENTRY = re.compile(r"<p[^>]*>\s*(?:<sup>\s*)?(\d{1,3})[.)]?\s*"
-                        r"(?:</sup>)?\s+(?=\S)")
+#
+# A raised number needs no space after it: its closing tag already ends it.
+# Gilded Rage sets each foot as "<sup>1</sup><a href=…>", the address hard
+# against the number, and 255 of its calls stayed plain for want of a space
+# a later pass puts there.
+FOOT_ENTRY = re.compile(r"<(p|li)\b[^>]*>\s*(?:<sup>\s*)?(\d{1,3})[.)]?\s*"
+                        r"(?:</sup>\s*|\s+)(?=\S)")
 
 
 def _looks_like_foot_block(below: str) -> bool:
@@ -891,6 +995,11 @@ def _looks_like_foot_block(below: str) -> bool:
     if re.search(r"<h[1-6][\s>]", below):
         return False
     first = re.search(r"<(p|ol|ul|table|figure|blockquote)[^>]*>", below)
+    if first is not None and first.group(1) == "ol":
+        items = re.findall(r"<li\b[^>]*>(.{0,40})", below, re.S)
+        return bool(items) and all(
+            re.match(r"\s*" + FOOT_MARK + r"\s*\S", t) for t in items) \
+            and not re.search(r"<p\b", below[first.start():])
     if first is None or first.group(1) != "p":
         return False
     if not FOOT_SHAPE.match(below[first.start():]):
@@ -923,6 +1032,16 @@ def _foot_block_without_a_rule(body: str) -> int:
     it is real prose: a page that is nothing but numbered paragraphs is a
     list, or a notes page, and neither is a page with feet under it.
     """
+    # The feet may be a list closing the page, every item opening with its
+    # number: Disturbing Times sets seventeen pages' notes that way with no
+    # rule over them, and 53 calls in three books stayed plain.
+    tail = re.search(r"<ol\b[^>]*>((?:(?!</ol>).)*)</ol>\s*$", body, re.S)
+    if tail:
+        items = re.findall(r"<li\b[^>]*>(.{0,40})", tail.group(1), re.S)
+        if items and all(re.match(r"\s*(?:<sup>\s*)?\d{1,3}(?:\s*</sup>|[.)]?\s)", t)
+                         for t in items) \
+                and len(_strip_tags(body[:tail.start()]).split()) >= 30:
+            return tail.start()
     paras = list(re.finditer(r"<p[^>]*>.*?</p>", body, re.S))
     if len(paras) < 2:
         return 0
@@ -1060,6 +1179,51 @@ def _table_notes(body: str, pi: int) -> "tuple[str, int]":
     return body, len(claimed)
 
 
+# A foot the reader set down somewhere other than the foot of its page: above
+# the rule, between two paragraphs, at the top. A paragraph that opens with a
+# raised number is a foot wherever it stands — running prose never does —
+# and on its own page, with that number raised once in the prose and once at
+# the head of such a paragraph, the pair is settled as surely as under a
+# rule. The Modern Corporation lost 41 calls to its reading order this way.
+_LEAD_FOOT = re.compile(r"<p([^>]*)>(\s*)<sup>\s*(\d{1,3})\s*</sup>(?=\s*\S)")
+_BARE_CALL = re.compile(r"<sup>\s*(\d{1,3})\s*</sup>")
+
+
+def _scattered_feet(body: str, pi: int, before: "int | None" = None
+                    ) -> "tuple[str, int]":
+    """Pair the feet a page holds out of place with their calls. Under a
+    rule the shape tests decide (a rule is not always a footnote rule), so
+    on a page that has one, `before` limits this to feet standing above it."""
+    feet: dict[int, list] = {}
+    for m in _LEAD_FOOT.finditer(body):
+        if before is not None and m.start() >= before:
+            continue
+        if "id=" not in m.group(1):
+            feet.setdefault(int(m.group(3)), []).append(m)
+    if not feet:
+        return body, 0
+    starts = {m.end() - len(m.group(0)) + m.group(0).find("<sup>")
+              for ms in feet.values() for m in ms}
+    calls: dict[int, list] = {}
+    for m in _BARE_CALL.finditer(body):
+        if m.start() not in starts:
+            calls.setdefault(int(m.group(1)), []).append(m)
+    edits = []
+    for n, fs in feet.items():
+        cs = calls.get(n, [])
+        if len(fs) != 1 or len(cs) != 1:
+            continue
+        f, c = fs[0], cs[0]
+        fid, rid = f"fn-p{pi}-n{n}", f"fnref-p{pi}-n{n}"
+        edits.append((f.start(), f.end(), f'<p{f.group(1)} id="{fid}">{f.group(2)}'
+                      f'<sup><a href="#{rid}">{n}</a></sup>'))
+        edits.append((c.start(), c.end(), f'<sup><a epub:type="noteref" id="{rid}" '
+                      f'href="#{fid}">{n}</a></sup>'))
+    for a, z, new in sorted(edits, reverse=True):
+        body = body[:a] + new + body[z:]
+    return body, len(edits) // 2
+
+
 def link_footnotes(bodies: list[str], allow_numbered: bool = False,
                    foot_labelled: "list | None" = None) -> dict:
     """
@@ -1120,6 +1284,13 @@ def link_footnotes(bodies: list[str], allow_numbered: bool = False,
             # symbols have no such trailing-run signature to stand on.
             cut = _foot_block_without_a_rule(body) if allow_numbered else 0
             if not cut:
+                if allow_numbered:
+                    body, k = _scattered_feet(body, pi)
+                    if k:
+                        bodies[pi] = body
+                        stats["linked"] += k
+                        stats["numbered"] += k
+                        stats["scattered"] = stats.get("scattered", 0) + k
                 continue
             above, below, rule = body[:cut], body[cut:], ""
             stats["ruleless"] += 1
@@ -1159,7 +1330,7 @@ def link_footnotes(bodies: list[str], allow_numbered: bool = False,
                 mark_by_n.setdefault(int(m.group(1)), []).append(m)
             foot_by_n: dict[int, list] = {}
             for m in FOOT_ENTRY.finditer(below):
-                foot_by_n.setdefault(int(m.group(1)), []).append(m)
+                foot_by_n.setdefault(int(m.group(2)), []).append(m)
             both = sorted(set(mark_by_n) & set(foot_by_n))
             usable = [n for n in both
                       if len(mark_by_n[n]) == 1 and len(foot_by_n[n]) == 1]
@@ -1172,11 +1343,14 @@ def link_footnotes(bodies: list[str], allow_numbered: bool = False,
                 # stays one, and "1)" or a bare "1" gains no full stop. Every
                 # entry used to come out "1.", which put a stop the book never
                 # printed after each superscript foot it linked.
-                mark = re.match(r"<p[^>]*>\s*(<sup>)?\s*\d{1,3}([.)]?)", f.group(0))
-                num = f'<a href="#fnref-p{pi}-n{n}">{n}{mark.group(2)}</a>'
+                mark = re.match(r"<(p|li)\b([^>]*)>\s*(<sup>)?\s*\d{1,3}([.)]?)",
+                                f.group(0))
+                num = f'<a href="#fnref-p{pi}-n{n}">{n}{mark.group(4)}</a>'
+                # a list item keeps its own attributes: they are its list's
+                keep = mark.group(2) if mark.group(1) == "li" else ""
                 below = (below[:f.start()]
-                         + f'<p id="fn-p{pi}-n{n}">'
-                         + (f"<sup>{num}</sup> " if mark.group(1) else f"{num} ")
+                         + f'<{mark.group(1)}{keep} id="fn-p{pi}-n{n}">'
+                         + (f"<sup>{num}</sup> " if mark.group(3) else f"{num} ")
                          + below[f.end():])
             for n in sorted(usable, key=lambda n: mark_by_n[n][0].start(),
                             reverse=True):
@@ -1189,6 +1363,13 @@ def link_footnotes(bodies: list[str], allow_numbered: bool = False,
             stats["numbered"] += len(usable)
 
         bodies[pi] = above + rule + tail + below
+        if allow_numbered:
+            bodies[pi], k = _scattered_feet(
+                bodies[pi], pi, before=len(above) if rule else None)
+            if k:
+                stats["linked"] += k
+                stats["numbered"] += k
+                stats["scattered"] = stats.get("scattered", 0) + k
     return stats
 
 
@@ -1405,6 +1586,15 @@ def link_notes(bodies: list[str], dropped: set[int],
     """
     stats = {"linked": 0, "unlinked": 0, "groups": 0, "misaligned": False}
     notes_start, note_groups = parse_notes_section(bodies)
+    titled = False
+    if notes_start >= 0 and not note_groups:
+        # Not one head the patterns know: Behind the Cold War on China heads
+        # every group of its notes with its chapter's title alone. Each such
+        # heading over an entry 1 is taken for a group here, on the strict
+        # terms below — as many groups as the body has, every pair agreeing —
+        # since a section of unreadable heads must otherwise be refused.
+        notes_start, note_groups = parse_notes_section(bodies, title_heads=True)
+        titled = bool(note_groups)
     if notes_start < 0 or not note_groups:
         return stats
     group_numbers = getattr(parse_notes_section, "last_group_numbers", [])
@@ -1429,6 +1619,11 @@ def link_notes(bodies: list[str], dropped: set[int],
         body_groups = [by_no[no] for no in group_numbers]
     else:
         body_groups = _best_body_groups(bodies, notes_start, len(note_groups))
+    if titled and (len(body_groups) != len(note_groups)
+                   or not all(_paired_groups_agree([bg], [ng], min_judged=1)
+                              for bg, ng in zip(body_groups, note_groups))):
+        stats["misaligned"] = True
+        return stats
     if len(body_groups) != len(note_groups):
         if abs(len(body_groups) - len(note_groups)) > 2:
             stats["misaligned"] = True
