@@ -487,6 +487,19 @@ def _steps_over_a_lost_entry(n: int, expect: int, later: "list[int]",
     return (n + 1) in later or (n + 1) in next_page()
 
 
+# An entry printed without the full stop its neighbours have: "<li>12 The
+# newspaper…" between "11." and "13.". The book's own setting is the dotted
+# one, so a bare numeral is not read as an entry in general (it is a page
+# number running on, or "75 per cent" opening a paragraph) — only where it is
+# the very next number after an entry just taken, and the entry straight
+# after it is its own next. 2083 lost calls 12, 18 and 34 to it.
+def _bare_in_sequence(n: int, expect: int, taken: dict, after) -> bool:
+    """Whether a bare-numbered entry n sits in sequence: n is wanted, n - 1
+    was taken, and `after()` (the number of the next entry, dotted or
+    superscript, on its page or the page after) is n + 1."""
+    return n == expect and (n - 1) in taken and after() == n + 1
+
+
 def link_chapter_notes(bodies: list[str], dropped: set) -> dict:
     """
     Chapter-endnotes layout: a "Notes" section closes each chapter, entries
@@ -546,16 +559,30 @@ def link_chapter_notes(bodies: list[str], dropped: set) -> dict:
                  if not (page == hp and m.start() < from_pos)),
                 key=lambda t: t[0])
 
+        def bare_on(page: int) -> "list[tuple[int, int]]":
+            return [(m.start(), int(m.group(1)))
+                    for m in NOTE_ENTRY_BARE.finditer(bodies[page])
+                    if not (page == hp and m.start() < from_pos)]
+
         while pi < len(bodies):
             found_here = False
             matches = entries_on(pi)
-            for j, (pos, n) in enumerate(matches):
-                if n == expect or _steps_over_a_lost_entry(
-                        n, expect, [m for _, m in matches[j + 1:]],
-                        lambda: [m for _, m in entries_on(pi + 1)]
-                        if pi + 1 < len(bodies)
-                        and not (k + 1 < len(heads) and pi + 1 > heads[k + 1][0])
-                        else []):
+            following = (lambda: [m for _, m in entries_on(pi + 1)]
+                         if pi + 1 < len(bodies)
+                         and not (k + 1 < len(heads) and pi + 1 > heads[k + 1][0])
+                         else [])
+            walk = sorted([(pos, n, j) for j, (pos, n) in enumerate(matches)]
+                          + [(pos, n, None) for pos, n in bare_on(pi)])
+            for pos, n, j in walk:
+                if j is None:
+                    def after(pos=pos):
+                        nxt = [m for p, m in matches if p > pos] or following()
+                        return nxt[0] if nxt else None
+                    taken = _bare_in_sequence(n, expect, entries, after)
+                else:
+                    taken = n == expect or _steps_over_a_lost_entry(
+                        n, expect, [m for _, m in matches[j + 1:]], following)
+                if taken:
                     entries.setdefault(n, (pi, pos))
                     expect = n + 1
                     found_here = True

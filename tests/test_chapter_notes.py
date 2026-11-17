@@ -225,3 +225,34 @@ def test_a_stray_number_does_not_carry_the_walk_off(vtb):
     vtb.link_chapter_notes(bodies, set())
     assert 'id="note-c0-8"' not in bodies[1]
     assert all(f'note-c0-{k}"' in bodies[0] for k in range(1, 6))
+
+
+# ── an entry printed without its full stop ───────────────────────────────────
+
+def _bare(entry_for_7, n_notes=10, extra=""):
+    bodies = _missing(n_notes=n_notes, gone=(7,), extra=extra)
+    bodies[1] = bodies[1].replace("<p>8. ", f"{entry_for_7}<p>8. ")
+    return bodies
+
+
+def test_an_entry_without_its_full_stop_links_between_its_neighbours(vtb):
+    """2083: "<li>12 The newspaper…" between 11. and 13. left call 12 plain."""
+    bodies = _bare("<p>7 The newspaper said so.</p>")
+    stats = vtb.link_chapter_notes(bodies, set())
+    assert 'href="page_0001.xhtml#note-c0-7"' in bodies[0]
+    # the book printed no full stop and none is written
+    assert '<p id="note-c0-7"><a href="page_0000.xhtml#ref-c0-7">7</a> The' in bodies[1]
+    assert stats["linked"] == 20 and stats["unlinked"] == 0
+
+
+def test_a_bare_number_out_of_sequence_is_not_an_entry(vtb):
+    # "75 per cent…" opening a paragraph is wanted by nothing
+    bodies = _bare("<p>75 per cent of the losses.</p>")
+    vtb.link_chapter_notes(bodies, set())
+    assert 'note-c0-75"' not in bodies[1] and 'note-c0-7"' not in bodies[0]
+    # the right number, but what follows is not its next
+    bodies = _missing(gone=(7, 8))
+    bodies[1] = bodies[1].replace("<p>9. ", "<p>7 Ibid.</p><p>9. ")
+    vtb.link_chapter_notes(bodies, set())
+    assert 'id="note-c0-7"' not in bodies[1]
+    assert 'note-c0-9"' in bodies[0]          # the gap step still carries on
