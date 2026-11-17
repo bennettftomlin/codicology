@@ -191,6 +191,44 @@ def mend_swallowed_links(bodies: list) -> int:
     return n
 
 
+# A link that covers only the first part of its address, the rest following
+# it as plain text: "<a href=…abstract=2723611>https://papers</a>.ssrn.com/
+# abstract=2723611". The page reads in full and the address is whole, but
+# only "https://papers" can be pressed. A layer that breaks the address over
+# a line holds it as two words, and the reconciler gave the link the first.
+# 1,143 links in 62 books on the shelf. Where the link's text and the run
+# hard against it spell the address, the link is closed after the run.
+_SHORT_LINK = re.compile(r'<a href="([^"]+)">([^<]+)</a>([^\s<]+)')
+_TRAILING = ".,;:’”'\")]"
+
+
+def close_short_links(bodies: list[str]) -> int:
+    n = 0
+    for i, body in enumerate(bodies):
+        if "</a>" not in body:
+            continue
+
+        def mend(m):
+            nonlocal n
+            href, text, rest = m.group(1), m.group(2), m.group(3)
+            core = rest.rstrip(_TRAILING)
+            # a closing bracket the address itself holds stays with it
+            while len(core) < len(rest) and rest[len(core)] == ")" \
+                    and core.count("(") > core.count(")"):
+                core += ")"
+            whole = html.unescape(text + core)
+            target = html.unescape(href)
+            if not core or not re.search(r"[/.=]", whole) or not (
+                    target == whole or target.endswith("//" + whole)
+                    or target.endswith(whole) and len(whole) > 12):
+                return m.group(0)
+            n += 1
+            return f'<a href="{href}">{text}{core}</a>{rest[len(core):]}'
+
+        bodies[i] = _SHORT_LINK.sub(mend, body)
+    return n
+
+
 def repair_c1_controls(bodies: list[str]) -> int:
     """Put back the punctuation a mis-decoded text layer turned into controls.
 

@@ -33,7 +33,7 @@ from .page_review import DUPE_SIMILARITY, flag_pages, review_pages, write_review
 from .photos import read_image, resolve_selector
 from .reading import _read_pages, _read_pages_resiliently, turn_sideways_bodies
 from .reconcile import reconcile_native_text
-from .typography import join_page_break_hyphens, mend_swallowed_links, normalize_typography, repair_c1_controls, unusual_characters
+from .typography import close_short_links, join_page_break_hyphens, mend_swallowed_links, normalize_typography, repair_c1_controls, unusual_characters
 
 
 # A signature mark: the letter a printer set at the foot of the first page
@@ -530,6 +530,10 @@ def build_epub(
     if n_promoted:
         print(f"    promoted {n_promoted} bold note head(s) to headings")
     n_reconciled = reconcile_native_text(bodies, page_paths)
+    n_short = close_short_links(bodies)
+    if n_short:
+        print(f"    closed {n_short} link(s) over the rest of the address "
+              f"their text was cut from")
     if n_reconciled:
         print(f"    reconciled {n_reconciled} word(s) against the book's "
               f"own born-digital text")

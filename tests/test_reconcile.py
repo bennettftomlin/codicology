@@ -593,3 +593,14 @@ def test_a_link_s_address_is_not_cut_to_the_layer_s_half_of_it(vtb, tmp_path):
               f'<a href="{whole}">{whole}</a> for the text</p>']
     vtb.reconcile_native_text(bodies, [p])
     assert f'href="{whole}"' in bodies[0]
+
+
+def test_a_link_cut_short_is_closed_over_the_rest_of_its_address(vtb):
+    from codicology.typography import close_short_links
+    b = ['<p><a href="https://papers.ssrn.com/abstract=2723611">https://papers</a>'
+         '.ssrn.com/abstract=2723611.</p>',
+         '<p><a href="http://example.com/x">example</a>s are many.</p>']
+    assert close_short_links(b) == 1
+    assert ('<a href="https://papers.ssrn.com/abstract=2723611">'
+            'https://papers.ssrn.com/abstract=2723611</a>.</p>') in b[0]
+    assert b[1] == '<p><a href="http://example.com/x">example</a>s are many.</p>'
