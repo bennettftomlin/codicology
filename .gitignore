@@ -223,8 +223,6 @@ __marimo__/
 # Calibre plugin build artifact
 calibre-plugin/codicology-ocr.zip
 
-# Working notes (audits, plans, reviews) stay on disk and out of the
-# repository: only the READMEs and the plugin's VERIFY.md are tracked.
-*.md
-!README.md
-!calibre-plugin/VERIFY.md
+# Working notes stay on disk and out of the repository.
+AUDIT-*.md
+PLAN-*.md
