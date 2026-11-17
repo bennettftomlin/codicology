@@ -457,9 +457,15 @@ def reconcile_native_text(bodies: list[str], page_paths: list[str]) -> int:
         # A word that is the text of a link is the link's address too, as
         # the recogniser wrote it: correcting the text and not the address
         # left When Protest Becomes Crime showing the right address and
-        # linking to the misread one.
+        # linking to the misread one. Only a glyph-for-glyph correction is
+        # carried there. Carrying every one cut 1,283 addresses short on the
+        # shelf: a layer that breaks an address over a line holds it as two
+        # words, the text had already been given the first ("https://papers"
+        # for the whole SSRN address), and the link went with it.
         tags: dict[int, str] = {}
         for ti, word in subs:
+            if not _same_but_look_alikes(ours[ti], word):
+                continue
             k = toks[ti][0]
             tag = tags.get(k - 1, parts[k - 1] if k else "")
             old_word = html.escape(ours[ti])

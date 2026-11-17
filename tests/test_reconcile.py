@@ -581,3 +581,15 @@ def test_a_misread_address_at_the_page_s_end_is_corrected_link_and_all(vtb, tmp_
     assert vtb.reconcile_native_text(bodies, [p]) == 1
     assert f'<a href="http://{good}">{good}</a>' in bodies[0]
     assert "o3" not in bodies[0]
+
+
+def test_a_link_s_address_is_not_cut_to_the_layer_s_half_of_it(vtb, tmp_path):
+    """The layer breaks a long address over a line and holds it as two
+    words; whatever the text is given, the address stays whole."""
+    whole = "https://papers.ssrn.com/abstract=2723611"
+    p = _native_page(tmp_path, "the paper was posted to the network in 2016 and read "
+                     "widely see https://papers .ssrn.com/abstract=2723611 for the text")
+    bodies = [f'<p>the paper was posted to the network in 2016 and read widely see '
+              f'<a href="{whole}">{whole}</a> for the text</p>']
+    vtb.reconcile_native_text(bodies, [p])
+    assert f'href="{whole}"' in bodies[0]
