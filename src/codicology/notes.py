@@ -1168,9 +1168,15 @@ def link_footnotes(bodies: list[str], allow_numbered: bool = False,
             for n in sorted(usable, key=lambda n: foot_by_n[n][0].start(),
                             reverse=True):
                 f = foot_by_n[n][0]
+                # The entry keeps the dress it was printed in: a superscript
+                # stays one, and "1)" or a bare "1" gains no full stop. Every
+                # entry used to come out "1.", which put a stop the book never
+                # printed after each superscript foot it linked.
+                mark = re.match(r"<p[^>]*>\s*(<sup>)?\s*\d{1,3}([.)]?)", f.group(0))
+                num = f'<a href="#fnref-p{pi}-n{n}">{n}{mark.group(2)}</a>'
                 below = (below[:f.start()]
                          + f'<p id="fn-p{pi}-n{n}">'
-                         + f'<a href="#fnref-p{pi}-n{n}">{n}.</a> '
+                         + (f"<sup>{num}</sup> " if mark.group(1) else f"{num} ")
                          + below[f.end():])
             for n in sorted(usable, key=lambda n: mark_by_n[n][0].start(),
                             reverse=True):

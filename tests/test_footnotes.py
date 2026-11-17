@@ -364,3 +364,15 @@ def test_the_page_divides_at_the_rule_its_feet_are_under(vtb):
     stats = vtb.link_footnotes(bodies, allow_numbered=True)
     assert stats["numbered"] == 2
     assert bodies[0].count("<hr/>") == 2
+
+
+def test_a_linked_foot_keeps_the_dress_it_was_printed_in(vtb):
+    """A superscript foot stays a superscript, and no foot gains a full stop
+    the book did not print — every one used to come out "21."."""
+    bodies = ["<p>Claim.<sup>21</sup> More.<sup>22</sup> Last.<sup>23</sup></p><hr/>"
+              "<p><sup>21</sup> The census.</p><p>22) A bulletin.</p><p>23. Ibid.</p>"]
+    assert vtb.link_footnotes(bodies, allow_numbered=True)["numbered"] == 3
+    b = bodies[0]
+    assert '<p id="fn-p0-n21"><sup><a href="#fnref-p0-n21">21</a></sup> The census.' in b
+    assert '<p id="fn-p0-n22"><a href="#fnref-p0-n22">22)</a> A bulletin.' in b
+    assert '<p id="fn-p0-n23"><a href="#fnref-p0-n23">23.</a> Ibid.' in b
