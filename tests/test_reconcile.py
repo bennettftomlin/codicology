@@ -159,6 +159,26 @@ def test_a_pdf_needs_near_identity_before_a_page_is_deleted(vtb):
     d2 = [x for x in v2 if x.status == "duplicate"]
     assert d2 and d2[0].score >= 0.90, (
         f"a genuinely duplicated leaf must still be caught: {d2}")
+    assert d2[0].alike >= 0.90
+
+
+def test_a_title_page_quoted_on_the_copyright_page_is_not_its_copy(vtb):
+    """The Modern Corporation: the cataloguing entry on the copyright page
+    quotes the title page word for word, so all of the title page is on the
+    page after it, and it was dropped at 1.00 as a copy. A PDF's copy of a
+    page is the whole page; one held inside a longer page is not that."""
+    title = ("THE MODERN CORPORATION AND PRIVATE PROPERTY Adolf A. Berle and "
+             "Gardiner C. Means With a New Introduction by Murray L. Weidenbaum "
+             "and Mark Jensen")
+    rights = ("Originally published in 1932 by Harcourt, Brace & World, Inc. "
+              "Published 2017 by Routledge, 2 Park Square, Milton Park, Abingdon. "
+              "All rights reserved. No part of this book may be reprinted or "
+              "reproduced or utilised in any form. Library of Congress Catalog "
+              "Number: 90-48723. " + title + ". ISBN 13: 978-0-88738-887-3 (pbk)")
+    v = vtb.review_pages([title, rights])
+    dup = [x for x in v if x.status == "duplicate"]
+    assert dup and dup[0].score >= 0.90      # held whole, as the score says
+    assert dup[0].alike < 0.90               # but not alike each way
 
 
 def test_a_page_covered_by_several_images_is_a_scan(vtb):

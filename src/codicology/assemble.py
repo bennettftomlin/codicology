@@ -684,11 +684,19 @@ def build_epub(
         # really did duplicate two leaves. At the camera's bar, that same
         # scan lost compound #20 of a chemical reference because its entry is
         # laid out like compound #24's: 0.59, and gone.
+        #
+        # And a PDF's copy is the whole page, so the two must be alike each
+        # way. The score asks how much of the SMALLER page the other holds,
+        # and a title page is held whole by the copyright page after it,
+        # whose cataloguing entry quotes it word for word: The Modern
+        # Corporation lost its title page at 1.00. Each page must be nearly
+        # all of the other.
         from_pdf = any(os.path.exists(p + ".source.json") for p in page_paths)
         floor = 0.90 if from_pdf else DUPE_SIMILARITY
         dropped = {v.index for v in verdicts
                    if v.status == "duplicate" and v.index not in native
-                   and v.score >= floor}
+                   and v.score >= floor
+                   and (not from_pdf or v.alike >= floor)}
         if dropped:
             # The figures those pages contributed are now unreferenced.
             orphans = {name for i in dropped for name in page_figures[i]}

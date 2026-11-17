@@ -62,7 +62,11 @@ class PageVerdict(NamedTuple):
     index: int
     status: str          # kept | duplicate | unjudged | borderline
     match: int | None    # the page it was measured against
-    score: float
+    score: float         # shared passages over the SMALLER page's
+    # Shared passages over the LARGER page's: how much each page is of the
+    # other, not only how much of one the other holds. A page quoted whole on
+    # a longer one scores 1.0 above and little here.
+    alike: float = 0.0
 
 
 def review_pages(texts: list[str], window: int = DUPE_WINDOW) -> list[PageVerdict]:
@@ -87,28 +91,30 @@ def review_pages(texts: list[str], window: int = DUPE_WINDOW) -> list[PageVerdic
             verdicts[i] = PageVerdict(i, "unjudged", None, 0.0)
             continue
 
-        best_score, best_j = 0.0, None
+        best_score, best_j, alike = 0.0, None, 0.0
         for j in range(max(0, i - window), i):
             if j in duplicates or len(fingerprints[j]) < MIN_SHINGLES:
                 continue
             smaller = min(len(fingerprints[i]), len(fingerprints[j]))
             if not smaller:
                 continue
-            score = len(fingerprints[i] & fingerprints[j]) / smaller
+            shared = len(fingerprints[i] & fingerprints[j])
+            score = shared / smaller
             if score > best_score:
                 best_score, best_j = score, j
+                alike = shared / max(len(fingerprints[i]), len(fingerprints[j]))
 
         if best_j is not None and best_score >= DUPE_SIMILARITY:
             loser = i if len(texts[i]) <= len(texts[best_j]) else best_j
             keeper = best_j if loser == i else i
             duplicates.add(loser)
-            verdicts[loser] = PageVerdict(loser, "duplicate", keeper, best_score)
+            verdicts[loser] = PageVerdict(loser, "duplicate", keeper, best_score, alike)
             if loser != i:
-                verdicts[i] = PageVerdict(i, "kept", best_j, best_score)
+                verdicts[i] = PageVerdict(i, "kept", best_j, best_score, alike)
         elif best_j is not None and best_score >= DUPE_BORDERLINE:
-            verdicts[i] = PageVerdict(i, "borderline", best_j, best_score)
+            verdicts[i] = PageVerdict(i, "borderline", best_j, best_score, alike)
         else:
-            verdicts[i] = PageVerdict(i, "kept", best_j, best_score)
+            verdicts[i] = PageVerdict(i, "kept", best_j, best_score, alike)
 
     return [verdicts[i] for i in range(len(texts))]
 
