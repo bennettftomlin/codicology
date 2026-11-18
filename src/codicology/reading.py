@@ -21,7 +21,7 @@ from .furniture import strip_running_heads
 from .guards import LAYER_MIN_WORDS, PHANTOM_CORE_INK, _contradicts_layer, _layer_can_testify, _looks_fabricated, _native_layer_body, _page_core_ink, _page_picture, _reading_agrees, drop_counting_tables, unvouched_reading
 from .markup import _strip_tags
 from .model import Block, Page, PageItem
-from .opinions import mend_equations, mend_tables
+from .opinions import mend_equations, mend_tables, typeset_body_size_text_in
 from .pdf_pages import _body_turned
 
 if TYPE_CHECKING:
@@ -142,7 +142,8 @@ MARKER_BLOCK_MAX_H = 0.03
 
 
 def reattach_orphan_markers(items: list, furn_numbers: set,
-                            seq_state: "dict | None" = None) -> tuple:
+                            seq_state: "dict | None" = None,
+                            body_text_in=None) -> tuple:
     """
     Sort a page's standalone digit blocks into markers and phantoms.
 
@@ -162,6 +163,13 @@ def reattach_orphan_markers(items: list, furn_numbers: set,
     of any sequence. Fits are reattached to the preceding prose; misfits
     are suppressed and counted, never shipped as the stray digits they
     have been.
+
+    On a typeset page the PDF's own text can say more. A misfit whose box
+    holds exactly that number in the PDF, set at the page's body size, is
+    neither a phantom nor a raised call: it is a figure the page prints on
+    its own line, such as a page reference in a table column (Where There Is
+    No Doctor p. 48 lost six of them). It is left where it stands.
+    `body_text_in` gives that text, from typeset_body_size_text_in.
 
     Returns (reattached, suppressed).
     """
@@ -185,6 +193,9 @@ def reattach_orphan_markers(items: list, furn_numbers: set,
             continue
         if t in furn_numbers:
             continue
+        if body_text_in is not None \
+                and re.sub(r"\s+", "", body_text_in(it.box)) == t:
+            continue    # printed on its own line at body size: keep it
         val = int(t)
         # advance last-seen over inline markers that precede this block
         for idx, n in inline_positions:
@@ -492,8 +503,11 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
                             for m in re.findall(r"\d{1,3}",
                                                 _strip_tags(it.html))}
             items = [it for it in items if not it.is_furniture]
-            _ra, _sp = reattach_orphan_markers(items, furn_numbers,
-                                               marker_seq_state)
+            _lone = any(it.html and it.figure is None and re.fullmatch(
+                r"\d{1,3}", _strip_tags(it.html).strip()) for it in items)
+            _ra, _sp = reattach_orphan_markers(
+                items, furn_numbers, marker_seq_state,
+                typeset_body_size_text_in(path) if _lone else None)
             n_reattached += _ra
             n_phantoms += _sp
             if strip_furniture:

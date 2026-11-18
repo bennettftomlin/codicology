@@ -231,7 +231,8 @@ from .opinions import (  # noqa: F401  (moved; kept importable from here)
     _flat_printed, _undotted, _borne_out, _likeness, _FIGURES_ONLY,
     _differ_in_figures_alone, _differences, _stands, majority_reading,
     _LINES_OF, _tex_rows, _stands_alone, _tidy_tex, mend_equations,
-    _FIGURE, _figures, _typeset_text_in, _share_held, SecondOpinion,
+    _FIGURE, _figures, _typeset_text_in, typeset_body_size_text_in,
+    BODY_SIZE_SHARE, _share_held, SecondOpinion,
     ThirdOpinion, TABLE_QUESTIONED, TABLE_TAKEN, TABLE_BETTER_BY,
     TABLE_REACH, TABLE_UNPRINTED, mend_tables,
 )

@@ -225,3 +225,87 @@ def test_a_trailing_backward_recitation_does_not_reset_the_sequence(vtb):
              _item(vtb, "<p>19</p>", box=(0.1, 0.36, 0.13, 0.379))]
     ra, sp = vtb.reattach_orphan_markers(page2, set(), seq)
     assert (ra, sp) == (1, 0), "19 continues from 18 and must reattach"
+
+
+# ── a figure the page prints on its own line ────────────────────────────────
+
+def _typeset_page(tmp_path, runs):
+    """A typeset page: `runs` are (x, y, text, fontsize) in points on a
+    432 x 648 page. Returns the page path, with the sidecar the loader
+    writes."""
+    import json
+    import pytest
+    pymupdf = pytest.importorskip("pymupdf")
+    doc = pymupdf.open()
+    page = doc.new_page(width=432, height=648)
+    for x, y, text, size in runs:
+        page.insert_text((x, y), text, fontsize=size)
+    pdf = str(tmp_path / "page_0000.pdf")
+    doc.save(pdf)
+    p = str(tmp_path / "page_0000.png")
+    open(p, "w").close()
+    with open(p + ".source.json", "w") as fh:
+        json.dump({"pdf": pdf, "page": 0, "facsimile": False, "scan": False}, fh)
+    return p
+
+
+def _box(x0, y0, x1, y1):
+    """Points on the 432 x 648 page as a normalized box."""
+    return (x0 / 432, y0 / 648, x1 / 432, y1 / 648)
+
+
+TABLE = [(40, 100, "9. strains and sprains", 9),
+         (160, 100, "the first day: soak", 9), (300, 100, "102", 9),
+         (160, 112, "joint in cold water;", 9),
+         (40, 140, "11. minor burns", 9),
+         (160, 140, "hold in cold water", 9), (300, 140, "96", 9),
+         (40, 400, "The prose at the foot of the page runs on for a line.", 9)]
+
+
+def test_a_page_reference_in_a_table_column_is_kept(vtb, tmp_path):
+    """Where There Is No Doctor, p. 48: six "see page" figures, each a
+    one-line block of its own, fitted no note sequence and were thrown
+    away as phantoms. The PDF prints each in that box at body size."""
+    path = _typeset_page(tmp_path, TABLE)
+    items = [_item(vtb, "<p>9. strains and sprains</p>", box=_box(38, 90, 140, 104)),
+             _item(vtb, "<p>the first day: soak joint in cold water;</p>",
+                   box=_box(158, 90, 280, 116)),
+             _item(vtb, "<p>102</p>", box=_box(298, 91, 320, 103)),
+             _item(vtb, "<p>11. minor burns</p>", box=_box(38, 130, 140, 144)),
+             _item(vtb, "<p>hold in cold water</p>", box=_box(158, 130, 280, 144)),
+             _item(vtb, "<p>96</p>", box=_box(298, 131, 316, 143))]
+    text_in = vtb.typeset_body_size_text_in(path)
+    assert text_in is not None
+    ra, sp = vtb.reattach_orphan_markers(items, set(), None, text_in)
+    assert (ra, sp) == (0, 0)
+    assert [it.html for it in items if it.html in ("<p>102</p>", "<p>96</p>")] \
+        == ["<p>102</p>", "<p>96</p>"]
+
+
+def test_a_raised_call_in_its_own_block_is_still_judged_by_its_sequence(vtb, tmp_path):
+    """A note call is set small. The PDF has the figure in the box, but not
+    at body size, so the sequence decides as before: a 5 when the stream
+    sits at 1 is suppressed."""
+    path = _typeset_page(tmp_path, [
+        (40, 100, "The strike spread through Pullman and the yards fell", 9),
+        (40, 112, "silent across the whole division that week.", 9),
+        (240, 108, "5", 5.5),
+        (40, 400, "The prose at the foot of the page runs on for a line.", 9)])
+    items = [_item(vtb, PROSE, box=_box(38, 90, 300, 116)),
+             _item(vtb, "<p>5</p>", box=_box(238, 102, 246, 110))]
+    ra, sp = vtb.reattach_orphan_markers(
+        items, set(), None, vtb.typeset_body_size_text_in(path))
+    assert (ra, sp) == (0, 1)
+
+
+def test_a_phantom_over_prose_is_not_kept_by_the_layer(vtb, tmp_path):
+    """Eagle's phantoms stood over ordinary prose: the PDF's text in that
+    box is words, not the figure, so the block is suppressed as before."""
+    path = _typeset_page(tmp_path, [
+        (40, 100, "The strike spread through Pullman and the yards fell", 9),
+        (40, 400, "The prose at the foot of the page runs on for a line.", 9)])
+    items = [_item(vtb, PROSE, box=_box(38, 90, 300, 116)),
+             _item(vtb, "<p>5</p>", box=_box(120, 92, 150, 104))]
+    ra, sp = vtb.reattach_orphan_markers(
+        items, set(), None, vtb.typeset_body_size_text_in(path))
+    assert (ra, sp) == (0, 1)

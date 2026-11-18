@@ -441,6 +441,53 @@ def _typeset_text_in(page_path: "str | None"):
     return text_in
 
 
+def typeset_body_size_text_in(page_path: "str | None"):
+    """A function giving the PDF's own text inside a box, counting only the
+    glyphs set at the page's body size, for a typeset page; None for a scan.
+
+    A glyph is at body size when its loose box (the font's ascent to its
+    descent, the same for every glyph of one size) stands at least
+    BODY_SIZE_SHARE of the page's median. A raised note call is set smaller
+    and is left out; a figure in a table column is not."""
+    if not page_path:
+        return None
+    try:
+        with open(page_path + ".source.json") as fh:
+            src = json.load(fh)
+        if src.get("facsimile") or src.get("scan"):
+            return None
+        import pypdfium2 as pdfium
+        page = pdfium.PdfDocument(src["pdf"])[src["page"]]
+        frame = _page_frame(page)
+        textpage = page.get_textpage()
+        glyphs = []
+        for i in range(textpage.count_chars()):
+            ch = textpage.get_text_range(i, 1)
+            if not ch.strip():
+                continue
+            l, b, r, t = textpage.get_charbox(i, loose=True)
+            glyphs.append((ch, (l + r) / 2, (b + t) / 2, t - b))
+    except Exception:
+        return None
+    if not glyphs:
+        return None
+    heights = sorted(g[3] for g in glyphs)
+    body = heights[len(heights) // 2]
+    if body <= 0:
+        return None
+
+    def text_in(box) -> str:
+        e = _normalized_to_pdf(box, frame)
+        return "".join(ch for ch, x, y, h in glyphs
+                       if e["left"] <= x <= e["right"]
+                       and e["bottom"] <= y <= e["top"]
+                       and h >= BODY_SIZE_SHARE * body)
+    return text_in
+
+
+BODY_SIZE_SHARE = 0.85
+
+
 def _share_held(printed: "Counter[str]", held: "Counter[str]") -> float:
     total = sum(printed.values())
     return sum(min(n, held.get(w, 0)) for w, n in printed.items()) / total \
