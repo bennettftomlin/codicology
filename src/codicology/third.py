@@ -20,7 +20,10 @@ and the second each had one symbol wrong (a Λ read as A by one, a ρ read
 as p by the other); one is the first's. The other two stay as the first
 has them and are wrong, because two readers misread the same mark.
 
-It is asked about nothing else, and only where the first two differ. Like
+It is also asked, by the same means, about a scanned table on which the
+first two differ in a figure (opinions.vote_scanned_tables): it is shown the
+table's block and told it is a table. It is asked about nothing else, and
+only where the first two differ. Like
 the second reader it is not part of this package: its two .gguf files are
 looked for at $CODICOLOGY_THIRD_MODEL / $CODICOLOGY_THIRD_MMPROJ, else in
 ~/.cache/codicology/third/, and it runs on the same llama-server.
@@ -46,6 +49,11 @@ FORMULA = "Formula Recognition:"
 PAD_X, PAD_Y = 0.012, 0.004
 # An equation is a few dozen tokens and a page of them a few hundred.
 MAX_TOKENS = 1536
+# Its table task, for the scanned tables the first two read otherwise
+# (opinions.vote_scanned_tables); a page-long table of figures runs to a few
+# thousand tokens.
+TABLE = "Table Recognition:"
+TABLE_MAX_TOKENS = 6000
 
 
 def model_files() -> "tuple[str, str] | None":

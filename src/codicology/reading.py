@@ -21,7 +21,7 @@ from .furniture import strip_running_heads
 from .guards import LAYER_MIN_WORDS, PHANTOM_CORE_INK, _contradicts_layer, _layer_can_testify, _looks_fabricated, _native_layer_body, _page_core_ink, _page_picture, _reading_agrees, drop_counting_tables, unvouched_reading
 from .markup import _strip_tags
 from .model import Block, Page, PageItem
-from .opinions import mend_equations, mend_tables, typeset_body_size_text_in
+from .opinions import mend_equations, mend_tables, typeset_body_size_text_in, vote_scanned_tables
 from .pdf_pages import _body_turned
 
 if TYPE_CHECKING:
@@ -416,6 +416,19 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
             items, _mended = mend_tables(items, path, switches.SECOND_OPINION)
             items, _eqs, _differ = mend_equations(items, path, switches.SECOND_OPINION,
                                                   switches.THIRD_OPINION)
+            items, _voted, _ties = vote_scanned_tables(
+                items, path, switches.SECOND_OPINION, switches.THIRD_OPINION)
+            if switches.SECOND_OPINION is not None and (_voted or _ties):
+                _pg = os.path.splitext(os.path.basename(path))[0]
+                switches.SECOND_OPINION.figures += len(_voted)
+                switches.SECOND_OPINION.changed += [
+                    (_pg, "table figure", _a, _b,
+                     "the second and third readers read it so")
+                    for _a, _b in _voted]
+                switches.SECOND_OPINION.ties += [(_pg, *_t) for _t in _ties]
+            for _a, _b in _voted:
+                print(f"    [+] {os.path.basename(path)}: a scanned table's "
+                      f"figure is set by a vote of three readers: {_a} → {_b}")
             if switches.SECOND_OPINION is not None:
                 _page = os.path.splitext(os.path.basename(path))[0]
                 switches.SECOND_OPINION.tables += len(_mended)

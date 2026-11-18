@@ -348,7 +348,7 @@ def test_a_block_is_asked_about_once_and_remembered(tmp_path):
     opinion.formula(page, box)
     opinion.formula(page, (0.1, 0.6, 0.9, 0.62))        # another block of the page
     assert len(reader.sizes) == 2
-    assert opinion.summary() == ("third reader: asked about 2 equation(s) on "
+    assert opinion.summary() == ("third reader: asked about 2 equation(s) or table(s) on "
                                  "which the first two differ")
     opinion.close()
     with gzip.open(kept, "rt") as fh:

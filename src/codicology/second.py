@@ -182,7 +182,8 @@ class SecondReader:
 
     # ── a page ──────────────────────────────────────────────────────────────
 
-    def read(self, image) -> "str | None":
+    def read(self, image, prompt: "str | None" = None,
+             max_tokens: "int | None" = None) -> "str | None":
         """The page as the second reader writes it (markdown, with TeX for
         mathematics and HTML for tables), or None where it read on to the
         limit without stopping, which it will do again and so is an answer
@@ -203,10 +204,12 @@ class SecondReader:
         content = [{"type": "image_url", "image_url": {
             "url": "data:image/png;base64,"
                    + base64.b64encode(buf.getvalue()).decode()}}]
-        if self.prompt:
-            content.append({"type": "text", "text": self.prompt})
+        prompt = self.prompt if prompt is None else prompt
+        if prompt:
+            content.append({"type": "text", "text": prompt})
         body = {"messages": [{"role": "user", "content": content}],
-                "temperature": 0.0, "max_tokens": self.max_tokens}
+                "temperature": 0.0,
+                "max_tokens": max_tokens or self.max_tokens}
         req = urllib.request.Request(
             self._url + "/v1/chat/completions", data=json.dumps(body).encode(),
             headers={"Content-Type": "application/json"})

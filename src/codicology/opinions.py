@@ -514,6 +514,8 @@ class SecondOpinion:
         self.by_third = 0           # equations set as a third reader has them
         self.changed: list = []     # (page, what, as it was, as it is)
         self.listed: list = []      # (page, the first reading, the second)
+        self.figures = 0            # scanned-table figures set by a vote
+        self.ties: list = []        # (page, first, second, why) kept as first
         self.unanswered: set = set()    # pages it could not be asked about
         self.why_unanswered: "str | None" = None
         self._read: dict = {}       # this run's readings, with or without a cache
@@ -529,6 +531,9 @@ class SecondOpinion:
             took.append(f"{self.tables} table(s)")
         if self.equations:
             took.append(f"{self.equations} equation(s)")
+        if self.figures:
+            took.append(f"{self.figures} scanned-table figure(s) by a vote "
+                        f"of three readers")
         remembered = n - self.asked - len(self.unanswered)
         return (f"second reader: asked about {n} page(s)"
                 + (f", {remembered} of them remembered" if remembered > 0 else "")
@@ -538,6 +543,9 @@ class SecondOpinion:
                    f"reads them" if self.by_third else "")
                 + (f"; {self.differ} equation(s) on which the readers "
                    f"differ are listed above for a look" if self.differ else "")
+                + (f"; {len(self.ties)} scanned-table figure(s) the first two "
+                   f"read otherwise, without a majority, are as the first "
+                   f"reads them" if self.ties else "")
                 + (f"\n    [!] the second reader could not be asked about "
                    f"{len(self.unanswered)} of those pages "
                    f"({self.why_unanswered}); they are as the first reader "
@@ -553,10 +561,11 @@ class SecondOpinion:
         of the book filed as having nothing to say."""
         return self._ask(page_key(page_path), lambda: Image.open(page_path))
 
-    def _ask(self, key: str, picture) -> "str | None":
+    def _ask(self, key: str, picture, **task) -> "str | None":
         """The reader's answer filed under `key`: remembered from this run
         or an earlier one, or asked for now with the picture `picture()`
-        opens."""
+        opens (and `task`, a prompt and token limit other than the
+        reader's own)."""
         self.consulted.add(key)
         if key in self._read:
             return self._read[key]
@@ -570,7 +579,7 @@ class SecondOpinion:
                 pass
         try:
             with picture() as im:
-                text = self.reader.read(im)
+                text = self.reader.read(im, **task)
         except Exception as exc:
             self.unanswered.add(key)
             self.why_unanswered = str(exc) or type(exc).__name__
@@ -598,7 +607,7 @@ class SecondOpinion:
         path = self.sheet_path()
         if path is None:
             return None
-        if not (self.changed or self.listed):
+        if not (self.changed or self.listed or self.ties):
             try:
                 os.remove(path)
             except OSError:
@@ -622,6 +631,14 @@ class SecondOpinion:
                 lines += ["", f"  {page}  equation", f"      first:  {first}",
                           f"      second: {theirs}"]
                 lines += [f"      ({w})" for w in why]
+            lines.append("")
+        if self.ties:
+            lines.append(f"Scanned-table figures the first two read "
+                         f"otherwise, with no majority, as the first reads "
+                         f"them ({len(self.ties)}):")
+            for page, first, theirs, why in self.ties:
+                lines += ["", f"  {page}  table figure", f"      first:  {first}",
+                          f"      second: {theirs}", f"      ({why})"]
             lines.append("")
         try:
             with open(path, "w", encoding="utf-8") as fh:
@@ -655,13 +672,27 @@ class ThirdOpinion(SecondOpinion):
         key = page_key(page_path) + "@" + ",".join(f"{v:.4f}" for v in box)
         return _third.formula(self._ask(key, crop))
 
+    def table(self, page_path: str, box) -> "str | None":
+        """The block's table as the reader writes it, or None where it gave
+        none or could not be asked. Filed apart from a formula of the same
+        box."""
+        from . import third as _third
+
+        def crop():
+            with Image.open(page_path) as im:
+                return im.convert("RGB").crop(_third.crop_box(im.size, box))
+        key = (page_key(page_path) + "#table@"
+               + ",".join(f"{v:.4f}" for v in box))
+        return self._ask(key, crop, prompt=_third.TABLE,
+                         max_tokens=_third.TABLE_MAX_TOKENS)
+
     def summary(self) -> "str | None":
         if not self.consulted:
             return None
         n = len(self.consulted)
         remembered = n - self.asked - len(self.unanswered)
-        return (f"third reader: asked about {n} equation(s) on which the "
-                f"first two differ"
+        return (f"third reader: asked about {n} equation(s) or table(s) on "
+                f"which the first two differ"
                 + (f", {remembered} of them remembered" if remembered > 0 else "")
                 + (f"\n    [!] the third reader could not be asked about "
                    f"{len(self.unanswered)} of them ({self.why_unanswered}); "
@@ -752,3 +783,150 @@ def mend_tables(items: list, page_path: "str | None",
         mended.append((total, round(first * total), round(best[0] * total),
                        best[2]))
     return out, mended
+
+
+# On a scan nothing printed referees between two readings of a table, and
+# neither reader is right often enough alone: of the shelf's 370 scanned
+# table pages both read as tables, 256 agree to within a figure in fifty, and
+# on 29 the two read 81 cells otherwise, the second right more often than the
+# first but not always (it made 1117's old-style "219" a "229"). A third
+# reader shown the table's block breaks the tie: it holds one of the two
+# figures and not the other for 46 of the 81, and judged against the pages
+# the majority is the printed figure on seven of eight looked at, the one
+# miss a figure all three readers misread alike (5498's year column, read
+# 1712-39 for 1742-59, is the largest it mends: nineteen cells).
+#
+# Only a figure read otherwise is voted on: a pair of the same length, one
+# digit apart, each at least two digits long. A figure the first prints more
+# than once, or that both hold, is not a cell the vote can find, so it stays.
+# So does a page number after a contents line's leader dots: the contents is
+# placed by finding each title on the page it names, which checks the
+# number better than a vote, and the vote's one wrong turn was such a number
+# (1117's "219"), which moved the chapter's link ten pages on.
+VOTE_SAME_TABLE = 0.6       # share of the first's figures the second's table
+                            # must hold to be a reading of the same table
+VOTE_MIN_FIGURES = 6
+
+
+def _scanned(page_path: "str | None") -> bool:
+    """Whether the page is known to be a scan: a page with no PDF of its own
+    to ask, or one not yet described, is not."""
+    try:
+        with open(page_path + ".source.json") as fh:
+            return bool(json.load(fh).get("scan"))
+    except (OSError, ValueError, TypeError, AttributeError):
+        return False
+
+
+_LEADER = re.compile(r"(?:[.…·_]\s?){3,}\s*$")
+
+
+def _page_reference(text: str, figure: str) -> bool:
+    """Whether `figure` stands after a run of leader dots in `text`: a
+    contents line's page number."""
+    return any(f.group().replace(",", "").rstrip(".") == figure
+               and _LEADER.search(text[max(0, f.start() - 24):f.start()])
+               for f in _FIGURE.finditer(text))
+
+
+def _read_otherwise(first: "Counter[str]", second: "Counter[str]"
+                    ) -> "list[tuple[str, str]]":
+    """(first's figure, second's) for each cell the two read otherwise: the
+    same length, one digit apart, neither a single digit."""
+    mine = sorted((first - second).elements())
+    theirs = sorted((second - first).elements())
+    pairs = []
+    for a in mine:
+        for b in theirs:
+            if len(a) == len(b) >= 2 and sum(x != y for x, y in zip(a, b)) == 1 \
+                    and all(x == y or (x.isdigit() and y.isdigit())
+                            for x, y in zip(a, b)):
+                pairs.append((a, b))
+                theirs.remove(b)
+                break
+    return pairs
+
+
+def _swap_figure(fragment: str, was: str, now: str) -> "str | None":
+    """The fragment with its one figure `was` (as _figures writes it) set as
+    `now`, keeping the printed figure's commas; None unless the fragment
+    prints `was` exactly once outside its tags."""
+    at = next(i for i, (x, y) in enumerate(zip(was, now)) if x != y)
+    spots = []
+    for m in re.finditer(r"<[^>]*>|([^<]+)", fragment):
+        if m.group(1) is None:
+            continue
+        for f in _FIGURE.finditer(m.group(1)):
+            if f.group().replace(",", "").rstrip(".") == was:
+                spots.append((m.start(1) + f.start(), f.group()))
+    if len(spots) != 1:
+        return None
+    start, token = spots[0]
+    k = -1
+    for j, ch in enumerate(token):
+        if ch == ",":
+            continue
+        k += 1
+        if k == at:
+            return fragment[:start + j] + now[at] + fragment[start + j + 1:]
+    return None
+
+
+def vote_scanned_tables(items: list, page_path: "str | None",
+                        second: "SecondOpinion | None",
+                        third: "ThirdOpinion | None"
+                        ) -> "tuple[list, list[tuple[str, str]], list[tuple[str, str, str]]]":
+    """Items with each scanned table's figures that the first two readers
+    read otherwise set by a vote of three: the second reader's figure where
+    the third reader, shown the table's block, holds it and not the first's.
+    Returns the items, (as it was, as it is) for each figure set, and (first,
+    second, why) for each kept as the first reads it."""
+    if second is None or third is None or not _scanned(page_path):
+        return items, [], []
+    tables = [it for it in items if it.html and it.box and it.figure is None
+              and "<table" in it.html and not it.is_furniture]
+    if not tables:
+        return items, [], []
+    from . import second as _second
+    offered = None
+    out, changed, ties = list(items), [], []
+    for it in tables:
+        mine = _figures(_strip_tags(it.html))
+        if sum(mine.values()) < VOTE_MIN_FIGURES:
+            continue
+        if offered is None:
+            offered = [_figures(_strip_tags(t))
+                       for t in _second.tables(second.reading(page_path) or "")]
+        if not offered:
+            break
+        held = max(offered, key=lambda c: sum((mine & c).values()))
+        if sum((mine & held).values()) < VOTE_SAME_TABLE * sum(mine.values()):
+            continue
+        pairs = _read_otherwise(mine, held)
+        if not pairs:
+            continue
+        fragment, words = it.html, _strip_tags(it.html)
+        pairs = [(a, b) for a, b in pairs if not _page_reference(words, a)
+                 or ties.append((a, b, "a contents line's page number"))]
+        if not pairs:
+            continue
+        voted = _figures(_strip_tags(third.table(page_path, it.box) or ""))
+        for a, b in pairs:
+            if mine[a] > 1 or held[b] > 1:
+                ties.append((a, b, "printed more than once: no one cell"))
+                continue
+            if not voted[b] or voted[a]:
+                ties.append((a, b, "the third reader holds "
+                             + ("both" if voted[a] and voted[b] else
+                                "the first's" if voted[a] else "neither")))
+                continue
+            swapped = _swap_figure(fragment, a, b)
+            if swapped is None:
+                ties.append((a, b, "not found once in the table's markup"))
+                continue
+            fragment = swapped
+            changed.append((a, b))
+        if fragment != it.html:
+            k = next(j for j, x in enumerate(out) if x is it)
+            out[k] = it._replace(html=fragment)
+    return out, changed, ties
