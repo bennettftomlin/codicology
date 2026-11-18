@@ -177,6 +177,11 @@ def body_span(xhtml: str) -> tuple:
     return lo, (hi if hi >= 0 else len(xhtml))
 
 
+# Any "<...>" is markup here, on purpose. The adjudicator reads a book's
+# XHTML, where a bare "<" cannot stand (the file would not parse), and the
+# loose pattern keeps a rewritten word from ever making a tag: under
+# markup.TAG's stricter shape "<ﬁnal>" is text, and the same span rewritten
+# to "<Zq>" would be a tag (test_decision_sites caught it).
 _TAG = re.compile(r"<[^>]+>")
 # html.unescape's own notion of a character reference; text_view expands
 # them one at a time to keep each character's source, and the tests hold
