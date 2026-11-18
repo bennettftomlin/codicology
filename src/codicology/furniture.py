@@ -168,6 +168,26 @@ def _head_runs(bodies: list[str], page_furniture: list[list[str]]) -> dict:
     return runs
 
 
+def _interrupts_a_sentence(before: str, rest: str) -> bool:
+    """Whether a line at the head of a page stands inside a sentence: the
+    page before ends its last paragraph without finishing it, and the
+    paragraph after the line goes on in lower case. A chapter or section
+    never opens there, so such a line is never its own heading."""
+    last = _LAST_LEAF.search(before)
+    first = _FIRST_LEAF.search(rest)
+    if last is None or first is None or last.group(1) != "p" \
+            or first.group(1) != "p":
+        return False
+    tail = _strip_tags(last.group(0)).split()
+    head = _strip_tags(first.group(0)).strip()
+    # The page must stop on a word: a page that ends on an address or a
+    # figure has stopped on a reference, and a lower-case line can follow
+    # it with nothing interrupted (Working the Phones ends its notes on a
+    # web address and opens its index, "absence 21", under INDEX).
+    return bool(tail and head) and head[0].islower() \
+        and re.fullmatch(r"[(\[“‘\"']?[^\W\d_][\w’'-]*[,-]?", tail[-1]) is not None
+
+
 def _worded_head(text: str) -> bool:
     """Whether a line of page furniture carries words, as a running head
     does. A designation does not: "SWM 6-77" names a paragraph of the
@@ -266,9 +286,19 @@ def strip_missed_running_heads(bodies: list[str],
                     continue
             else:
                 n, first = runs.get((_head_key(text), i), (0, i))
-                if not at_top or first == i or n - 1 < FURNITURE_PAGES \
-                        or has_head[i]:
+                if not at_top:
                     continue
+                if first == i or n - 1 < FURNITURE_PAGES or has_head[i]:
+                    # Seen in rhythm but not often enough, or as the run's
+                    # first sighting: still a running head where it stands
+                    # inside a sentence that runs over the page, which no
+                    # opening page does (Sraffa's chapters are short enough
+                    # to show their verso head three times, two of them in
+                    # mid-sentence).
+                    if n < FURNITURE_PAGES or fused or i == 0 or \
+                            not _interrupts_a_sentence(bodies[i - 1],
+                                                       body[cut[1]:]):
+                        continue
             rest = body[cut[1]:] if at_top else body[:cut[0]]
             if not fused and \
                     (_OPENS_HEADING if at_top else _ENDS_HEADING).search(rest):

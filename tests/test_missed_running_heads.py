@@ -369,3 +369,56 @@ def test_a_line_repeated_at_the_foot_of_the_page_stays(vtb):
     bodies = [f"<p>{t}</p><p>Source: IEA Energy Balances</p>" for t in firsts]
     furn = [[str(70 + p)] for p in range(6)]
     assert vtb.strip_missed_running_heads(bodies, furn) == []
+
+
+# --------------------------------------------------------------------------
+# a head inside a sentence
+# --------------------------------------------------------------------------
+
+def _short_chapter(run_on=True):
+    """Sraffa's short chapters: the verso head, set as a heading, opens three
+    pages in rhythm and none of them is the opening page. On two of them it
+    stands inside a sentence the page before began."""
+    ends = ("which we shall call the", "self-replacing state.", "the products of")
+    bodies, furn = ["<h1>CHAPTER II</h1><h2>Production with a Surplus</h2><p>Opens.</p>"], [["5"]]
+    for k, end in enumerate(ends):
+        bodies.append(f"<p>Prose of the recto, ending {end}</p>")
+        furn.append([str(6 + 2 * k)])
+        nxt = "products. Necessaries are basic." if run_on else "Necessaries are basic."
+        bodies.append(f"<h2>PRODUCTION WITH A SURPLUS</h2><p>{nxt}</p>")
+        furn.append([str(7 + 2 * k)])
+    return bodies, furn
+
+
+def test_a_head_inside_a_sentence_goes_though_seen_only_three_times(vtb):
+    bodies, furn = _short_chapter()
+    removed = vtb.strip_missed_running_heads(bodies, furn)
+    # pages 2 and 6 stand inside a sentence; page 4 follows a full stop
+    assert removed == [(2, "PRODUCTION WITH A SURPLUS"), (6, "PRODUCTION WITH A SURPLUS")]
+    assert bodies[2] == "<p>products. Necessaries are basic.</p>"
+    assert bodies[4].startswith("<h2>PRODUCTION WITH A SURPLUS</h2>")
+
+
+def test_three_sightings_that_interrupt_nothing_stay(vtb):
+    bodies, furn = _short_chapter(run_on=False)
+    assert vtb.strip_missed_running_heads(bodies, furn) == []
+
+
+def test_a_heading_after_an_unfinished_line_but_before_a_capital_stays(vtb):
+    # A page may end on a caption or a list item with no stop; what follows
+    # a real heading starts a sentence of its own.
+    bodies, furn = _short_chapter()
+    bodies[2] = "<h2>PRODUCTION WITH A SURPLUS</h2><p>Necessaries are basic.</p>"
+    removed = vtb.strip_missed_running_heads(bodies, furn)
+    assert (2, "PRODUCTION WITH A SURPLUS") not in removed
+
+
+def test_a_page_that_ends_on_an_address_interrupts_nothing(vtb):
+    """Working the Phones ends its notes on a web address and opens its index,
+    "absence 21", under INDEX: lower case after no full stop, and nothing
+    interrupted."""
+    bodies, furn = _short_chapter()
+    bodies[1] = "<p>See https://libcom.org/library/revolt-against-work</p>"
+    bodies[2] = "<h2>PRODUCTION WITH A SURPLUS</h2><p>absence 21</p>"
+    removed = vtb.strip_missed_running_heads(bodies, furn)
+    assert (2, "PRODUCTION WITH A SURPLUS") not in removed
