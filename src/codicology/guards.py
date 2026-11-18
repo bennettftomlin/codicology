@@ -307,6 +307,32 @@ def _layer_alignment(text: str, layer: str, cap: int = 5000) -> float:
     return sum(b.size for b in blocks if b.size >= 4) / len(ours)
 
 
+# A layer may not be language at all. Ardea's publisher set a donation
+# page in a font whose text comes out shifted three letters ("WDNH WKLV
+# PRPHQW" for "take this moment"): the reading, which was right, "read
+# nothing like" it and was refused, and the shifted letters were printed in
+# its place, and remembered. A layer most of whose words are not words is
+# no witness, and nothing to restore a page from.
+LAYER_MIN_SPOKEN = 0.5
+
+
+# Judged by vowels, not by a dictionary, so that a French or German layer
+# speaks as well as an English one: in a written language nearly every word
+# of three letters or more holds a vowel; in letters shifted three places
+# most do not ("WDNH", "WKLV", "PRPHQW"). Only words in the Latin alphabet
+# are counted, and a layer with none of them is not judged.
+_LATIN_WORD = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿ]{3,}")
+_VOWEL = re.compile(r"[AEIOUYaeiouyÀ-ÆÈ-ÏÒ-ÖØ-Ýà-æè-ïò-öø-ýÿ]")
+
+
+def _layer_speaks(layer: str) -> bool:
+    words = _LATIN_WORD.findall(layer)
+    if len(words) < 10:
+        return True
+    voiced = sum(bool(_VOWEL.search(w)) for w in words)
+    return voiced / len(words) >= 1 - LAYER_MIN_SPOKEN / 2
+
+
 def _contradicts_layer(items, page_path: str) -> str | None:
     """Why this reading disagrees with the page's own text layer, or None."""
     try:
@@ -329,7 +355,7 @@ def _contradicts_layer(items, page_path: str) -> str | None:
     # "how many zeros" — the scanner's own OCR failed there — and judging
     # vocabulary against three words condemns the truth. A sparse layer means
     # no verdict here; the classical witness takes such pages instead.
-    if len(theirs) < LAYER_MIN_WORDS:
+    if len(theirs) < LAYER_MIN_WORDS or not _layer_speaks(layer):
         return None
     if len(ours & theirs) / len(ours) < LAYER_MIN_OVERLAP:
         body = " ".join(_strip_tags(it.html) for it in items
@@ -475,7 +501,7 @@ def _native_layer_body(page_path: str) -> "list[PageItem] | None":
                      or "http" in lines[0].lower()):
         lines.pop(0)
     text = " ".join(lines)
-    if len(text) < 40:
+    if len(text) < 40 or not _layer_speaks(text):
         return None
     return [PageItem(html=f"<p>{html.escape(text)}</p>")]
 
@@ -484,8 +510,9 @@ def _layer_can_testify(page_path: str) -> bool:
     """Whether the page has a text layer rich enough to judge a reading."""
     try:
         with open(page_path + ".layer.txt", encoding="utf-8") as fh:
-            return len(re.findall(r"[a-z]{3,}", fh.read().lower())) \
-                >= LAYER_MIN_WORDS
+            layer = fh.read()
+        return len(re.findall(r"[a-z]{3,}", layer.lower())) \
+            >= LAYER_MIN_WORDS and _layer_speaks(layer)
     except OSError:
         return False
 

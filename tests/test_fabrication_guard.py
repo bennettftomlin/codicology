@@ -988,3 +988,20 @@ def test_an_empty_read_is_still_not_remembered(vtb, tmp_path):
     vtb._read_pages_resiliently.silent.clear()
     vtb._read_pages_resiliently([path], [Image.open(path)], _CannotReadThisPage(), cache)
     assert cache.get(path) is None
+
+
+def test_a_layer_that_is_not_language_is_no_witness(vtb, tmp_path):
+    """Ardea p3: the donation page's layer comes out three letters shifted
+    ("WDNH WKLV PRPHQW"). The right reading was refused against it and the
+    shifted letters printed instead."""
+    from codicology.guards import _layer_speaks, _contradicts_layer, _native_layer_body
+    shifted = ("WDNH WKLV PRPHQW WR WKLQN DERXW PDNLQJ D GRQDWLRQ WR SXQFWXP "
+               "ERRNV DQ LQGHSHQGHQW QRQ SURÀW SUHVV ,I \\RX·UH UHDGLQJ WKH H ERRN ") * 3
+    assert not _layer_speaks(shifted)
+    assert _layer_speaks("Bibliothèque nationale, Assemblée générale du peuple dans "
+                         "les années soixante pour les étudiants de la ville")
+    path = _native_page(tmp_path, "page_0003.png", shifted)
+    reading = [vtb.PageItem(html="<p>" + "Before you start to read this book, take this "
+                            "moment to think about making a donation to punctum books. " * 3 + "</p>")]
+    assert _contradicts_layer(reading, path) is None
+    assert _native_layer_body(path) is None
