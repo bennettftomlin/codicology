@@ -505,6 +505,109 @@ def chapters_from_furniture(page_furniture: list[list[str]]
     return out, stats
 
 
+# A line of furniture that carries this much is a sentence or a title, not a
+# folio: the same measure the reading reports such lines by.
+LONE_LINE_CHARS = 60
+LONE_LINE_WORDS = 8
+# Two lines this alike are one running head however a page varies it ("The
+# Class Struggle on the Ideological Plane (ii)" and "… (iv) 427").
+LONE_ALIKE = 0.8
+
+
+def _full_line(text: str) -> bool:
+    return len(text) > LONE_LINE_CHARS \
+        or len(re.findall(r"[A-Za-z]{2,}", text)) > LONE_LINE_WORDS
+
+
+_HEADING = re.compile(r"<h[1-6][^>]*>(.*?)</h[1-6]>", re.S)
+
+
+def _titled(key: str) -> str:
+    """A head's words without the section's number before them or the
+    page's number after: "7. reasons for ..." and "reasons for ... 23" are
+    one title."""
+    return re.sub(r"^(?:\d+|[ivxlc]+)[.)]?\s+|\s+\d+$", "", key)
+
+
+def restore_lone_furniture(pages: "list[Page]", bodies: "list[str]"
+                           ) -> "list[tuple[int, str]]":
+    """
+    Put back into its page a line the layout called furniture that the book
+    never repeats, and say which.
+
+    The layout pass labels page furniture, and the reading sets every such
+    block aside, trusting the label. What makes a line furniture, though, is
+    that it recurs: a running head or foot is printed on page after page,
+    with or without the page's number. The label also falls on lines that
+    sit at a page's edge only once: a plate's printed caption (the Gresham
+    ledger in Studies in the History of Accounting), an author's or a
+    source note at the foot of an article ("This is an updated version of an
+    article printed in Green Left Weekly"), a manual's issuing line on its
+    title page, a printer's imprint. Across the shelf the reading reported
+    702 furniture blocks that carry a full line of words; 682 recur in their
+    book and are running heads, and of the 20 that do not, all but a few are
+    such lines, lost from the book.
+
+    The few are running heads of articles short enough to show theirs once,
+    on their second page ("Reasons for Popular Scepticism Towards Politics &
+    Politicians 23" in Ideas for the Struggle). Such a head repeats the
+    article's title, printed as a heading a page or two before, so a line
+    that matches a heading anywhere in the book (its numbering and folio
+    aside) stays out, as does one near enough to another page's furniture
+    to be the same head varied.
+
+    Nothing is put back on a page with nothing else on it, neither words nor
+    a picture. That would make a page the book did not have: on a blank
+    leaf the line is as often the layout's invention (a journal citation
+    "read" off the blank page 433 of The History of Lloyd's) as a printer's
+    imprint standing alone, and a new page moves every later page's index,
+    which the reviewer's decisions are keyed by.
+
+    What is put back goes where it stood: a foot at the end of the page, a
+    head at the start. It leaves the page's furniture, so the folio audit
+    and the chapter reading no longer see it.
+    """
+    restored: "list[tuple[int, str]]" = []
+    if not all(p.furniture_known for p in pages):
+        # a page cached before furniture was kept would hide the repetition
+        # that is the whole test
+        return restored
+    texts = [[" ".join(_strip_tags(b.html).split()) for b in p.furniture
+              if b.html] for p in pages]
+    headings = [_titled(_head_key(_strip_tags(h)))
+                for body in bodies for h in _HEADING.findall(body)]
+    for i, page in enumerate(pages):
+        if i >= len(bodies):
+            break
+        if "<img" not in bodies[i] and not re.search(
+                r"\w", _strip_tags(bodies[i])):
+            continue
+        keep = []
+        for b in page.furniture:
+            t = " ".join(_strip_tags(b.html or "").split())
+            if not t or not _full_line(t) or parse_folio(t) is not None:
+                keep.append(b)
+                continue
+            key = _head_key(t)
+            elsewhere = any(
+                difflib.SequenceMatcher(None, key, _head_key(u)).ratio()
+                >= LONE_ALIKE
+                for j, us in enumerate(texts) if j != i for u in us)
+            titled = _titled(key)
+            if elsewhere or any(
+                    difflib.SequenceMatcher(None, titled, h).ratio()
+                    >= LONE_ALIKE for h in headings):
+                keep.append(b)
+                continue
+            at_top = b.label == "PageHeader" or (
+                b.label != "PageFooter" and b.box is not None
+                and (b.box[1] + b.box[3]) / 2 < 0.5)
+            bodies[i] = b.html + bodies[i] if at_top else bodies[i] + b.html
+            restored.append((i, t))
+        page.furniture = keep
+    return restored
+
+
 def furniture_texts(pages: "list[Page]") -> "list[list[str]]":
     """The text of each page's running heads and feet, as the folio audit and
     the chapter reading take it."""

@@ -23,7 +23,7 @@ from .decisions import _decision_rounds, apply_reviewer_decisions
 from .equations import MATHML_NS, _pandoc, normalize_math, set_unit_powers, write_display_math
 from .figures import _encodable, encode_figure, find_image_furniture
 from .folios import Folio, audit_folios, fill_folio_gaps, folio_label, folios_from_furniture, read_folios, strip_folio_superscripts, strip_fused_folios
-from .furniture import Chapter, chapters_from_furniture, furniture_texts, head_shape, strip_missed_running_heads
+from .furniture import Chapter, chapters_from_furniture, furniture_texts, head_shape, restore_lone_furniture, strip_missed_running_heads
 from .guards import _page_core_ink, _phantom_blank_pages, _reads_as_empty
 from .index_links import link_index
 from .markup import _roman_to_int, _strip_tags
@@ -415,6 +415,11 @@ def build_epub(
      n_figures, n_blank_figures, n_label_rules, n_reattached, n_phantoms,
      n_forms, n_hand_figures,
      n_doubled, pages) = rp
+    # A line the layout called furniture that the book never repeats is a
+    # caption, a note or an imprint at the page's edge: back into the page.
+    for _i, _t in restore_lone_furniture(pages, bodies):
+        print(f"    [~] page {_i + 1}: {_t[:70]!r} was labelled page furniture "
+              f"but is printed on no other page — put back")
     # Running heads and feet are read from the pages, where they were set
     # aside as blocks; a page cached before heads were kept says so.
     page_furniture = furniture_texts(pages)

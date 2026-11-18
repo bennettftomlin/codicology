@@ -72,7 +72,8 @@ def demote_mislabelled_heads(items: "list[PageItem]",
                 continue
             if len(t) > 60 or len(re.findall(r"[A-Za-z]{2,}", t)) > 8:
                 print(f"    [~] {page_name}: furniture label on a full "
-                      f"line of text — left out of the body: {t[:70]!r}")
+                      f"line of text — set aside, unless the book never "
+                      f"repeats it: {t[:70]!r}")
         out.append(it)
     return out
 
