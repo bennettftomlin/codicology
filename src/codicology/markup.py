@@ -18,11 +18,25 @@ def _strip_tags(fragment: str) -> str:
     its own printed title. Inline tags inside a word (<i>, <b>) would suffer
     the opposite fault, so only tags that open or close a block introduce
     the space.
+
+    Only what is shaped like a tag is removed. A bare "<" in the text (a
+    reading that left "a < b and c > d" unescaped) is text, and so is
+    everything up to the next ">"; matching any "<...>" deleted it.
     """
     spaced = re.sub(r"</(?:p|div|h[1-6]|li|tr|td|th|table|section|figure|"
                     r"figcaption|blockquote|ol|ul|br)\s*>|<(?:br|hr)\s*/?>",
                     " ", fragment, flags=re.I)
-    return html.unescape(re.sub(r"<[^>]+>", "", spaced)).strip()
+    return html.unescape(_TAG.sub("", spaced)).strip()
+
+
+# A tag: a name, then attributes that each carry a value. Every one of the
+# 998,117 tags in the shelf's 151 installed books has this shape; "<b and c>"
+# does not. Comments, declarations and processing instructions also go.
+_TAG = re.compile(
+    r"<!--.*?-->|<[!?][A-Za-z][^<>]*>"
+    r"|</?[A-Za-z][\w:.-]*"
+    r"(?:\s+[\w:.-]+\s*=\s*(?:\"[^\"]*\"|'[^']*'|[^\s\"'<>]+))*\s*/?>",
+    re.S)
 
 
 RUNNING_HEAD_MAX_CHARS = 60
