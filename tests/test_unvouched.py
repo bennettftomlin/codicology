@@ -231,3 +231,38 @@ def test_words_nobody_vouches_for_on_blank_paper_are_not_a_picture_either(
     assert "I should" not in verso and "<img" not in verso
     assert "the paper holds no ink" in capsys.readouterr().out
 
+
+
+# ── a page already caught inventing ─────────────────────────────────────────
+
+GRESHAM = ("The Chapters of the Country to Capital. In the United States of "
+           "America, the country of the common market is now so common to the "
+           "world that it is becoming a general market.")
+
+
+def test_a_page_caught_inventing_is_asked_about_however_sure_the_reading(tmp_path, witness):
+    """The Gresham ledger plate came back as a counting grid, refused, beside
+    a heading and a paragraph at 0.945: above the line, and under thirty
+    words. Once the table was caught, the rest is put to a witness."""
+    page = _leaf(tmp_path)
+    items = [vtb.PageItem(html="<h1>The Chapital</h1>", label="Text", conf=0.945),
+             vtb.PageItem(html=f"<p>{GRESHAM}</p>", label="Text", conf=0.945)]
+    assert vtb.unvouched_reading(items, page) is None
+    conf, share, borne_out = vtb.unvouched_reading(items, page, questioned=True)
+    assert share < 0.1 and borne_out == []
+
+
+def test_what_a_witness_reads_on_a_caught_page_stands(tmp_path, witness):
+    """TiHKAL's part title was a counting table beside the one word it
+    prints, "Epilogue", which the classical reader reads too."""
+    page = _leaf(tmp_path)
+    witness["text"] = "TIHKAL The Continuation Epilogue"
+    items = [vtb.PageItem(html="<h1>Epilogue</h1>", label="Text", conf=0.99)]
+    assert vtb.unvouched_reading(items, page, questioned=True) is None
+
+
+def test_a_caught_page_with_nothing_left_is_unvouched(tmp_path, witness):
+    """Lloyd's smeared page 50 was nothing but its invented table: refused,
+    it shipped empty. It is shown instead."""
+    page = _leaf(tmp_path)
+    assert vtb.unvouched_reading([], page, questioned=True) == (0.0, 0.0, [])

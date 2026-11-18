@@ -458,7 +458,7 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
                 print(f"    [?] {os.path.basename(path)}: a table holds "
                       f"{_held} of the {_printed} figures the PDF prints in "
                       f"its place — left as read; worth a look")
-            _unsure = unvouched_reading(items, path)
+            _unsure = unvouched_reading(items, path, questioned=bool(_counts))
             _ink = _page_core_ink(path) if _unsure is not None else None
             if _unsure is not None and _ink is not None \
                     and _ink < PHANTOM_CORE_INK:
@@ -485,11 +485,17 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
                     items = [it for it in items if it.is_furniture] \
                         + [_shown] + _unsure[2]
                     n_unvouched += 1
-                    print(f"    [!] {os.path.basename(path)}: {_n} words the "
-                          f"recogniser scored {_unsure[0]:.2f}, and no "
-                          f"witness reads more than {_unsure[1]:.0%} of them "
-                          f"on the page — shown as a picture of the page "
-                          f"rather than printed as invention"
+                    _why = (f"{_n} words read beside the table it invented, "
+                            f"and no witness reads more than "
+                            f"{_unsure[1]:.0%} of them" if _counts and _n else
+                            "nothing left beside the table it invented"
+                            if _counts else
+                            f"{_n} words the recogniser scored "
+                            f"{_unsure[0]:.2f}, and no witness reads more "
+                            f"than {_unsure[1]:.0%} of them on the page")
+                    print(f"    [!] {os.path.basename(path)}: {_why} — shown "
+                          f"as a picture of the page rather than printed as "
+                          f"invention"
                           + (f", with the {_kept} words of {len(_unsure[2])} "
                              f"block(s) a witness does read printed beneath it"
                              if _unsure[2] else ""))

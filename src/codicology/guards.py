@@ -427,22 +427,35 @@ def _share_witnessed(text: str, witness: "str | None") -> float:
     return sum(min(n, theirs.get(w, 0)) for w, n in ours.items()) / total
 
 
-def unvouched_reading(items, page_path: "str | None"
+def unvouched_reading(items, page_path: "str | None",
+                      questioned: bool = False
                       ) -> "tuple[float, float, list] | None":
     """The recogniser's confidence, the best witness's share, and the blocks
     a witness reads word for word, where a page's words are ones neither
     will stand behind as a whole; None where they are vouched for, or there
-    is nothing to judge by."""
+    is nothing to judge by.
+
+    A `questioned` page is one a guard has already caught inventing: a table
+    on it was refused as a count the page does not print. Its other words
+    were written by the same reading, and the recogniser's confidence has
+    already been shown to say nothing about it (the Gresham ledger plate in
+    Studies in the History of Accounting came back as a counting grid beside
+    a heading and a paragraph about "the Country to Capital", all at 0.945).
+    So neither the confidence nor the length of what is left decides whether
+    it is asked about: a witness does. A questioned page with nothing left
+    at all is unvouched too, and is shown rather than shipped empty."""
     said = [it for it in items if it.html and not it.is_furniture]
     confs = [it.conf for it in said if it.conf is not None]
-    if not confs or not page_path:
+    if not page_path or (not confs and not questioned):
         return None
-    conf = sum(confs) / len(confs)
-    if conf >= UNSURE_CONFIDENCE:
+    conf = sum(confs) / len(confs) if confs else 0.0
+    if conf >= UNSURE_CONFIDENCE and not questioned:
         return None
     text = " ".join(_strip_tags(it.html) for it in said)
-    if len(text.split()) < UNSURE_MIN_WORDS:
+    if not questioned and len(text.split()) < UNSURE_MIN_WORDS:
         return None
+    if questioned and not _WITNESS_WORD.search(text.lower()):
+        return conf, 0.0, []
     layer = None
     try:
         with open(page_path + ".layer.txt", encoding="utf-8") as fh:
