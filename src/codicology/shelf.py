@@ -260,6 +260,23 @@ def print_of(path: str) -> dict:
 
 # ── a run ────────────────────────────────────────────────────────────────────
 
+# What the other readers said of a book's pages is kept beside its reading
+# cache, under the cache's stem. A run borrows the cache, and a build that
+# may read nothing (--cache-only) can take the second and third readers'
+# answers only from there: 1123's two tables went back to the first
+# reader's on a run that borrowed the cache and left these behind.
+READER_FILES = (".second.gz", ".second.txt", ".third.gz", ".third.txt")
+
+
+def _beside(book: dict) -> list:
+    """The files a build of this book borrows along with its cache: those
+    the shelf names, and whatever the other readers left beside it."""
+    stem = book["cache"][:-len(".ocr.gz")] \
+        if book["cache"].endswith(".ocr.gz") else book["cache"]
+    found = [stem + s for s in READER_FILES if os.path.isfile(stem + s)]
+    return list(dict.fromkeys([*book["beside"], *found]))
+
+
 def _borrow(src: str, dst: str) -> None:
     """A copy of `src` at `dst` that a build may do as it likes with."""
     if os.path.exists(dst):
@@ -368,13 +385,13 @@ def build_one(book: dict, out: str, code: "str | None" = None,
                       "decisions": _stamp(book["decisions"])},
            "rc": None, "seconds": 0, "said": []}
     lacking = [p for p in (book["pdf"], book["cache"], book["decisions"],
-                           *book["beside"]) if p and not os.path.isfile(p)]
+                           *_beside(book)) if p and not os.path.isfile(p)]
     if lacking:
         row["said"] = [f"not built: there is no {p}" for p in lacking]
         _keep(out, row, None)
         return row
     _borrow(book["cache"], cache)
-    for extra in book["beside"]:
+    for extra in _beside(book):
         _borrow(extra, os.path.join(out, "cache", os.path.basename(extra)))
     kept_turns = (os.path.join(turns_dir, os.path.basename(book["cache"])
                                + TURNS_SUFFIX) if turns_dir else None)
@@ -441,7 +458,7 @@ def build_one(book: dict, out: str, code: "str | None" = None,
     _keep(out, row, print_)
     if prints_only and print_ is not None:
         for used in (epub, cache, cache + TURNS_SUFFIX, *(os.path.join(
-                out, "cache", os.path.basename(x)) for x in book["beside"])):
+                out, "cache", os.path.basename(x)) for x in _beside(book))):
             if os.path.exists(used):
                 os.remove(used)
     return row

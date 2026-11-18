@@ -261,6 +261,22 @@ def test_a_run_builds_from_borrowed_caches_and_keeps_a_print_of_each(tmp_path):
     assert json.load(open(os.path.join(out, "run.json")))["built"] == 3
 
 
+def test_what_the_other_readers_left_beside_a_cache_is_borrowed_with_it(tmp_path):
+    """1123's two tables went back to the first reader's on a run that
+    borrowed the cache and left the second reader's answers behind."""
+    books = _three(tmp_path)
+    (tmp_path / "8-ab.second.gz").write_bytes(b"second")
+    (tmp_path / "8-ab.second.txt").write_text("asked")
+    (tmp_path / "8-ab.third.gz").write_bytes(b"third")
+    run, said = _Builder(tmp_path), []
+    out = str(tmp_path / "run")
+    shelf.build(_shelf(tmp_path, books), out, jobs=1, run=run, say=said.append, python="py")
+    for name, held in (("8-ab.second.gz", b"second"), ("8-ab.second.txt", b"asked"),
+                       ("8-ab.third.gz", b"third")):
+        assert (tmp_path / "run" / "cache" / name).read_bytes() == held
+    assert not (tmp_path / "run" / "cache" / "7-ab.second.gz").exists()
+
+
 def test_a_book_that_does_not_build_is_said_and_the_others_are_built(tmp_path):
     books = _three(tmp_path)
     os.remove(books[2]["pdf"])
