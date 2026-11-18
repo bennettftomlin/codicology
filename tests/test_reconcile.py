@@ -604,3 +604,42 @@ def test_a_link_cut_short_is_closed_over_the_rest_of_its_address(vtb):
     assert ('<a href="https://papers.ssrn.com/abstract=2723611">'
             'https://papers.ssrn.com/abstract=2723611</a>.</p>') in b[0]
     assert b[1] == '<p><a href="http://example.com/x">example</a>s are many.</p>'
+
+
+def test_a_control_standing_for_a_character_does_not_refuse_its_run(vtb, tmp_path):
+    """Nomads, Empires, States p237: the layer has "Leske\\x03Budrich." for
+    "Leske+Budrich.", and the doubled dash after it was refused with it."""
+    p = _native_page(tmp_path, "Studien zur Kritik der Weltordnung Opladen: "
+                     "Leske\x03Budrich. —— 1998. Transnational Classes and International Relations")
+    bodies = ["<p>Studien zur Kritik der Weltordnung Opladen: Leske+Budrich. — 1998. "
+              "Transnational Classes and International Relations</p>"]
+    vtb.reconcile_native_text(bodies, [p])
+    assert "Leske+Budrich. —— 1998." in bodies[0]
+    from codicology.reconcile import _same_through_controls as same
+    assert not same("www.scmp.com/news/china/article/123", "www.scmp.com/\x02")
+
+
+def test_a_figure_dropped_under_a_raised_power_is_put_back(vtb, tmp_path):
+    """Small is Necessary p84: "350ft²" read as "35ft" and a raised 2."""
+    p = _native_page(tmp_path, "a self-contained unit smaller than 350ft2 [32.6m2] often found "
+                     "in either a mid or high rise building")
+    bodies = ["<p>a self-contained unit smaller than 35ft<sup>2</sup> [32.6m<sup>2</sup>] "
+              "often found in either a mid or high rise building</p>"]
+    vtb.reconcile_native_text(bodies, [p])
+    assert "350ft<sup>2</sup>" in bodies[0] and "32.6m<sup>2</sup>" in bodies[0]
+
+
+def test_a_hidden_picture_over_text_already_read_is_not_recovered(vtb):
+    from codicology.figures import _read_as_text
+    items = [vtb.PageItem(html="<p>prose</p>", box=(0.1, 0.1, 0.9, 0.9))]
+    assert _read_as_text(items, (0.2, 0.2, 0.6, 0.6)) == 1.0
+    assert _read_as_text(items, (0.0, 0.92, 0.5, 0.99)) == 0.0
+
+
+def test_a_note_call_the_layer_writes_twice_is_not_a_dropped_figure(vtb, tmp_path):
+    p = _native_page(tmp_path, "he is a man. He becomes the son of Nothingness. His beginnings "
+                     "are in his own self.”55 But this impossibility is the fruit of empire")
+    bodies = ["<p>he is a man. He becomes the son of Nothingness. His beginnings are in his own "
+              "self.”<sup>5</sup> But this impossibility is the fruit of empire</p>"]
+    vtb.reconcile_native_text(bodies, [p])
+    assert "self.”<sup>5</sup>" in bodies[0]

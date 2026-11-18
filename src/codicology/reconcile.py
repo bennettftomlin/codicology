@@ -88,6 +88,19 @@ def _same_word(ours: str, layer: str) -> bool:
 _EDGE_MARKS = "‘’‚‛'\"“”„‟′″«»—–‒−-"
 
 
+# A control character may stand for a printed one the layer could not
+# decode, not only for a line break: Nomads, Empires, States' layer holds the
+# publisher "Leske+Budrich." as "Leske\x03Budrich.", and the word read as
+# garbled refused its whole run — the "——" after it, which the page prints
+# and the reading had as "—", with it. Each control is let stand for one
+# character or none; every other character must agree. Half an address
+# against the whole of it, the case the refusal is for, still does not.
+def _same_through_controls(ours: str, layer: str) -> bool:
+    pattern = "".join(".?" if _CONTROL.match(ch) else re.escape(ch)
+                      for ch in layer)
+    return bool(ours) and re.fullmatch(pattern, ours, re.S) is not None
+
+
 def _same_but_its_marks(ours: str, layer: str) -> bool:
     a, b = ours.translate(_SETTING), layer.translate(_SETTING)
     if a == b:
@@ -117,6 +130,42 @@ def _same_but_look_alikes(ours: str, layer: str) -> bool:
         return False
     return all(a == b or any(a in g and b in g for g in _LOOK_ALIKE)
                for a, b in zip(ours, layer))
+
+
+# A figure dropped from a word whose power is raised: Small is Necessary
+# prints "350ft²" and the reading has "35ft" and a raised "2", two words to
+# the layer's one "350ft2", so the run was never taken. Where our word and
+# the raised figure after it spell the layer's word but for figures in the
+# first, the first takes the layer's, and the power keeps its setting.
+def _figures_under_powers(ours, toks, parts, a0, a1, layer) -> list:
+    """(token, word) for each figure put back in a run our words split
+    with raised powers that the layer holds whole; [] where the run is not
+    that throughout."""
+    def joined(i):              # does token i run on into token i + 1?
+        k, k2 = toks[i][0], toks[i + 1][0]
+        return (k2 > k and toks[i][2] == len(parts[k]) and toks[i + 1][1] == 0
+                and all(re.fullmatch(r"</?sup>", parts[j]) for j in range(k + 1, k2)))
+    out, i = [], a0
+    letters = lambda w: re.sub(r"\d", "", w)
+    for word in layer:
+        j = i
+        while j + 1 < a1 and joined(j) and len("".join(ours[i:j + 1])) < len(word):
+            j += 1
+        whole, rest = "".join(ours[i:j + 1]), "".join(ours[i + 1:j + 1])
+        if whole == word:
+            pass
+        elif j > i and rest and word.endswith(rest) \
+                and re.search(r"\d", ours[i]) and ours[i][-1].isalnum() \
+                and letters(word[:-len(rest)]) == letters(ours[i]) \
+                and re.search(r"\d", word[:-len(rest)]):
+            # a measure under its power ("35ft" ²), not a note call after
+            # a word: Pedagogics of Liberation's layer writes the call 5
+            # after 'self.”' twice, and 'self.”5' is no word of the page's
+            out.append((i, word[:-len(rest)]))
+        else:
+            return []
+        i = j + 1
+    return out if i == a1 else []
 
 
 # Words the publisher prints and the reading passed over.
@@ -393,6 +442,11 @@ def reconcile_native_text(bodies: list[str], page_paths: list[str]) -> int:
                     reconcile_native_text.unplaced.append(
                         (pi, " ".join(ours[max(0, a0 - 2):a0]),
                          " ".join(words), " ".join(ours[a0:a0 + 2])))
+            if tag == "replace" and a1 - a0 > b1 - b0 and 0 < a0 \
+                    and a1 < len(ours) and a1 - a0 <= 3 * (b1 - b0):
+                subs += _figures_under_powers(ours, toks, parts, a0, a1,
+                                              layer_words[b0:b1])
+                continue
             if tag != "replace" or (a1 - a0) != (b1 - b0) or (a1 - a0) > 3:
                 continue
             run = list(zip(range(a0, a1), layer_words[b0:b1]))
@@ -404,6 +458,7 @@ def reconcile_native_text(bodies: list[str], page_paths: list[str]) -> int:
             if any(_CONTROL.search(cand)
                    and not any(_same_word(ours[ti], w) for w in (
                        _CONTROL.sub("", cand), _CONTROL.sub("-", cand)))
+                   and not _same_through_controls(ours[ti], cand)
                    for ti, cand in run):
                 continue
             # The first or last run on the page has agreement on one side

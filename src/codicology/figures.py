@@ -333,6 +333,64 @@ def recover_placeholder_figures(items: list, page_path: str) -> list:
     return out
 
 
+ORPHAN_TEXT_SHARE = 0.4     # of a stored picture's place that read as text (white between lines counts against it)
+# |correlation| under which the stored picture is not what is drawn, at any
+# quarter turn: Disturbing Times stores its photographs of two opening pages
+# on their side (0.67 turned upright, 0.00 as stored); the map tiles hidden
+# under How the West Came to Rule's p. 115 reach 0.47 at best.
+ORPHAN_UNRELATED = 0.5
+# …and a drawing stored as a negative comes out clearly against the page as it
+# lies, however much of it is labels drawn on top: Where There Is No Doctor's
+# bottles and back-pain figure at -0.36 and -0.49, its calendars at -0.8 and
+# below. The hidden tiles lie within 0.12 of nothing either way.
+ORPHAN_NEGATIVE = -0.3
+
+
+def _touches(a, b, reach: float = 0.01) -> bool:
+    """Whether two boxes meet or overlap, within `reach` of the page."""
+    return (a[0] <= b[2] + reach and b[0] <= a[2] + reach
+            and a[1] <= b[3] + reach and b[1] <= a[3] + reach)
+
+
+def _unrelated(art: "Image.Image", ref: "Image.Image") -> bool:
+    """Whether a stored picture is not what the page draws in its place: no
+    match at any quarter turn, and not a negative of it."""
+    if _correlation(art, ref) <= ORPHAN_NEGATIVE:
+        return False
+    return max(abs(_correlation(art.rotate(turn, expand=True), ref))
+               for turn in (0, 90, 180, 270)) < ORPHAN_UNRELATED
+
+
+def _correlation(a: "Image.Image", b: "Image.Image") -> float:
+    import numpy as np
+    try:
+        x = np.asarray(a.convert("L").resize((96, 96)), dtype=np.float32).ravel()
+        y = np.asarray(b.convert("L").resize((96, 96)), dtype=np.float32).ravel()
+    except Exception:
+        return 1.0
+    if x.std() < 1e-3 and y.std() < 1e-3:
+        return 1.0 if abs(x.mean() - y.mean()) < 8 else 0.0
+    if x.std() < 1e-3 or y.std() < 1e-3:
+        return 0.0              # a blank tile against a drawing, or the reverse
+    return float(np.corrcoef(x, y)[0, 1])
+
+
+def _read_as_text(items: list, box) -> float:
+    """How much of BOX the page's text blocks cover, as a share of it."""
+    x0, y0, x1, y1 = box
+    area = max(1e-9, (x1 - x0) * (y1 - y0))
+    got = 0.0
+    for it in items:
+        if it.figure is not None or not it.box or it.is_furniture \
+                or not (it.html and _strip_tags(it.html).strip()):
+            continue
+        a0, b0, a1, b1 = it.box
+        w, h = min(x1, a1) - max(x0, a0), min(y1, b1) - max(y0, b0)
+        if w > 0 and h > 0:
+            got += w * h
+    return min(1.0, got / area)
+
+
 def recover_orphan_artwork(items: list, page_path: str,
                            held: "list | tuple" = ()) -> list:
     """
@@ -402,7 +460,7 @@ def recover_orphan_artwork(items: list, page_path: str,
     if not orphans:
         return items
 
-    out = list(items)
+    decided = []                # (placed, art, hidden)
     for placed, obj in orphans:
         art = None
         try:
@@ -418,9 +476,26 @@ def recover_orphan_artwork(items: list, page_path: str,
         except Exception:
             art = None
         ref = _render_region(page, placed, art.width if art else 800)
+        # The picture is stored there and not shown: what the page draws in
+        # its place is prose the reading already has. How the West Came to
+        # Rule keeps a map's tiles under a page of text on p. 115, and six
+        # crops of that text were printed as pictures. Unrelated, not merely
+        # unlike: a drawing stored as a negative, or on its side, is the
+        # same drawing (see _unrelated); and a drawing stored in bands keeps
+        # every band if one of them is kept (below): FM 5-103's title
+        # drawing has a band its lettering made read as text.
+        hidden = (art is not None and ref is not None and _unrelated(art, ref)
+                  and (_read_as_text(items, placed) >= ORPHAN_TEXT_SHARE
+                       or not figure_has_content(ref)))
         if art is None or ref is None or not _looks_like_same_picture(art, ref):
             art = ref               # the page as drawn, if the stored pixels
-        if art is None:             # cannot be confirmed
+        decided.append((placed, art, hidden))   # cannot be confirmed
+    kept = [p for p, a, h in decided if not h and a is not None]
+    out = list(items)
+    for placed, art, hidden in decided:
+        if hidden and not any(_touches(placed, k) for k in kept):
+            continue
+        if art is None:
             continue
         # slot it in by where it sits, so it reads in the right place
         at = len(out)
