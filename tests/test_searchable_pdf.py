@@ -222,3 +222,27 @@ def test_phrase_search_across_the_seam_survives(vtb, tmp_path, monkeypatch):
                     .get_text_bounded().split())
     assert "pardoned them fully" in text
     assert "Governor Altgeld pardoned" in text
+
+
+def test_text_outside_latin_1_is_found_by_search(vtb, tmp_path):
+    """The Base-14 font set every character outside its 8-bit encoding as a
+    dot: "don’t" came back "don·t", and neither spelling could be found."""
+    pymupdf = pytest.importorskip("pymupdf")
+    page = _page_png(tmp_path)
+    text = "don’t “ﬁnal” αβγ жизнь שלום"
+    items = [[vtb.PageItem(html=f"<p>{text}</p>", box=(0.05, 0.10, 0.95, 0.60))]]
+    out = str(tmp_path / "book.pdf")
+    vtb.build_searchable_pdf([page], items, out)
+    got = pymupdf.open(out)[0]
+    for word in ("don’t", "“final”", "αβγ", "жизнь"):   # the layer is NFKC: ﬁ is fi
+        assert got.search_for(word), word
+
+
+def test_a_block_in_a_right_to_left_script_is_found_by_search(vtb, tmp_path):
+    pymupdf = pytest.importorskip("pymupdf")
+    page = _page_png(tmp_path)
+    items = [[vtb.PageItem(html="<p>שלום עולם ברוכים הבאים</p>",
+                           box=(0.05, 0.10, 0.95, 0.60))]]
+    out = str(tmp_path / "book.pdf")
+    vtb.build_searchable_pdf([page], items, out)
+    assert pymupdf.open(out)[0].search_for("שלום")
