@@ -149,7 +149,7 @@ GROUP_HEAD_SECTION = re.compile(
 _HEAD_THEN_FIRST = re.compile(
     r"<(h[1-6])\b[^>]*>(?:(?!</\1>).){1,300}</\1>\s*"
     r"(?:<(?:ol|ul)\b[^>]*>\s*)?<(?:p|li)\b[^>]*>\s*(?:<sup>\s*)?1"
-    r"(?:\.|\s*</sup>|\s+(?=[^\W\d_]))",
+    r"(?:\.|\s*</sup>|\s+(?=[^\W\d_]|<a\b))",
     re.S)
 
 
@@ -1097,10 +1097,55 @@ def _foot_block_without_a_rule(body: str) -> int:
     return start
 
 
+# A foot printed with a plain number, "20 Kurt W. Weitzmann…".
+_BARE_FOOT = re.compile(r"<p[^>]*>\s*(\d{1,3})\s+(?=[^\W\d_]|[‘“'\"(\[<])")
+
+
+def _bare_feet_without_a_rule(body: str) -> int:
+    """Where the feet begin on a page with no rule whose feet are numbered
+    plainly, or 0.
+
+    Disturbing Times prints its feet "20 Kurt W. Weitzmann…", with no
+    superscript and, on some pages, with no rule the recogniser saw: the
+    trailing run of paragraphs that lead with a superscript is how a
+    ruleless foot block is found, and a plain number leads none. A plain
+    number opening a paragraph is too ordinary to take on its own, so the
+    page has to call each of them: the run's numbers climb one at a time
+    (a paragraph between them, a note going on, at most one), and each is
+    raised exactly once in the page above it, which a numbered list in the
+    prose never is."""
+    paras = list(re.finditer(r"<p[^>]*>.*?</p>", body, re.S))
+    if len(paras) < 2:
+        return 0
+    k, run, loose = len(paras), [], 0
+    while k > 0:
+        m = _BARE_FOOT.match(paras[k - 1].group(0))
+        if m:
+            run.append(int(m.group(1)))
+            loose = 0
+        elif run and loose == 0:
+            loose = 1
+        else:
+            break
+        k -= 1
+    k += loose                    # a loose paragraph at the top is above the run
+    run.reverse()
+    if not run or k == 0 or any(b != a + 1 for a, b in zip(run, run[1:])):
+        return 0
+    start = paras[k].start()
+    above = body[:start]
+    if len(_strip_tags(above).split()) < 30:
+        return 0
+    raised = [int(n) for n in re.findall(r"<sup>\s*(\d{1,3})\s*</sup>", above)]
+    if any(raised.count(n) != 1 for n in run):
+        return 0
+    return start
+
+
 _ENDS_A_SENTENCE = re.compile(r"[.!?…:;][”’\"')\]]*\s*$")
 
 
-def _carried_over_tail(below: str, before: str) -> int:
+def _carried_over_tail(below: str, before: str, labelled: bool = False) -> int:
     """Where a page's own notes begin, past the end of a note the page
     before could not finish; 0 if the foot block does not open that way.
 
@@ -1114,7 +1159,11 @@ def _carried_over_tail(below: str, before: str) -> int:
     The tail is one or two paragraphs with no number. What makes it a tail
     and not prose under a divider is the page before: its last note stops
     without ending its sentence ("…the Statue of Liberty be-"), or the
-    paragraph itself starts in the middle of one.
+    paragraph itself starts in the middle of one. Or the layout says so:
+    where it called nearly everything under the rule a footnote (`labelled`),
+    the paragraphs with no number in front of the first foot are a note
+    going on. Disturbing Times runs a note over the page from under a list
+    with no rule, so the page before has no rule to read it from.
     """
     paras = list(re.finditer(r"<p[^>]*>.*?</p>", below, re.S))
     k = next((j for j, m in enumerate(paras) if FOOT_SHAPE.match(m.group(0))),
@@ -1132,7 +1181,7 @@ def _carried_over_tail(below: str, before: str) -> int:
                                             before.split("<hr/>", 1)[-1], re.S)]
     unfinished = bool(last) and "<hr/>" in before \
         and not _ENDS_A_SENTENCE.search(_strip_tags(last[-1]).strip())
-    if not (unfinished or first[0].islower()):
+    if not (unfinished or first[0].islower() or labelled):
         return 0
     return paras[k].start()
 
@@ -1359,6 +1408,13 @@ def link_footnotes(bodies: list[str], allow_numbered: bool = False,
             stats["linked"] += tn
             stats["table"] += tn
         rule = "<hr/>"
+        labelled_page = bool(foot_labelled) and pi < len(foot_labelled) \
+            and foot_labelled[pi] >= FOOT_LABELLED
+        before = bodies[pi - 1] if pi else ""
+
+        def feet_under(part: str) -> bool:
+            cut = _carried_over_tail(part, before, labelled_page)
+            return _looks_like_foot_block(part[cut:] if cut else part)
         if rule in body:
             above, below = body.split(rule, 1)
             # The end of a note carried over from the page before can come
@@ -1367,14 +1423,15 @@ def link_footnotes(bodies: list[str], allow_numbered: bool = False,
             # last rule, so that is the one the page divides at when what
             # follows the first is not feet.
             last = body.rfind(rule)
-            if last != body.find(rule) and not _looks_like_foot_block(below) \
-                    and _looks_like_foot_block(body[last + len(rule):]):
+            if last != body.find(rule) and not feet_under(below) \
+                    and feet_under(body[last + len(rule):]):
                 above, below = body[:last], body[last + len(rule):]
         else:
             # No rule drawn. Only the numbered pass goes on without one, and
             # only where the page's own shape says where the feet begin —
             # symbols have no such trailing-run signature to stand on.
-            cut = _foot_block_without_a_rule(body) if allow_numbered else 0
+            cut = (_foot_block_without_a_rule(body)
+                   or _bare_feet_without_a_rule(body)) if allow_numbered else 0
             if not cut:
                 if allow_numbered:
                     body, k = _scattered_feet(body, pi)
@@ -1409,7 +1466,7 @@ def link_footnotes(bodies: list[str], allow_numbered: bool = False,
         # linked one is no longer a bare <sup> and cannot be claimed twice)
         tail = ""
         if allow_numbered and not _looks_like_foot_block(below):
-            cut = _carried_over_tail(below, bodies[pi - 1] if pi else "")
+            cut = _carried_over_tail(below, before, labelled_page)
             if cut:
                 tail, below = below[:cut], below[cut:]
                 stats["carried"] = stats.get("carried", 0) + 1
