@@ -129,6 +129,30 @@ class PreflightDialog(QDialog):
             "decisions does not change what the readers saw.")
         form.addRow(self.adjudicate)
 
+        # Asked here, book by book, because it is worth its time on a scan
+        # and hardly on a born-digital book, where the PDF's own text
+        # already settles most disputed words. Only the record above uses
+        # it, so it waits on that box.
+        self.second_votes = QCheckBox(
+            "Give the second reader a vote in the dispute record")
+        self.second_votes.setToolTip(
+            "It settles a disputed word only as a count of readers, with "
+            "Apple Vision: one of them with a view, or both agreeing. A "
+            "verdict of the vocabulary or the dictionary that it reads the "
+            "other way is left open for you. It reads every page that has "
+            "a disputed word: allow about twenty minutes for each hundred "
+            "such pages, the first time. Worth it on a scan; on a "
+            "born-digital book the PDF's own text settles most disputes."
+            if second.get("present") else
+            "No second reader is installed: its two .gguf files go in "
+            + str(second.get("looked_in") or "~/.cache/codicology/second"))
+        self.second_votes.setChecked(bool(second.get("present"))
+                                     and bool(prefs["second_reader_votes"]))
+        self._second_present = bool(second.get("present"))
+        self.adjudicate.toggled.connect(self._votes_follow)
+        self._votes_follow(self.adjudicate.isChecked())
+        form.addRow(self.second_votes)
+
         self.extra = QLineEdit(prefs["extra_flags"])
         self.extra.setPlaceholderText("--drop-pages r060p1  --cover none  …")
         self.extra.setToolTip("Any codicology convert flag not surfaced "
@@ -149,6 +173,9 @@ class PreflightDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def _votes_follow(self, adjudicating):
+        self.second_votes.setEnabled(self._second_present and bool(adjudicating))
 
     def options(self):
         """Chosen options, persisted as the defaults for next time."""
@@ -173,4 +200,10 @@ class PreflightDialog(QDialog):
         # deliberately not persisted: a build that skipped the record
         # should not quietly make every later build skip it too
         opts["adjudicate"] = self.adjudicate.isChecked()
+        # remembered as last chosen; left as it was where the box could
+        # not be ticked (no model, or no record being made)
+        opts["second_reader_votes"] = self.second_votes.isEnabled() \
+            and self.second_votes.isChecked()
+        if self.second_votes.isEnabled():
+            prefs["second_reader_votes"] = self.second_votes.isChecked()
         return opts

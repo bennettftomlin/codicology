@@ -47,7 +47,10 @@ path is left empty the plugin probes `~/.local/bin`, `/opt/homebrew/bin`,
    scans, blank pages, plus a free-text field for any other convert flag.
    Where a second reader is installed (the codicology README says how),
    a box asks it about tables and equations; it is off until ticked. Its
-   vote in the dispute record is a separate box in the plugin's settings.
+   vote in the dispute record is a box of its own, under the one that
+   makes the record (and greyed out unless that one is ticked): worth its
+   time on a scan, hardly on a born-digital book, so it is asked book by
+   book and remembered as last chosen.
 3. The job runs in Calibre's jobs list: page-by-page progress, a live
    log, and Cancel that actually kills the OCR process tree.
 4. On success the EPUB is added to the book and verify's verdict is

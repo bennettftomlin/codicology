@@ -84,19 +84,6 @@ class ConfigWidget(QWidget):
         self.adjudicate_box.setChecked(bool(prefs['adjudicate_after_build']))
         layout.addWidget(self.adjudicate_box)
 
-        self.second_votes_box = QCheckBox(
-            'Give the second reader a vote in the dispute record, where '
-            'one is installed')
-        self.second_votes_box.setToolTip(
-            'It settles a disputed word only as a count of readers, with '
-            'Apple Vision: one of them with a view, or both agreeing. A '
-            'verdict of the vocabulary or the dictionary that it reads the '
-            'other way is left open for you. It reads every page that has '
-            'a disputed word: allow about twenty minutes for each hundred '
-            'such pages, the first time. Does nothing where no second '
-            'reader is installed (Check environment says).')
-        self.second_votes_box.setChecked(bool(prefs['second_reader_votes']))
-        layout.addWidget(self.second_votes_box)
 
         self.review_sheet_box = QCheckBox(
             'Also render the dispute record as a review sheet '
@@ -179,6 +166,5 @@ class ConfigWidget(QWidget):
         prefs['codicology_path'] = self.path_edit.text().strip()
         prefs['verify_after_build'] = self.verify_box.isChecked()
         prefs['adjudicate_after_build'] = self.adjudicate_box.isChecked()
-        prefs['second_reader_votes'] = self.second_votes_box.isChecked()
         prefs['review_sheet_after_build'] = self.review_sheet_box.isChecked()
         prefs['open_review_sheet'] = self.open_sheet_box.isChecked()

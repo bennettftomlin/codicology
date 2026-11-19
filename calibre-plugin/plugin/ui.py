@@ -257,7 +257,7 @@ class CodicologyOCRAction(InterfaceAction):
         adjudicate_argv = ([exe, 'adjudicate', out.name, pdf,
                             '--report', report_path]
                            if opts.get('adjudicate') else None)
-        if adjudicate_argv and prefs['second_reader_votes'] \
+        if adjudicate_argv and opts.get('second_reader_votes') \
                 and ((doctor or {}).get('second_reader') or {}).get('present'):
             adjudicate_argv.append('--second-reader')
         review_argv = ([exe, 'review', report_path]
