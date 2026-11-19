@@ -1131,26 +1131,22 @@ TABLE_SYMBOL_NOTE = re.compile(r"\s*<p[^>]*>\s*(\*\*|\*|†|‡)(?![*†‡])\s*
                                re.S)
 
 
-def _table_symbol_notes(body: str, tm, pi: int, t: int, edits: list,
-                        claimed: list) -> "tuple[str, int]":
-    """The edits that link table TM's symbol notes to their calls, added to
-    EDITS; the body is unchanged here, as in _table_notes."""
-    notes, pos = [], tm.end()
-    while (m := TABLE_SYMBOL_NOTE.match(body, pos)) and \
-            m.group(1) not in [x.group(1) for x in notes]:
-        notes.append(m)
-        pos = m.end()
-    n = 0
+def _link_symbol_notes(body: str, notes: list, lo: int, hi: int, pos: int,
+                       pi: int, t: int, edits: list, claimed: list) -> None:
+    """Add to EDITS what links each symbol note in NOTES to its calls: the
+    symbol set after a word between LO and HI (the table and its title
+    line), and nowhere else on the page outside LO..POS."""
+    text_spans = [(x.start(), x.end()) for x in re.finditer(r"[^<]+", body)]
+
+    def in_text(a):
+        return any(s <= a < e for s, e in text_spans)
     for k, m in enumerate(notes):
         sym = m.group(1)
-        call = re.compile(rf"(?<=[^\s*†‡<>])(?<!\*){re.escape(sym)}(?![*†‡])")
-        text_spans = [(x.start(), x.end()) for x in re.finditer(r"[^<]+", body)]
-
-        def in_text(a):
-            return any(s <= a < e for s, e in text_spans)
-        inside = [c for c in call.finditer(body, tm.start(), tm.end()) if in_text(c.start())]
+        call = re.compile(rf"(?:(?<=[^\s*†‡<>])|(?<=[^\s*†‡<>] ))(?<!\*)"
+                          rf"{re.escape(sym)}(?![*†‡])")
+        inside = [c for c in call.finditer(body, lo, hi) if in_text(c.start())]
         outside = [c for c in call.finditer(body) if in_text(c.start())
-                   and not (tm.start() <= c.start() < pos)]
+                   and not (lo <= c.start() < pos)]
         if not inside or outside:
             continue
         nid, rid = f"tn-p{pi}-t{t}-s{k + 1}", f"tnref-p{pi}-t{t}-s{k + 1}"
@@ -1164,39 +1160,52 @@ def _table_symbol_notes(body: str, tm, pi: int, t: int, edits: list,
                           f'<sup><a epub:type="noteref"{id_attr} '
                           f'href="#{nid}">{sym}</a></sup>'))
             claimed.append((c.start(), c.end()))
-            n += 1
-    return body, n
 
 
 def _table_notes(body: str, pi: int) -> "tuple[str, int]":
     """Link each table's notes on page PI to the calls in that table.
 
     The scope is the table, and it is settled by the page: the notes number
-    from one and climb by one, and each is called from the table itself or
-    from the title line set directly above it (a note on the whole table
-    hangs there). A note cited from several cells is linked from each — in
-    a table that is ordinary, and nothing else in so small a scope could
-    claim the number. A number met as a bare superscript anywhere else on
-    the page is left alone: the page's own feet, or another table's, may be
-    using it."""
+    from one and climb by one, or are marked each with a different symbol
+    (the two kinds may be mixed: The Modern Corporation's appendixes open a
+    table's notes with an asterisk on its title and go on with numbers), and
+    each is called from the table itself or from the title line set directly
+    above it (a note on the whole table hangs there). A note cited from
+    several cells is linked from each — in a table that is ordinary, and
+    nothing else in so small a scope could claim the number. A number met
+    as a bare superscript anywhere else on the page is left alone: the
+    page's own feet, or another table's, may be using it."""
     edits: list[tuple[int, int, str]] = []
     claimed: list[tuple[int, int]] = []      # call spans this pass took
     for t, tm in enumerate(_TABLE.finditer(body)):
-        notes, pos = [], tm.end()
-        while (m := TABLE_NOTE.match(body, pos)) and \
-                int(m.group(1)) == len(notes) + 1:
-            notes.append(m)
-            pos = m.end()
-        if not notes:
-            _table_symbol_notes(body, tm, pi, t, edits, claimed)
+        notes, syms, pos = [], [], tm.end()
+        while True:
+            m = TABLE_NOTE.match(body, pos)
+            if m and int(m.group(1)) == len(notes) + 1:
+                notes.append(m)
+                pos = m.end()
+                continue
+            m = TABLE_SYMBOL_NOTE.match(body, pos)
+            if m and m.group(1) not in [x.group(1) for x in syms]:
+                syms.append(m)
+                pos = m.end()
+                continue
+            break
+        if not notes and not syms:
             continue
         # the title line: the block that ends where the table begins
         lo = tm.start()
         title = re.search(r"<p[^>]*>(?:(?!<p[\s>]).)*</p>\s*$",
                           body[max(0, lo - 600):lo], re.S)
         if title is not None and not TABLE_NOTE.match(title.group(0)) \
+                and not TABLE_SYMBOL_NOTE.match(title.group(0)) \
                 and len(_strip_tags(title.group(0)).split()) <= TITLE_WORDS:
             lo -= len(title.group(0))
+        # a symbol on the title line, but not on a sentence of prose above
+        # the table, which may be calling a note of its own
+        sym_lo = lo if title is None or lo == tm.start() or not re.search(
+            r"[.!?:;][”’\"')\]]*$", _strip_tags(title.group(0)).strip()) else tm.start()
+        _link_symbol_notes(body, syms, sym_lo, tm.end(), pos, pi, t, edits, claimed)
         calls: dict[int, list] = {}
         for c in _CELL_CALL.finditer(body, lo, tm.end()):
             calls.setdefault(int(c.group(1)), []).append(c)

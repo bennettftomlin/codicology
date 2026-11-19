@@ -142,10 +142,16 @@ def route_form_blocks(items: "list[PageItem]") -> "tuple[list, int]":
 MARKER_BLOCK_MAX_H = 0.03
 
 
+_NOTE_MARK = re.compile(r"\s*(?:<p[^>]*>)?\s*(?:<sup>\s*(\d{1,3})\s*</sup>"
+                        r"|(\*\*|\*|†|‡)(?![*†‡]))")
+
+
 def _table_note(items: "list[PageItem]", i: int) -> bool:
     """Whether item i is one of a table's own notes: a block labelled
-    Footnote in the run of such blocks set straight under a table, with
-    something other than a footnote following that run on the page."""
+    Footnote in the run of such blocks set straight under a table, where
+    the page's prose goes on after the run, or the table itself holds the
+    call of the run's first note (a table's notes at the foot of its page:
+    The Modern Corporation p106)."""
     if items[i].label != "Footnote":
         return False
     j = i - 1
@@ -153,9 +159,20 @@ def _table_note(items: "list[PageItem]", i: int) -> bool:
         j -= 1
     if j < 0 or items[j].label != "Table":
         return False
-    return any(not it.is_furniture and it.label != "Footnote"
-               and (it.html or it.figure is not None)
-               for it in items[i + 1:])
+    if any(not it.is_furniture and it.label != "Footnote"
+           and (it.html or it.figure is not None) for it in items[i + 1:]):
+        return True
+    first = items[j + 1]
+    while first.is_furniture:
+        first = items[items.index(first) + 1]
+    m = _NOTE_MARK.match(first.html or "")
+    if m is None:
+        return False
+    table = items[j].html or ""
+    if m.group(1):
+        return re.search(rf"<sup>\s*{m.group(1)}\s*</sup>", table) is not None
+    cells = re.sub(r"<[^>]+>", " ", table)
+    return re.search(rf"(?<=[^\s*†‡]){re.escape(m.group(2))}(?![*†‡])", cells) is not None
 
 
 def reattach_orphan_markers(items: list, furn_numbers: set,
