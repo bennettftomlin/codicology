@@ -1186,6 +1186,34 @@ def _carried_over_tail(below: str, before: str, labelled: bool = False) -> int:
     return paras[k].start()
 
 
+_SUP_FOOT = re.compile(r"<p[^>]*>\s*<sup>\s*(\d{1,3})\s*</sup>\s*\S")
+
+
+def _answered_feet(above: str, below: str) -> bool:
+    """Whether what is under a rule is the page's feet because the page
+    answers them one for one, whatever else the notes hold.
+
+    A note may carry a table, a list or paragraphs of its own (The Modern
+    Corporation and Private Property sets a worked example of a dividend in
+    one note and a table of companies in another), and the end of a note
+    from the page before may stand first, unnumbered, for most of the block.
+    Then the block is not feet nearly throughout, and none of the page's
+    notes linked. What a divider never has under it is this: paragraphs
+    opening with a raised number, climbing one at a time, each raised
+    exactly once above the rule, and every number raised above the rule
+    answered by one of them. No heading may stand under the rule. One
+    call and one note answer each other too easily, so it takes two: a
+    lone note followed by prose stays with the shape test (see
+    test_without_the_layouts_word_the_shape_still_decides)."""
+    if re.search(r"<h[1-6][\s>]", below):
+        return False
+    feet = [int(m.group(1)) for m in _SUP_FOOT.finditer(below)]
+    if not feet or any(b != a + 1 for a, b in zip(feet, feet[1:])):
+        return False
+    raised = [int(n) for n in re.findall(r"<sup>\s*(\d{1,3})\s*</sup>", above)]
+    return sorted(raised) == feet and len(feet) >= 2
+
+
 # How much of what follows the rule the layout must have called footnotes
 # for its word to stand in for the block's shape.
 FOOT_LABELLED = 0.9
@@ -1320,6 +1348,107 @@ def _table_notes(body: str, pi: int) -> "tuple[str, int]":
     return body, len(claimed)
 
 
+def _table_notes_overleaf(bodies: list[str]) -> int:
+    """Link a table's notes that the page turn carried to the next page.
+
+    A table set at the foot of a page may have no room under it for its
+    notes: The Modern Corporation and Private Property prints Table VII and
+    its note 1 at the foot of one page and notes 2 to 10 at the head of the
+    next, and runs Table II over two pages with all eight notes under the
+    second half. The same-page pass sees a table with no notes under it, or
+    notes under a table that calls none of them.
+
+    The scope is still the table. The table and any notes under it must end
+    its page; the next page must open with its notes, or with the table's
+    continuation (a title line and a table) and then its notes; the notes
+    climb by one from where the first page's left off. As on one page, a
+    note is linked where the table calls it and its number is raised
+    nowhere else on either page; at least two must be (or the only one).
+    Table VII never calls notes 6 and 9 as read, and they stay plain."""
+    linked = 0
+    for i in range(len(bodies) - 1):
+        body, nxt = bodies[i], bodies[i + 1]
+        tables = list(_TABLE.finditer(body))
+        if not tables:
+            continue
+        tm = tables[-1]
+        pos, k = tm.end(), 0
+        while True:
+            m = TABLE_NOTE.match(body, pos)
+            if not m or int(m.group(1)) != k + 1:
+                break
+            k, pos = k + 1, m.end()
+        if body[pos:].strip():
+            continue                     # the page goes on past the table
+        # the head of the next page: perhaps the table's title and its
+        # continuation, then the notes
+        at = len(nxt) - len(nxt.lstrip())
+        cont = None
+        title = re.match(r"\s*<p[^>]*>(?:(?!<p[\s>]).)*?</p>\s*(?=<table\b)", nxt[at:], re.S)
+        if title and len(_strip_tags(title.group(0)).split()) <= TITLE_WORDS:
+            at += title.end()
+        cont = _TABLE.match(nxt, at)
+        if cont:
+            at = cont.end()
+        elif title:
+            at -= title.end()
+        notes, npos = [], at
+        while True:
+            m = TABLE_NOTE.match(nxt, npos)
+            if not m or int(m.group(1)) != k + len(notes) + 1:
+                break
+            notes.append(m)
+            npos = m.end()
+        if not notes:
+            continue
+        lo = tm.start()
+        before = re.search(r"<p[^>]*>(?:(?!<p[\s>]).)*</p>\s*$", body[max(0, lo - 600):lo], re.S)
+        if before is not None and len(_strip_tags(before.group(0)).split()) <= TITLE_WORDS \
+                and not TABLE_NOTE.match(before.group(0)):
+            lo -= len(before.group(0))
+        spans = [(body, lo, tm.end())] + ([(nxt, cont.start(), cont.end())] if cont else [])
+        calls: dict[int, list] = {}
+        for page_no, (text, a, z) in zip((i, i + 1), spans):
+            for c in _CELL_CALL.finditer(text, a, z):
+                calls.setdefault(int(c.group(1)), []).append((page_no, c))
+        nums = [int(m.group(1)) for m in notes]
+        outside = set()
+        for c in _CELL_CALL.finditer(body):
+            if not lo <= c.start() < tm.end():
+                outside.add(int(c.group(1)))
+        for c in _CELL_CALL.finditer(nxt):
+            if not ((cont and cont.start() <= c.start() < cont.end())
+                    or at <= c.start() < npos):
+                outside.add(int(c.group(1)))
+        called = [n for n in nums if n in calls and n not in outside]
+        if len(called) < min(2, len(nums)):
+            continue
+        edits = {i: [], i + 1: []}
+        for m in notes:
+            n = int(m.group(1))
+            if n not in called:
+                continue
+            nid, rid = f"tn-p{i + 1}-o-{n}", f"tnref-p{i}-o-{n}"
+            open_ = nxt.rfind("<p", 0, m.start(1))
+            head = re.match(r"<p[^>]*>\s*<sup>\s*\d{1,3}\s*</sup>", nxt[open_:])
+            first_page = calls[n][0][0]
+            edits[i + 1].append((open_, open_ + head.end(),
+                                 f'<p id="{nid}"><sup><a href="page_{first_page:04d}.xhtml#{rid}">'
+                                 f'{n}</a></sup>'))
+            for j, (page_no, c) in enumerate(calls[n]):
+                id_attr = f' id="{rid}"' if j == 0 else ""
+                edits[page_no].append((c.start(), c.end(),
+                                       f'<sup><a epub:type="noteref"{id_attr} '
+                                       f'href="page_{i + 1:04d}.xhtml#{nid}">{n}</a></sup>'))
+                linked += 1
+        for page_no, page_edits in edits.items():
+            text = bodies[page_no]
+            for a, z, new in sorted(page_edits, reverse=True):
+                text = text[:a] + new + text[z:]
+            bodies[page_no] = text
+    return linked
+
+
 # A foot the reader set down somewhere other than the foot of its page: above
 # the rule, between two paragraphs, at the top. A paragraph that opens with a
 # raised number is a foot wherever it stands — running prose never does —
@@ -1401,6 +1530,9 @@ def link_footnotes(bodies: list[str], allow_numbered: bool = False,
     """
     stats = {"linked": 0, "numbered": 0, "skipped": 0, "ruleless": 0,
              "table": 0}
+    overleaf = _table_notes_overleaf(bodies)
+    stats["linked"] += overleaf
+    stats["table"] += overleaf
     for pi, body in enumerate(bodies):
         body, tn = _table_notes(body, pi)
         if tn:
@@ -1473,7 +1605,9 @@ def link_footnotes(bodies: list[str], allow_numbered: bool = False,
         labelled = bool(foot_labelled) and pi < len(foot_labelled) \
             and foot_labelled[pi] >= FOOT_LABELLED \
             and _opens_with_a_foot(below)
-        if allow_numbered and (_looks_like_foot_block(below) or labelled):
+        answered = bool(rule) and allow_numbered and _answered_feet(above, below)
+        if allow_numbered and (_looks_like_foot_block(below) or labelled
+                               or answered):
             mark_by_n: dict[int, list] = {}
             for m in re.finditer(r"<sup>\s*(\d{1,3})\s*</sup>", above):
                 mark_by_n.setdefault(int(m.group(1)), []).append(m)
