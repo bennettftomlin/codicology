@@ -1123,6 +1123,51 @@ _CELL_CALL = re.compile(r"<sup>\s*(\d{1,3})\s*</sup>")
 TITLE_WORDS = 40        # a table's title line, not a paragraph of prose
 
 
+# A table's notes may be marked with symbols instead (Survivability Manual,
+# The Horn of Africa): the table, then paragraphs each opening with a
+# different one of *, **, †, ‡, each set after a word in the table's cells
+# and nowhere else on the page.
+TABLE_SYMBOL_NOTE = re.compile(r"\s*<p[^>]*>\s*(\*\*|\*|†|‡)(?![*†‡])\s*\S.*?</p>",
+                               re.S)
+
+
+def _table_symbol_notes(body: str, tm, pi: int, t: int, edits: list,
+                        claimed: list) -> "tuple[str, int]":
+    """The edits that link table TM's symbol notes to their calls, added to
+    EDITS; the body is unchanged here, as in _table_notes."""
+    notes, pos = [], tm.end()
+    while (m := TABLE_SYMBOL_NOTE.match(body, pos)) and \
+            m.group(1) not in [x.group(1) for x in notes]:
+        notes.append(m)
+        pos = m.end()
+    n = 0
+    for k, m in enumerate(notes):
+        sym = m.group(1)
+        call = re.compile(rf"(?<=[^\s*†‡<>])(?<!\*){re.escape(sym)}(?![*†‡])")
+        text_spans = [(x.start(), x.end()) for x in re.finditer(r"[^<]+", body)]
+
+        def in_text(a):
+            return any(s <= a < e for s, e in text_spans)
+        inside = [c for c in call.finditer(body, tm.start(), tm.end()) if in_text(c.start())]
+        outside = [c for c in call.finditer(body) if in_text(c.start())
+                   and not (tm.start() <= c.start() < pos)]
+        if not inside or outside:
+            continue
+        nid, rid = f"tn-p{pi}-t{t}-s{k + 1}", f"tnref-p{pi}-t{t}-s{k + 1}"
+        open_ = body.rfind("<p", 0, m.start(1))
+        head = re.match(r"<p[^>]*>\s*" + re.escape(sym), body[open_:])
+        edits.append((open_, open_ + head.end(),
+                      f'<p id="{nid}"><a href="#{rid}">{sym}</a>'))
+        for j, c in enumerate(inside):
+            id_attr = f' id="{rid}"' if j == 0 else ""
+            edits.append((c.start(), c.end(),
+                          f'<sup><a epub:type="noteref"{id_attr} '
+                          f'href="#{nid}">{sym}</a></sup>'))
+            claimed.append((c.start(), c.end()))
+            n += 1
+    return body, n
+
+
 def _table_notes(body: str, pi: int) -> "tuple[str, int]":
     """Link each table's notes on page PI to the calls in that table.
 
@@ -1143,6 +1188,7 @@ def _table_notes(body: str, pi: int) -> "tuple[str, int]":
             notes.append(m)
             pos = m.end()
         if not notes:
+            _table_symbol_notes(body, tm, pi, t, edits, claimed)
             continue
         # the title line: the block that ends where the table begins
         lo = tm.start()

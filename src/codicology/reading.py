@@ -142,6 +142,22 @@ def route_form_blocks(items: "list[PageItem]") -> "tuple[list, int]":
 MARKER_BLOCK_MAX_H = 0.03
 
 
+def _table_note(items: "list[PageItem]", i: int) -> bool:
+    """Whether item i is one of a table's own notes: a block labelled
+    Footnote in the run of such blocks set straight under a table, with
+    something other than a footnote following that run on the page."""
+    if items[i].label != "Footnote":
+        return False
+    j = i - 1
+    while j >= 0 and (items[j].is_furniture or items[j].label == "Footnote"):
+        j -= 1
+    if j < 0 or items[j].label != "Table":
+        return False
+    return any(not it.is_furniture and it.label != "Footnote"
+               and (it.html or it.figure is not None)
+               for it in items[i + 1:])
+
+
 def reattach_orphan_markers(items: list, furn_numbers: set,
                             seq_state: "dict | None" = None,
                             body_text_in=None) -> tuple:
@@ -581,9 +597,20 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
                 # got a trailing-run heuristic instead; the label is the
                 # primary witness, the heuristic stays as the fallback for
                 # every cache written before labels were kept.
+                #
+                # A table's own notes are not the page's feet: notes the layout
+                # also calls Footnote, set straight under the table with the
+                # page's prose going on below them. The rule drawn above them
+                # cut the table from its notes and made the prose beneath part
+                # of the foot, and neither the table's notes nor the page's
+                # linked (The Modern Corporation, some forty tables). The rule
+                # goes above the page's own feet instead.
                 if item.label == "Footnote" \
                         and "<hr/>" not in page.render() \
-                        and not any(it.label == "Footnote" for it in items[:i]):
+                        and not _table_note(items, i) \
+                        and not any(it.label == "Footnote"
+                                    and not _table_note(items, j)
+                                    for j, it in enumerate(items[:i])):
                     page.blocks.append(Block(kind="rule", html="<hr/>"))
                     n_label_rules += 1
                 page.blocks.append(Block.of(item))
