@@ -608,6 +608,60 @@ def restore_lone_furniture(pages: "list[Page]", bodies: "list[str]"
     return restored
 
 
+TITLE_HEAD_BAND = 0.09      # a block ending this near the top of its page
+TITLE_HEAD_SIGHTINGS = 2    # pages besides its own that print it as furniture
+
+
+def _letters(text: str) -> str:
+    return " ".join(re.sub(r"[^a-z]+", " ", text.translate(_SETTING).casefold()).split())
+
+
+def strip_title_heads(pages: "list[Page]", bodies: "list[str]", title: str
+                      ) -> "list[tuple[int, str]]":
+    """
+    Take out of the body a running head that is the book's own title, where
+    the layout called it a heading: (page, text) for each taken.
+
+    The verso head of many books is their title, and the layout labels it a
+    heading as often as page furniture: Paul Robeson on fifteen pages of its
+    notes and index, The European Radical Left on seven, Where There Is No
+    Doctor's "2010" edition line. Where the reading order put it inside the
+    page, as two-column notes and indexes do, the rules that look for a head
+    at the start of a page's text could not see it. Where it stands is
+    known: in the top band of its page. And a book's title never opens one
+    of its chapters, where a chapter's or a section's title (Notes,
+    Bibliography, Chapter 7) may stand at the top of the page that opens it,
+    so only the title is taken, only where the book prints it as furniture on
+    other pages too, and never where it is all the page holds.
+    """
+    taken: "list[tuple[int, str]]" = []
+    names = {_letters(title), _letters(title.split(":")[0])} - {""}
+    if not names:
+        return taken
+    seen: "dict[str, set]" = {}
+    for i, p in enumerate(pages):
+        for b in p.furniture:
+            seen.setdefault(_letters(_strip_tags(b.html or "")), set()).add(i)
+    for i, page in enumerate(pages):
+        if i >= len(bodies):
+            break
+        for b in list(page.blocks):
+            if b.box is None or b.box[3] > TITLE_HEAD_BAND \
+                    or b.label not in ("SectionHeader", "Text"):
+                continue
+            text = " ".join(_strip_tags(b.html).split())
+            key = _letters(text)
+            if key not in names or len(seen.get(key, set()) - {i}) < TITLE_HEAD_SIGHTINGS:
+                continue
+            if not any(o is not b and (o.kind == "figure" or _letters(_strip_tags(o.html)))
+                       for o in page.blocks):
+                continue
+            page.blocks.remove(b)
+            bodies[i] = page.render()
+            taken.append((i, text))
+    return taken
+
+
 def furniture_texts(pages: "list[Page]") -> "list[list[str]]":
     """The text of each page's running heads and feet, as the folio audit and
     the chapter reading take it."""

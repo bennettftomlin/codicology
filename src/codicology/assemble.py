@@ -23,7 +23,7 @@ from .decisions import _decision_rounds, apply_reviewer_decisions
 from .equations import MATHML_NS, _pandoc, normalize_math, set_unit_powers, write_display_math
 from .figures import _encodable, encode_figure, find_image_furniture
 from .folios import Folio, audit_folios, fill_folio_gaps, folio_label, folios_from_furniture, read_folios, strip_folio_superscripts, strip_fused_folios
-from .furniture import Chapter, chapters_from_furniture, furniture_texts, head_shape, restore_lone_furniture, strip_missed_running_heads
+from .furniture import Chapter, chapters_from_furniture, furniture_texts, head_shape, restore_lone_furniture, strip_missed_running_heads, strip_title_heads
 from .guards import _page_core_ink, _phantom_blank_pages, _reads_as_empty
 from .index_links import link_index
 from .markup import _roman_to_int, _strip_tags
@@ -527,6 +527,17 @@ def build_epub(
                   + (f": {len(shapes)} distinct head(s)" if len(shapes) > 1
                      else f": {missed[0][1]!r}"))
 
+    if strip_furniture:
+        titled = strip_title_heads(pages, bodies, title)
+        if titled:
+            gone = {(pg, t[:90]) for pg, t in titled}
+            label_heads = [h for h in label_heads if (h[0], h[2]) not in gone]
+            print(f"    took out {len(titled)} running head(s) that are the "
+                  f"book's own title, set at the top of the page and labelled "
+                  f"a heading: pages "
+                  + ", ".join(str(i + 1) for i, _ in titled[:12])
+                  + ("…" if len(titled) > 12 else ""))
+    _carry_pages("title heads")
     signatures = strip_signature_marks(bodies)
     _carry_pages("signature marks")
     if signatures:
