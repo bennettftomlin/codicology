@@ -112,6 +112,23 @@ class Page:
         """The page as one string of markup, as the assembly half reads it."""
         return "".join(b.html for b in self.blocks)
 
+    def cut(self, start: int, end: int) -> None:
+        """Take the span [start, end) of the rendered page out of its blocks:
+        a block wholly inside it goes, with its label; a block it reaches
+        into keeps the rest of its markup. The page then renders as the
+        string with that span cut out, and no block's label passes to
+        another's text."""
+        kept, at = [], 0
+        for b in self.blocks:
+            s, e = at, at + len(b.html)
+            at = e
+            if start <= s and e <= end and s < e:
+                continue
+            if s < end and start < e:
+                b.html = b.html[:max(start - s, 0)] + b.html[max(end - s, 0):]
+            kept.append(b)
+        self.blocks[:] = kept
+
 
 # ── keeping a page true to the string a pass rewrote ─────────────────────────
 #
@@ -160,6 +177,13 @@ def _carry(old: str, new: str, cuts: "list[int]") -> "tuple[list[int], int]":
     tail = 0
     while tail < min(len(old), len(new)) - head and old[-1 - tail] == new[-1 - tail]:
         tail += 1
+    # The unchanged ends are taken back to where a tag opens, so the middle
+    # is compared as whole elements: compared from inside a shared "<p>", a
+    # page whose first block was cut gave that block's label to the
+    # paragraph after it, which kept nothing.
+    head = max(old.rfind("<", 0, head + 1), 0)
+    at = old.find("<", len(old) - tail)
+    tail = len(old) - at if at >= head else 0
     mid_old, mid_new = old[head:len(old) - tail], new[head:len(new) - tail]
     t_old, s_old = _tokens(mid_old)
     t_new, s_new = _tokens(mid_new)

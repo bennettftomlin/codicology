@@ -149,3 +149,44 @@ def test_a_page_whose_every_quote_a_pass_set_keeps_its_blocks():
     assert sync_page(page, body) == 0
     assert [b.html for b in page.blocks] == [p.replace(' "', " “").replace('" ', "” ")
                                               .replace('".', "”.") for p in paras]
+
+
+def test_a_running_head_cut_from_the_page_takes_its_block_and_label():
+    """The Rebel Passion: "10 THE REBEL PASSION" labelled a SectionHeader at
+    the top of a page, over a sentence running on from the page before.
+    The head's block goes; the paragraph keeps its own Text label."""
+    from codicology.furniture import strip_missed_running_heads
+    from codicology.model import Block, Page
+
+    def page(i, first):
+        return Page(i, f"p{i}", [Block("heading", f"<h2>{first}</h2>", "SectionHeader"),
+                                 Block("text", "<p>the sentence goes on here.</p>", "Text")])
+    pages = [page(i, f"{10 + 2 * i} THE REBEL PASSION") for i in range(5)]
+    bodies = [p.render() for p in pages]
+    furniture = [[f"{10 + 2 * i} THE REBEL PASSION"] for i in range(5)]
+    furniture[2] = []
+    removed = strip_missed_running_heads(bodies, furniture, pages)
+    assert (2, "14 THE REBEL PASSION") in removed
+    assert [b.label for b in pages[2].blocks] == ["Text"]
+    assert bodies[2] == pages[2].render() == "<p>the sentence goes on here.</p>"
+
+
+def test_cutting_a_span_from_a_page_edits_the_block_it_reaches_into():
+    from codicology.model import Block, Page
+    p = Page(0, "p", [Block("text", "<p>HEAD<br/>the line goes on.</p>", "Text"),
+                      Block("text", "<p>Next.</p>", "Text")])
+    body = p.render()
+    p.cut(body.index("HEAD"), body.index("the"))
+    assert p.render() == "<p>the line goes on.</p><p>Next.</p>"
+    assert [b.label for b in p.blocks] == ["Text", "Text"]
+
+
+def test_a_block_cut_whole_from_the_top_keeps_the_next_its_label():
+    """Carried through a string pass, not cut: compared from inside the
+    shared "<p>", the first paragraph went to the heading's block."""
+    from codicology.model import Block, Page, sync_page
+    p = Page(0, "p", [Block("heading", "<p>10 THE REBEL PASSION</p>", "SectionHeader"),
+                      Block("text", "<p>the sentence goes on.</p>", "Text")])
+    assert sync_page(p, "<p>the sentence goes on.</p>") == 0
+    assert [(b.label, b.html) for b in p.blocks] == \
+        [("SectionHeader", ""), ("Text", "<p>the sentence goes on.</p>")]

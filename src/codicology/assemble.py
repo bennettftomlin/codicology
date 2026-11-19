@@ -515,7 +515,7 @@ def build_epub(
     # break. Here, beside the picture pass and for the same reason — before
     # anything downstream counts or links what a page holds.
     if strip_furniture:
-        missed = strip_missed_running_heads(bodies, page_furniture)
+        missed = strip_missed_running_heads(bodies, page_furniture, pages)
         _carry_pages("running heads")
         if missed:
             gone = {(pg, t[:90]) for pg, t in missed}

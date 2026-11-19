@@ -208,7 +208,8 @@ def _worded_head(text: str) -> bool:
 
 
 def strip_missed_running_heads(bodies: list[str],
-                               page_furniture: list[list[str]]
+                               page_furniture: list[list[str]],
+                               pages: "list | None" = None
                                ) -> list[tuple[int, str]]:
     """
     Drop the running heads the layout pass called content, and say which.
@@ -257,6 +258,10 @@ def strip_missed_running_heads(bodies: list[str],
     book titles, a manual's designation — while those conditions spare a
     chart's source line under four charts running, a field manual's NOTE
     callouts, and a title printed on a cover, a half-title and a title page.
+
+    Given the pages, the head is cut from their blocks (Page.cut) and the
+    string rendered from them, so the block that held it goes with its
+    label rather than lending that label to the paragraph after it.
     """
     census: dict[str, int] = {}
     for texts in page_furniture:
@@ -310,6 +315,11 @@ def strip_missed_running_heads(bodies: list[str],
             # anchor to tidy one line. Losing a page is the larger harm.
             if "<img" not in left and not _strip_tags(left).strip():
                 continue
+            if pages is not None and i < len(pages) \
+                    and pages[i].render() == body:
+                # the head's block goes from the page, with its label, and
+                # a head fused into a paragraph leaves that block the rest
+                pages[i].cut(*cut)
             body = left
             bodies[i] = body
             removed.append((i, text))
