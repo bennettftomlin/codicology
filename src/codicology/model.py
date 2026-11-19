@@ -125,9 +125,32 @@ class Page:
 # paragraphs) goes to the earlier block, and is counted, so it can be seen
 # how often the carrying is a judgement and not a fact.
 
+# Compared token by token (a tag or a word, each with the spaces after it):
+# a page is some thousands of characters, and a pass that sets every quote on
+# it changes most of them, which compared character by character cost a long
+# book more time than everything else in its assembly together. A boundary
+# between blocks stands between tags, so it is always between two tokens.
+_TOKEN = None
+
+
+def _tokens(text: str) -> "tuple[list[str], list[int]]":
+    """The tokens of `text` and where each starts, with its length last."""
+    import re
+    global _TOKEN
+    if _TOKEN is None:
+        _TOKEN = re.compile(r"<[^<>]*>\s*|[^<\s]+\s*|\s+|<")
+    toks, starts = [], []
+    for m in _TOKEN.finditer(text):
+        toks.append(m.group())
+        starts.append(m.start())
+    starts.append(len(text))
+    return toks, starts
+
+
 def _carry(old: str, new: str, cuts: "list[int]") -> "tuple[list[int], int]":
     """Where each cut in `old` lands in `new`, and how many fell inside a
     change rather than between unchanged text."""
+    import bisect
     import difflib
     if old == new:
         return list(cuts), 0
@@ -138,7 +161,9 @@ def _carry(old: str, new: str, cuts: "list[int]") -> "tuple[list[int], int]":
     while tail < min(len(old), len(new)) - head and old[-1 - tail] == new[-1 - tail]:
         tail += 1
     mid_old, mid_new = old[head:len(old) - tail], new[head:len(new) - tail]
-    ops = difflib.SequenceMatcher(None, mid_old, mid_new, autojunk=False).get_opcodes()
+    t_old, s_old = _tokens(mid_old)
+    t_new, s_new = _tokens(mid_new)
+    ops = difflib.SequenceMatcher(None, t_old, t_new, autojunk=False).get_opcodes()
     out, straddled = [], 0
     for c in cuts:
         if c <= head:
@@ -147,15 +172,19 @@ def _carry(old: str, new: str, cuts: "list[int]") -> "tuple[list[int], int]":
             out.append(c + len(new) - len(old))
         else:
             m = c - head
+            t = bisect.bisect_right(s_old, m) - 1      # the token m stands in
+            inner = m - s_old[t]
             for tag, i1, i2, j1, j2 in ops:
-                if i1 <= m <= i2:
-                    if tag == "equal":
-                        out.append(head + j1 + (m - i1))
-                    elif m == i1:
-                        out.append(head + j1)
+                if (i1 <= t < i2) if inner else (i1 <= t <= i2):
+                    if tag == "equal" and t < i2:
+                        out.append(head + s_new[j1 + (t - i1)] + inner)
+                    elif t == i1 and inner == 0:
+                        out.append(head + s_new[j1])
+                    elif t == i2 and inner == 0:
+                        out.append(head + s_new[j2])
                     else:                       # inside a change: to the earlier block
-                        out.append(head + j2)
-                        straddled += m != i2
+                        out.append(head + s_new[j2])
+                        straddled += 1
                     break
             else:
                 out.append(head + len(mid_new))

@@ -27,7 +27,7 @@ from .furniture import Chapter, chapters_from_furniture, furniture_texts, head_s
 from .guards import _page_core_ink, _phantom_blank_pages, _reads_as_empty
 from .index_links import link_index
 from .markup import _roman_to_int, _strip_tags
-from .model import PageItem
+from .model import PageItem, sync_pages
 from .notes import count_notes_heads, footnote_share, link_chapter_notes, link_footnotes, link_notes, normalize_note_heads
 from .page_review import DUPE_SIMILARITY, flag_pages, review_pages, write_review_sheet
 from .photos import read_image, resolve_selector
@@ -415,11 +415,22 @@ def build_epub(
      n_figures, n_blank_figures, n_label_rules, n_reattached, n_phantoms,
      n_forms, n_hand_figures,
      n_doubled, pages) = rp
+    # Each page's blocks are carried through every pass below that rewrites
+    # its string (model.sync_pages), so that a pass moved onto blocks finds
+    # them as the passes before it left the page. The count is of block
+    # boundaries a pass's change straddled, where the carrying is a guess.
+    carried: "dict[str, int]" = {}
+
+    def _carry_pages(after: str) -> None:
+        n = sync_pages(pages, bodies)
+        if n:
+            carried[after] = carried.get(after, 0) + n
     # A line the layout called furniture that the book never repeats is a
     # caption, a note or an imprint at the page's edge: back into the page.
     for _i, _t in restore_lone_furniture(pages, bodies):
         print(f"    [~] page {_i + 1}: {_t[:70]!r} was labelled page furniture "
               f"but is printed on no other page — put back")
+    _carry_pages("lone furniture")
     # Running heads and feet are read from the pages, where they were set
     # aside as blocks; a page cached before heads were kept says so.
     page_furniture = furniture_texts(pages)
@@ -433,6 +444,7 @@ def build_epub(
     # Before anything reads the pages as text: what an unclosed address
     # swallowed is text again from here on.
     n_swallowed = mend_swallowed_links(bodies)
+    _carry_pages("swallowed links")
     if n_swallowed:
         print(f"    gave back the text {n_swallowed} link(s) had taken into "
               f"an address the recogniser never closed")
@@ -495,6 +507,7 @@ def build_epub(
             figure_data.pop(name, None)
         print(f"    dropped {len(furniture)} repeated decoration(s) as page "
               f"furniture, freeing {freed / 1048576:.1f} MB")
+    _carry_pages("decoration")
 
     # The same reconciliation, for lines of type rather than pictures: a head
     # the layout pass labelled furniture on most pages it sometimes labels a
@@ -503,6 +516,7 @@ def build_epub(
     # anything downstream counts or links what a page holds.
     if strip_furniture:
         missed = strip_missed_running_heads(bodies, page_furniture)
+        _carry_pages("running heads")
         if missed:
             gone = {(pg, t[:90]) for pg, t in missed}
             label_heads = [h for h in label_heads if (h[0], h[2]) not in gone]
@@ -514,6 +528,7 @@ def build_epub(
                      else f": {missed[0][1]!r}"))
 
     signatures = strip_signature_marks(bodies)
+    _carry_pages("signature marks")
     if signatures:
         print(f"    took out {len(signatures)} signature mark(s) the printer "
               f"set at the foot of a gathering's first page: "
@@ -532,10 +547,13 @@ def build_epub(
                         and os.path.exists(page_paths[i] + ".native"))))
         for i, b in enumerate(bodies)]
     n_promoted = normalize_note_heads(bodies)
+    _carry_pages("math and note heads")
     if n_promoted:
         print(f"    promoted {n_promoted} bold note head(s) to headings")
     n_reconciled = reconcile_native_text(bodies, page_paths)
+    _carry_pages("reconcile")
     n_short = close_short_links(bodies)
+    _carry_pages("short links")
     if n_short:
         print(f"    closed {n_short} link(s) over the rest of the address "
               f"their text was cut from")
@@ -555,6 +573,7 @@ def build_epub(
     # spelled another way and came back "km2": the first whole-shelf run
     # of this rule showed it in four born-digital books.
     bodies = [set_unit_powers(b) for b in bodies]
+    _carry_pages("unit powers")
     for _pi, _before, _figure, _after in reconcile_native_text.unplaced:
         print(f"    [?] page {_pi + 1}: the PDF's own text prints "
               f"“{_figure}” between “{_before}” and “{_after}”, and the "
@@ -563,6 +582,7 @@ def build_epub(
     # Straight after reconciliation, because that is where they come in, and
     # before typography, because two of them ARE quote marks.
     n_c1 = repair_c1_controls(bodies)
+    _carry_pages("control characters")
     if n_c1:
         print(f"    repaired {n_c1} punctuation mark(s) the text layer "
               f"delivered as control characters")
@@ -571,6 +591,7 @@ def build_epub(
     # pass would quietly put them back.
     if typography_flag:
         tst = normalize_typography(bodies, page_paths)
+        _carry_pages("typography")
         if tst["quotes"]:
             print(f"    typography: {tst['quotes']} quote mark(s) set "
                   f"directional, {tst['spaces']} double space(s) collapsed"
@@ -586,19 +607,23 @@ def build_epub(
     # "Chapter 1. Economics" has no counterpart there, so running it first
     # let the correction quietly take the separator back out again.
     n_chapters = normalize_chapter_heads(bodies)
+    _carry_pages("chapter heads")
     if n_chapters:
         print(f"    squared up {n_chapters} chapter heading(s) to one rank")
     n_recovered = promote_missing_chapter_heads(bodies)
+    _carry_pages("chapter openings")
     if n_recovered:
         print(f"    recovered {n_recovered} chapter opening(s) the layout ran "
               f"into the prose")
     n_lists = normalize_list_markers(bodies)
+    _carry_pages("list markers")
     if n_lists:
         print(f"    stopped {n_lists} list(s) double-marking items that "
               f"already carry their own number or bullet")
     texts = [_strip_tags(b) for b in bodies]
     folios = folios_from_furniture(page_furniture) if page_furniture else None
     n_folio_sup = strip_folio_superscripts(bodies, folios)
+    _carry_pages("folio superscripts")
     if n_folio_sup:
         print(f"    dropped {n_folio_sup} page number(s) the layout had set "
               f"as a note marker")
@@ -778,6 +803,7 @@ def build_epub(
     # reproduce the joins before the corrections can find their sites —
     # the other order stales every decision on a joined word (B1).
     jst = join_page_break_hyphens(bodies, dropped)
+    _carry_pages("page-break hyphens")
     if jst["joined"] or jst["refused"]:
         print(f"    page-break hyphens: {jst['joined']} split word(s) "
               f"rejoined across page turns"
@@ -795,6 +821,7 @@ def build_epub(
             print(f"    decisions (round {rnd}): {dst['applied']} reviewer "
                   f"correction(s) reapplied"
                   + (f", {dst['stale']} stale" if dst["stale"] else ""))
+        _carry_pages("decisions")
 
     # One placement of the printed contents serves every consumer below —
     # link_notes' chapter scoping and the nav alike. Two independent calls
@@ -841,6 +868,7 @@ def build_epub(
         # the shelf rebuild is what caught it.
         fstats = link_footnotes(bodies, allow_numbered=(n_note_heads == 0),
                                 foot_labelled=foot_labelled)
+        _carry_pages("footnotes")
         if fstats["linked"] or fstats["skipped"]:
             print(f"    footnotes: {fstats['linked']} same-page notes linked"
                   + (f" ({fstats['numbered']} numbered)"
@@ -919,10 +947,12 @@ def build_epub(
                 print("    notes: a Notes head was found but its shape was "
                       "not understood — nothing linked")
 
+    _carry_pages("notes")
     if link_citations_flag:
         # After the note linkers on purpose: the Chicago pass finds its note
         # paragraphs by the ids they leave behind.
         cst = link_citations(bodies, dropped)
+        _carry_pages("citations")
         if cst["authordate"] or cst["chicago"]:
             print(f"    citations: {cst['authordate']} author-date and "
                   f"{cst['chicago']} note citation(s) bound to the "
@@ -955,6 +985,7 @@ def build_epub(
                   f"{hi_no - lo_no} numbers — which page holds which is unknown")
         fused = strip_fused_folios(bodies, {i: n for i, n in numbers.items()
                                             if i not in dropped})
+        _carry_pages("fused folios")
         if fused:
             print(f"    took {len(fused)} page number(s) off the end of "
                   f"the page's last line, where the layout had run them "
@@ -971,6 +1002,7 @@ def build_epub(
                          + bodies[i])
             anchored += 1
             restored += i not in read_at
+        _carry_pages("page marks")
         if anchored:
             print(f"    page list: {anchored} printed page numbers anchored"
                   + (f", {restored} of them restored where the page carried "
@@ -982,6 +1014,7 @@ def build_epub(
             folio_to_page = {n: i for i, n in numbers.items()
                              if i not in dropped}
             ist = link_index(bodies, folio_to_page, dropped)
+            _carry_pages("index")
             # Every outcome is said. An index whose heading was lost reads,
             # to the linker, exactly like a book with no index, and saying
             # nothing on that path is how Lost Worlds shipped 1,720 plain
@@ -1053,12 +1086,18 @@ def build_epub(
     # page promotes nothing, so a second source can only add.
     if furn_chapters:
         n_promoted += promote_chapter_headings(bodies, furn_chapters)
+    _carry_pages("chapter titles")
     if n_promoted:
         print(f"    lifted {n_promoted} chapter title(s) to the top of "
               f"the heading outline")
 
     # The last thing done to the words of a page: see write_display_math.
     mst = write_display_math(bodies)
+    _carry_pages("display math")
+    if carried:
+        print(f"    [~] page blocks carried through the passes: "
+              f"{sum(carried.values())} block boundary(ies) fell inside a "
+              f"change ({', '.join(f'{k} {v}' for k, v in carried.items())})")
     if mst["mathml"] or mst["text"]:
         print(f"    display equations: {mst['mathml']} set as MathML"
               + (f", {mst['text']} as their plain text"

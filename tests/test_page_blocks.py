@@ -136,3 +136,16 @@ def test_every_page_is_its_body_after_carrying():
     sync_pages(pages, bodies)
     assert [p.render() for p in pages] == bodies
     assert pages[1].blocks[0].html == "<h2>THE FIRM</h2>"
+
+
+def test_a_page_whose_every_quote_a_pass_set_keeps_its_blocks():
+    """Typography changes nearly every block of a page; the carry is by
+    token, so it costs a long book seconds, not a minute, and every block
+    keeps its own paragraph."""
+    from codicology.model import Block, Page, sync_page
+    paras = [f'<p>He said "word {k}" and "more {k}".</p>' for k in range(40)]
+    page = Page(0, "p", blocks=[Block("text", p, label="Text") for p in paras])
+    body = page.render().replace(' "', " “").replace('" ', "” ").replace('".', "”.")
+    assert sync_page(page, body) == 0
+    assert [b.html for b in page.blocks] == [p.replace(' "', " “").replace('" ', "” ")
+                                              .replace('".', "”.") for p in paras]
