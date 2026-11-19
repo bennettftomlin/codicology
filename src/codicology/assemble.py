@@ -836,7 +836,8 @@ def build_epub(
     # left. Merging rounds into one file would sort that history away.
     for rnd, path_ in enumerate(_decision_rounds(decisions_path), 1):
         dst = apply_reviewer_decisions(
-            bodies, path_, kept_pages=len(bodies) - len(dropped))
+            bodies, path_, kept_pages=len(bodies) - len(dropped),
+            dropped=dropped)
         if dst["applied"] or dst["stale"]:
             print(f"    decisions (round {rnd}): {dst['applied']} reviewer "
                   f"correction(s) reapplied"

@@ -14,7 +14,8 @@ def _page(i, blocks, furniture=()):
 
 
 def _head(text, y=(0.04, 0.059), label="SectionHeader"):
-    return Block("heading", f"<h2>{text}</h2>", label=label, box=(0.3, y[0], 0.7, y[1]))
+    # as wide as Paul Robeson's verso head is set: 0.144 of the page
+    return Block("heading", f"<h2>{text}</h2>", label=label, box=(0.41, y[0], 0.554, y[1]))
 
 
 def _furn(text):
@@ -68,3 +69,20 @@ def test_an_edition_line_after_the_title_is_the_same_head():
              _page(2, [_head("Where There Is No Doctor 2010", y=(0.02, 0.04)), _text("Dear Village Health Worker")])]
     bodies = [p.render() for p in pages]
     assert strip_title_heads(pages, bodies, "Where there is no doctor") == [(2, "Where There Is No Doctor 2010")]
+
+
+def test_a_title_page_keeps_its_title():
+    """Reconstruction: The Battle for Democracy, its title page: the title in
+    large type at the top, the subtitle and a picture under it."""
+    from codicology.furniture import strip_title_heads
+    from codicology.model import Block, Page
+    title = Page(0, "p0", [Block("heading", "<h1>RECONSTRUCTION</h1>", "SectionHeader",
+                                 box=(0.102, 0.054, 0.608, 0.08)),
+                           Block("text", "<p>THE BATTLE FOR<br/>DEMOCRACY</p>", "Text",
+                                 box=(0.1, 0.1, 0.5, 0.15))])
+    others = [Page(i, f"p{i}", [Block("text", "<p>Prose.</p>", "Text", box=(0.1, 0.1, 0.9, 0.9))],
+                   furniture=[Block("text", "<p>Reconstruction</p>", "PageHeader")]) for i in (1, 2, 3)]
+    pages = [title] + others
+    bodies = [p.render() for p in pages]
+    assert strip_title_heads(pages, bodies, "Reconstruction: The Battle for Democracy") == []
+    assert "RECONSTRUCTION" in bodies[0]

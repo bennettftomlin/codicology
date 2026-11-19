@@ -120,6 +120,22 @@ def former_page_key(page_path: str) -> str:
     return _bytes_key(page_path)
 
 
+def _taken_as_empty(page_path: str) -> "list[PageItem]":
+    """What a page that reads empty every time gives a build that does not
+    read it. Read live, such a page comes back with its pictures and no
+    words, and a build ships the pictures (not caching them, since an empty
+    reading may be a failing reader): a cover, a back board, a scanner's
+    stamp. Not read, the page is shown as the one picture on it where it
+    carries any ink, as blank paper does not; else it is empty, and dropped
+    as blank."""
+    from .guards import PHANTOM_CORE_INK, _page_core_ink, _page_picture
+    ink = _page_core_ink(page_path)
+    if ink is None or ink < PHANTOM_CORE_INK:
+        return []
+    picture = _page_picture(page_path)
+    return [picture] if picture is not None else []
+
+
 class OCRCache:
     """
     Remembers what the OCR engine made of each page, so a second opinion about
@@ -236,7 +252,7 @@ class OCRCache:
             if stem in switches.READ_AS_EMPTY:
                 if stem not in switches.TAKEN_AS_EMPTY:
                     switches.TAKEN_AS_EMPTY.append(stem)
-                return []
+                return _taken_as_empty(page_path)
             return None
         # A page read before the pipeline recorded layout labels is not a
         # hit: it would build silently without the labels every consumer

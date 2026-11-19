@@ -39,3 +39,38 @@ def test_a_page_taken_as_empty_knows_it_has_no_running_head(tmp_path, monkeypatc
     assert not cache.knows_furniture(str(page))
     monkeypatch.setattr(switches, "READ_AS_EMPTY", frozenset({"page_0005"}))
     assert cache.knows_furniture(str(page))
+
+
+def test_a_named_page_with_ink_is_shown_as_its_own_picture(tmp_path, monkeypatch):
+    """A cover or a scanner's stamp: read live it ships its pictures, so
+    taken unread it is the one picture of the page; blank paper is empty."""
+    from PIL import Image, ImageDraw
+    cache = OCRCache(str(tmp_path / "c.ocr.gz"), "surya", ["en"])
+    inked, blank = tmp_path / "page_0001.png", tmp_path / "page_0002.png"
+    im = Image.new("L", (400, 600), 255)
+    d = ImageDraw.Draw(im)
+    for y in range(150, 450, 12):
+        d.line([(80, y), (320, y)], fill=0, width=2)
+    im.save(inked)
+    Image.new("L", (400, 600), 255).save(blank)
+    monkeypatch.setattr(switches, "READ_AS_EMPTY", frozenset({"page_0001", "page_0002"}))
+    monkeypatch.setattr(switches, "TAKEN_AS_EMPTY", [])
+    got = cache.get(str(inked))
+    assert len(got) == 1 and got[0].whole_page and got[0].figure is not None
+    assert cache.get(str(blank)) == []
+
+
+def test_pages_dropped_past_every_decision_do_not_refuse_them(tmp_path):
+    """The Knights of Industry: its back board, the last leaf, dropped, and
+    all seven of its corrections refused for the one page fewer."""
+    import json
+    from codicology.decisions import apply_reviewer_decisions
+    path = tmp_path / "d.json"
+    path.write_text(json.dumps({"page_files": 3, "tokens": 2, "decisions": [
+        {"page": 0, "old": "navy", "new": "navvy", "before": ["a"], "after": ["a"]}]}))
+    bodies = ["<p>a navy a</p>", "<p>b</p>", ""]
+    got = apply_reviewer_decisions(bodies, str(path), kept_pages=2, dropped={2})
+    assert got["applied"] == 1 and "navvy" in bodies[0]
+    bodies = ["<p>a navy a</p>", "", "<p>c</p>"]
+    got = apply_reviewer_decisions(bodies, str(path), kept_pages=2, dropped={0})
+    assert got["applied"] == 0      # a page dropped before it: refused, as before

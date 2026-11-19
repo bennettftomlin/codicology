@@ -32,7 +32,8 @@ def _decision_rounds(decisions_path) -> list:
 
 
 def apply_reviewer_decisions(bodies: list, decisions_path: str,
-                             kept_pages: "int | None" = None) -> dict:
+                             kept_pages: "int | None" = None,
+                             dropped: "set | None" = None) -> dict:
     """A review sheet's exported decisions, reapplied at rebuild time —
     before the linkers run, so a corrected word can still earn its anchor.
 
@@ -55,9 +56,22 @@ def apply_reviewer_decisions(bodies: list, decisions_path: str,
         print(f"    {len(retired_rows(dec))} decision(s) in "
               f"{os.path.basename(os.fspath(decisions_path))} are retired "
               f"and left alone")
-    refusal = pages_guard(dec.get("page_files"),
-                          kept_pages if kept_pages is not None
-                          else len(bodies))
+    kept = kept_pages if kept_pages is not None else len(bodies)
+    refusal = pages_guard(dec.get("page_files"), kept)
+    if refusal and dropped is not None and rows:
+        # Pages dropped as blank keep their places: only pages taken out
+        # before the book is read (--drop-pages) move those after them. So
+        # where the pages this build drops beyond every page the file names
+        # are exactly the difference, no page it names can have moved.
+        # The Knights of Industry dropped its back board, the last leaf,
+        # and every one of its seven corrections was refused for it.
+        named = [coerce_page(d) for d in rows]
+        if all(i is not None for i in named):
+            late = [i for i in dropped if i > max(named)]
+            if dec.get("page_files") == kept + len(late):
+                print(f"    {len(late)} page(s) this build drops lie past every "
+                      f"page the decisions name, which keeps their places")
+                refusal = None
     if refusal:
         print(f"    refused: {refusal}")
         return {"applied": 0, "stale": len(rows)}

@@ -619,7 +619,13 @@ def restore_lone_furniture(pages: "list[Page]", bodies: "list[str]"
 
 
 TITLE_HEAD_BAND = 0.09      # a block ending this near the top of its page
-TITLE_HEAD_SIGHTINGS = 2    # pages besides its own that print it as furniture
+TITLE_HEAD_SIGHTINGS = 2
+
+# A running head is set small; a title page sets the title large. Measured
+# as the width its block takes per character, of the page's width: the 21
+# heads taken on the shelf run 0.010 to 0.016, Reconstruction's title page
+# "RECONSTRUCTION" 0.036.
+TITLE_HEAD_MAX_CHAR = 0.025    # pages besides its own that print it as furniture
 
 
 def _letters(text: str) -> str:
@@ -666,6 +672,8 @@ def strip_title_heads(pages: "list[Page]", bodies: "list[str]", title: str
             if not any(o is not b and (o.kind == "figure" or _letters(_strip_tags(o.html)))
                        for o in page.blocks):
                 continue
+            if (b.box[2] - b.box[0]) / max(len(text), 1) > TITLE_HEAD_MAX_CHAR:
+                continue                # the title, set as a title page sets it
             page.blocks.remove(b)
             bodies[i] = page.render()
             taken.append((i, text))
