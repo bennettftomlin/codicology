@@ -399,6 +399,15 @@ def build_epub(
                      f"built. Build once without the flag to read them.")
         print("  --cache-only: every page has a reading in the cache; "
               "nothing will be read")
+    if switches.READ_AS_EMPTY:
+        if switches.TAKEN_AS_EMPTY:
+            print(f"  taken as read empty, as they read every time "
+                  f"(--read-as-empty): {', '.join(sorted(switches.TAKEN_AS_EMPTY))}")
+        named = {os.path.splitext(os.path.basename(p))[0] for p in page_paths}
+        stray = sorted(switches.READ_AS_EMPTY - named)
+        if stray:
+            print(f"  [!] --read-as-empty names page(s) this book does not "
+                  f"have: {', '.join(stray)}")
 
     book = epub.EpubBook()
     book.set_title(title)

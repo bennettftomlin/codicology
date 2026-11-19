@@ -538,6 +538,14 @@ recogniser: every cached page from the cache, the missing ones read. The
 run and every comparison say which books those were and how many pages
 were read, because such a page can read differently the next time.
 
+Where the page is one that reads empty every time — a cover, a scanner's
+stamp, a back board — reading it again only reads empty again, so the
+book's shelf entry names it instead: `--read-as-empty page_0005` among its
+options. A page named there that the cache has no reading of is not read
+and is taken as empty, which is what a live build makes of it (dropped as
+blank, or shown as a picture of itself where the classical reader finds
+words on it); any other missing page still stops the book.
+
 What a run keeps of each book is a **print**: every page's markup, and a
 digest of every other file. Left out of it are the three things that
 belong to the occasion: the date, the identifier, and the line saying

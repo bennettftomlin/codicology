@@ -20,6 +20,15 @@ THIRD_OPINION: "ThirdOpinion | None" = None
 # --cache-only: this run reads no page. What the cache holds is the book.
 CACHE_ONLY = False
 
+# --read-as-empty: pages, by name (page_0005), that are not read and are
+# taken as having read empty, as they do every time they are read. The
+# cache never keeps an empty reading (an empty can be a server's failure),
+# so a cover, a scanner's stamp or a back board that reads empty is never
+# in it, and --cache-only refused the whole book for it. Only where the
+# cache has no reading of the page; a named page it has read is its reading.
+READ_AS_EMPTY: "frozenset[str]" = frozenset()
+TAKEN_AS_EMPTY: "list[str]" = []
+
 # Pages sent to the recogniser on this run, counting a page sent twice twice.
 READ_THIS_RUN = {"pages": 0}
 

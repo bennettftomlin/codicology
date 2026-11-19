@@ -39,7 +39,9 @@ ordinary way, one at a time: every cached page from the cache, and the one
 or two without a reading read as any build would read them. The run says
 which books those were and how many pages each had read, because such a
 page may read differently the next time, and a difference on it between
-two runs is then the reading's and not the code's.
+two runs is then the reading's and not the code's. A page that reads empty
+every time is better named in the book's options with --read-as-empty: it
+is then taken as empty and the book builds from its cache like the rest.
 
 `installed` takes the same prints of the copies a shelf file says are
 installed, without building anything, so that a run can be held against

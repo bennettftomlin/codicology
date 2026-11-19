@@ -14,6 +14,7 @@ import re
 import zlib
 from PIL import Image
 from .backends import OCR_BACKENDS
+from . import switches
 from .model import PageItem
 
 
@@ -230,6 +231,12 @@ class OCRCache:
     def get(self, page_path: str) -> list[PageItem] | None:
         entry = self._entry(page_path)
         if entry is None:
+            # a page named --read-as-empty: what reading it gives, every time
+            stem = os.path.splitext(os.path.basename(page_path))[0]
+            if stem in switches.READ_AS_EMPTY:
+                if stem not in switches.TAKEN_AS_EMPTY:
+                    switches.TAKEN_AS_EMPTY.append(stem)
+                return []
             return None
         # A page read before the pipeline recorded layout labels is not a
         # hit: it would build silently without the labels every consumer
@@ -272,8 +279,12 @@ class OCRCache:
         return items
 
     def knows_furniture(self, page_path: str) -> bool:
-        """Whether this entry was written by a version that keeps running heads."""
-        return isinstance(self._entry(page_path), dict)
+        """Whether this entry was written by a version that keeps running heads.
+        A page taken as empty (--read-as-empty) has none, as reading it gives."""
+        entry = self._entry(page_path)
+        if entry is None:
+            return os.path.splitext(os.path.basename(page_path))[0] in switches.READ_AS_EMPTY
+        return isinstance(entry, dict)
 
     def put(self, page_path: str, items: list[PageItem],
             outcome: "str | None" = None) -> None:

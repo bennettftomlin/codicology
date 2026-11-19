@@ -576,6 +576,15 @@ def main(argv: "list[str] | None" = None) -> None:
                              "rebuild made this way is the cache and the "
                              "code and nothing else, so two of them can be "
                              "compared")
+    parser.add_argument("--read-as-empty", metavar="PAGE", nargs="+",
+                        default=[],
+                        help="Pages, by name (page_0005), that read empty "
+                             "every time: a cover, a scanner's stamp, a back "
+                             "board. The cache never keeps an empty reading, "
+                             "so --cache-only refuses a book that has one; a "
+                             "page named here, where the cache has no reading "
+                             "of it, is not read and is taken as empty, as "
+                             "reading it would leave it")
     parser.add_argument("--review-sheet", metavar="HTML",
                         help="Write a page of everything the duplicate pass was unsure "
                              "of, for checking by eye. Its output is a --drop-pages list")
@@ -757,6 +766,11 @@ def main(argv: "list[str] | None" = None) -> None:
     record = None
     try:
         switches.CACHE_ONLY = bool(args.cache_only)
+        bad = [p for p in args.read_as_empty if not re.fullmatch(r"page_\d{4}", p)]
+        if bad:
+            parser.error(f"--read-as-empty names pages as page_0005: {', '.join(bad)}")
+        switches.READ_AS_EMPTY = frozenset(args.read_as_empty)
+        switches.TAKEN_AS_EMPTY = []
         switches.READ_THIS_RUN["pages"] = 0
         if args.ocr_cache and args.epub:
             record = _BuildRecord(args, argv)
@@ -780,6 +794,8 @@ def main(argv: "list[str] | None" = None) -> None:
         if record:
             record.close()
         switches.CACHE_ONLY = False
+        switches.READ_AS_EMPTY = frozenset()
+        switches.TAKEN_AS_EMPTY = []
         switches.BUILD_NOTE = None
 
 
