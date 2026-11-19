@@ -185,7 +185,9 @@ PARA_NOTES_HEAD = re.compile(
 
 
 def _counts_from_one(bodies: list[str], page: int, pos: int) -> bool:
-    tail = bodies[page][pos:pos + 1200]
+    # the rest of the page: a first note can run to a paragraph
+    # (Decolonising the University p92: 800 characters before note 2)
+    tail = bodies[page][pos:]
     ns = [n for _, n in sorted(
         (m.start(), int(m.group(1)))
         for pat in (NOTE_ENTRY, NOTE_ENTRY_PLAIN, NOTE_ENTRY_LI)
@@ -571,27 +573,44 @@ _COUNTING_LIST = re.compile(
     r"<ol(?![^>]*list-style-type:\s*none)([^>]*)>((?:(?!</ol>).)*)</ol>", re.S)
 
 
-def _counted_list_entries(body: str) -> "list[tuple[int, int]]":
-    """(position, number) of each item a numbering list numbers itself."""
+CARRIED_WORDS = 60      # the end of a note carried over, before the list
+
+
+def _counted_list_entries(body: str, carry_from: "int | None" = None
+                          ) -> "list[tuple[int, int]]":
+    """(position, number) of each item a numbering list numbers itself.
+
+    `carry_from` is the number the notes being read have reached, where this
+    page goes on with a section begun on an earlier one."""
     out = []
     for lm in _COUNTING_LIST.finditer(body):
         # Only a list standing directly under the notes head counts from
         # its own start. Further on it is a list the page broke: Decolonising
         # the University's chapter 8 sets note 1 under its head and notes 2
         # to 21 on the next page as a fresh list, which counted from 1 put
-        # every one of them a number low.
+        # every one of them a number low. Such a list counts on from the
+        # notes before it instead, where it opens the page: nothing before
+        # it but the end of the note the page turned in.
         heads = [m.end() for pat in (NOTES_HEAD, PARA_NOTES_HEAD)
                  for m in pat.finditer(body, 0, lm.start())]
+        carried = None
         if not heads or len(_strip_tags(body[max(heads):lm.start()]).split()) > 12 \
                 or re.search(r"<li\b", body[max(heads):lm.start()]):
-            continue
+            before = body[:lm.start()]
+            if carry_from is None or heads or re.search(r"<li\b", before) \
+                    or any(p.search(before) for p in
+                           (NOTE_ENTRY, NOTE_ENTRY_PLAIN, NOTE_ENTRY_LI)) \
+                    or len(_strip_tags(before).split()) > CARRIED_WORDS:
+                continue
+            carried = carry_from
         items = list(re.finditer(r"<li\b[^>]*>", lm.group(2)))
         texts = [lm.group(2)[it.end():it.end() + 12] for it in items]
         if len(items) < 2 or any(re.match(r"\s*(?:<[^>]+>\s*)*\d", t)
                                  for t in texts):
             continue
         start = re.search(r'start="(\d+)"', lm.group(1))
-        first = int(start.group(1)) if start else 1
+        first = carried if carried is not None else \
+            int(start.group(1)) if start else 1
         base = lm.start(2)
         out += [(base + it.start(), first + k) for k, it in enumerate(items)]
     return out
@@ -642,6 +661,7 @@ def link_chapter_notes(bodies: list[str], dropped: set) -> dict:
     for k, (hp, hpos) in enumerate(heads):
         # entries: from just past the head, across pages while numbers ascend
         entries: dict[int, tuple[int, int]] = {}
+        carried: dict[tuple[int, int], int] = {}   # counted on from earlier notes
         expect = 1
         pi, from_pos = hp, hpos
         def entries_on(page: int) -> "list[tuple[int, int]]":
@@ -654,9 +674,19 @@ def link_chapter_notes(bodies: list[str], dropped: set) -> dict:
                  for pat in (NOTE_ENTRY, NOTE_ENTRY_PLAIN, NOTE_ENTRY_LI)
                  for m in pat.finditer(bodies[page])
                  if not (page == hp and m.start() < from_pos)]
-                + [(pos, n) for pos, n in _counted_list_entries(bodies[page])
+                + [(pos, n) for pos, n in counted(page)
                    if not (page == hp and pos < from_pos)],
                 key=lambda t: t[0])
+
+        def counted(page: int) -> "list[tuple[int, int]]":
+            got = _counted_list_entries(bodies[page])
+            if page > hp:
+                own = {pos for pos, _ in got}
+                carried_on = [(pos, n) for pos, n in _counted_list_entries(
+                    bodies[page], carry_from=expect) if pos not in own]
+                carried.update(((page, pos), n) for pos, n in carried_on)
+                got += carried_on
+            return got
 
         def bare_on(page: int) -> "list[tuple[int, int]]":
             return [(m.start(), int(m.group(1)))
@@ -698,6 +728,13 @@ def link_chapter_notes(bodies: list[str], dropped: set) -> dict:
                     continue                # an entry, not a marker
                 markers.append((bpi, int(m.group(1)), m.start()))
         prev_head_page = hp
+        # A list counted on from the notes before it is taken only where
+        # the section then ends on the chapter's last call: a lost entry
+        # anywhere would put every note after it one out, and the totals
+        # would not meet.
+        on = sorted(n for n, at in entries.items() if carried.get(at) == n)
+        if on and markers and max(entries) != max(n for _, n, _ in markers):
+            entries = {n: at for n, at in entries.items() if n < on[0]}
         if not entries or not markers:
             continue
         stats["sections"] += 1
@@ -995,7 +1032,7 @@ def _looks_like_foot_block(below: str) -> bool:
     if re.search(r"<h[1-6][\s>]", below):
         return False
     first = re.search(r"<(p|ol|ul|table|figure|blockquote)[^>]*>", below)
-    if first is not None and first.group(1) == "ol":
+    if first is not None and first.group(1) in ("ol", "ul"):
         items = re.findall(r"<li\b[^>]*>(.{0,40})", below, re.S)
         return bool(items) and all(
             re.match(r"\s*" + FOOT_MARK + r"\s*\S", t) for t in items) \

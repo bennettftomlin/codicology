@@ -111,3 +111,45 @@ def test_a_tables_notes_may_mix_a_symbol_on_its_title_with_numbers():
     assert stats["table"] == 3
     assert 'Customers <sup><a epub:type="noteref" id="tnref-p0-t0-s1"' in bodies[0]
     assert 'id="tn-p0-t0-2"' in bodies[0]
+
+
+def test_a_pages_feet_set_as_a_list_get_their_rule_and_link():
+    """Disturbing Times p20: the feet are a ListGroup, items "16 Teresa
+    Watanabe…", under prose that raises 16 to 18."""
+    from codicology.reading import _list_feet
+    prose = PageItem(html="<p>Debates over textbooks.<sup>16</sup> The author resigned."
+                          "<sup>17</sup> Litmus tests.<sup>18</sup></p>", label="Text")
+    feet = PageItem(html='<ul style="list-style-type: none;"><li>16 Teresa Watanabe, '
+                         '“A Textbook Debate.”</li><li>17 John Williams, “Author '
+                         'Resigned.”</li><li>18 Scott Jaschik, “Litmus Tests.”</li></ul>',
+                    label="ListGroup")
+    folio = PageItem(html="<p>20</p>", label="PageFooter", is_furniture=True)
+    assert _list_feet([prose, feet, folio], 1)
+    bodies = [prose.html + "<hr/>" + feet.html]
+    assert link_footnotes(bodies, allow_numbered=True)["linked"] == 3
+    assert 'id="fn-p0-n17"' in bodies[0]
+
+
+def test_a_numbered_list_ending_a_page_is_not_its_feet():
+    from codicology.reading import _list_feet
+    prose = PageItem(html="<p>The steps are these:</p>", label="Text")
+    steps = PageItem(html="<ul><li>1 Mix the clay.</li><li>2 Shape it.</li></ul>",
+                     label="ListGroup")
+    assert not _list_feet([prose, steps], 1)
+
+
+def test_a_chapters_endnotes_under_their_head_are_not_feet():
+    """Gramsci on Tahrir p247: "Chapter 4", then its notes as a list."""
+    from codicology.reading import _list_feet
+    notes = PageItem(html="<p>3. Ibid.<sup>2</sup></p>", label="Text")
+    head = PageItem(html="<h2>Chapter 4</h2>", label="SectionHeader")
+    lst = PageItem(html="<ul><li>1 Gramsci, Notebooks.</li><li>2 Ibid.</li></ul>",
+                   label="ListGroup")
+    assert not _list_feet([notes, head, lst], 2)
+
+
+def test_feet_whose_numbers_the_prose_does_not_all_raise_are_not_feet():
+    from codicology.reading import _list_feet
+    prose = PageItem(html="<p>SIG<sup>3</sup> 317, lines 9-11.</p>", label="Text")
+    lst = PageItem(html="<ul><li>3 Dexippus.</li><li>4 Ibid.</li></ul>", label="ListGroup")
+    assert not _list_feet([prose, lst], 1)

@@ -146,6 +146,37 @@ _NOTE_MARK = re.compile(r"\s*(?:<p[^>]*>)?\s*(?:<sup>\s*(\d{1,3})\s*</sup>"
                         r"|(\*\*|\*|†|‡)(?![*†‡]))")
 
 
+_LIST_FOOT = re.compile(r"<li\b[^>]*>\s*(?:<sup>\s*)?(\d{1,3})[.)]?\s*(?:</sup>\s*|\s+)\S")
+
+
+def _list_feet(items: "list[PageItem]", i: int) -> bool:
+    """Whether item i is the page's feet set as a list: the last block of the
+    page, labelled ListGroup, every item of it opening with a number, and
+    the first of those numbers raised in the prose above it (Disturbing
+    Times sets every chapter's feet so, and fifty of them went unlinked)."""
+    item = items[i]
+    if item.label != "ListGroup" or not item.html or any(
+            it.label == "Footnote" for it in items):
+        return False
+    if any(not it.is_furniture and (it.html or it.figure is not None)
+           for it in items[i + 1:]):
+        return False
+    lis = re.findall(r"<li\b", item.html)
+    marks = _LIST_FOOT.findall(item.html)
+    if not lis or len(marks) != len(lis) or any("<hr" in (it.html or "") for it in items):
+        return False
+    # not a list under its own head: a notes section's chapter ("Chapter 4"),
+    # a table's "Notes:"
+    before = [it for it in items[:i] if not it.is_furniture and it.html]
+    if not before or before[-1].label == "SectionHeader" \
+            or _strip_tags(before[-1].html).strip().endswith(":"):
+        return False
+    # every note's number raised in the page's prose: an endnotes page's
+    # notes raise a figure now and then ("SIG³"), never all of the next ones
+    prose = " ".join(it.html for it in before if it.label == "Text")
+    return all(re.search(rf"<sup>\s*{int(n)}\s*</sup>", prose) for n in marks)
+
+
 def _table_note(items: "list[PageItem]", i: int) -> bool:
     """Whether item i is one of a table's own notes: a block labelled
     Footnote in the run of such blocks set straight under a table, where
@@ -622,7 +653,7 @@ def _read_pages(page_paths, backend, cache, book, strip_furniture) -> ReadPages:
                 # of the foot, and neither the table's notes nor the page's
                 # linked (The Modern Corporation, some forty tables). The rule
                 # goes above the page's own feet instead.
-                if item.label == "Footnote" \
+                if (item.label == "Footnote" or _list_feet(items, i)) \
                         and "<hr/>" not in page.render() \
                         and not _table_note(items, i) \
                         and not any(it.label == "Footnote"

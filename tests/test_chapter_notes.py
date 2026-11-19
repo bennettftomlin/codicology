@@ -298,9 +298,33 @@ def test_entries_a_list_numbers_itself_are_counted(vtb):
 def test_a_list_the_page_broke_does_not_count_from_one_again(vtb):
     """Decolonising the University ch. 8: note 1 under the head, notes 2 on
     as a fresh list on the next page. Counted from 1 they were each one low."""
+    bodies = ["<p>a<sup>1</sup> b<sup>2</sup> c<sup>3</sup> d<sup>4</sup></p>",
+              "<h2>Notes</h2><ol style=\"list-style-type: none;\"><li>1. Tomaselli.</li></ol>",
+              "<p>(eds) Handbook, p. 352.</p><ol><li>Kovach.</li><li>Clandinin.</li></ol>",
+              "<p>z<sup>1</sup></p>", "<h2>Notes</h2><ol><li>1. q</li><li>2. r</li><li>3. s</li></ol>"]
+    vtb.link_chapter_notes(bodies, set())
+    # four calls and three notes: an entry was lost somewhere
+    assert 'id="note-c0-2"' not in bodies[2]       # no numbers it cannot know
+
+
+def test_a_list_the_page_broke_counts_on_where_the_totals_meet(vtb):
+    """The same chapter as the book prints it: three calls, note 1 under the
+    head, notes 2 and 3 as a fresh list on the next page. Counted on from 2,
+    the section ends on the chapter's last call, so nothing was lost."""
     bodies = ["<p>a<sup>1</sup> b<sup>2</sup> c<sup>3</sup></p>",
               "<h2>Notes</h2><ol style=\"list-style-type: none;\"><li>1. Tomaselli.</li></ol>",
               "<p>(eds) Handbook, p. 352.</p><ol><li>Kovach.</li><li>Clandinin.</li></ol>",
               "<p>z<sup>1</sup></p>", "<h2>Notes</h2><ol><li>1. q</li><li>2. r</li><li>3. s</li></ol>"]
     vtb.link_chapter_notes(bodies, set())
-    assert 'id="note-c0-2"' not in bodies[2]       # no numbers it cannot know
+    assert 'id="note-c0-2"' in bodies[2] and 'id="note-c0-3"' in bodies[2]
+    assert 'href="page_0002.xhtml#note-c0-3"' in bodies[0]
+
+
+def test_a_paragraph_notes_head_whose_first_note_is_long_counts(vtb):
+    """Decolonising the University p92: "Notes" set as a paragraph, and note 1
+    runs to 800 characters before note 2."""
+    long_note = "On the decolonial turn see " + "Maldonado-Torres, The Decolonial Turn; " * 25
+    bodies = ["<p>a<sup>1</sup> b<sup>2</sup> c<sup>3</sup></p>",
+              f'<p>Notes</p><ol style="list-style-type: none;"><li>1. {long_note}</li>'
+              "<li>2. Ibid.</li><li>3. Ibid. p. 4.</li></ol>"]
+    assert vtb.notes_head_on(bodies, 1) is not None
