@@ -165,13 +165,11 @@ def test_a_back_of_book_section_that_says_notes_twice_is_not_two_chapters(vtb):
     bodies = prose + notes
     chapter = vtb.link_chapter_notes(list(bodies), set())
     section = vtb.link_notes(list(bodies), set())
-    # The narrow test — did the chapter layout find ANY section — says yes,
-    # and it binds every marker, so a link count alone cannot separate them.
-    assert chapter["sections"] == 1 and chapter["linked"] == 20
-    # but all four chapters were sent to chapter one's notes
-    bound = list(bodies)
-    vtb.link_chapter_notes(bound, set())
-    assert all("note-c0-1" in bound[c] for c in range(4)), "not the shape meant"
+    # Read as chapter-endnotes, the first NOTES head has no entries of its
+    # own: they are under the second head, and a section's notes never run
+    # past the next section's head. It once read on into them and sent all
+    # four chapters to chapter one's notes; now it binds nothing.
+    assert chapter["sections"] == 0 and chapter["linked"] == 0
     # the section layout tells the four apart, and pairs them with the body
     assert section["groups"] == 4 and not section["misaligned"]
     assert section["linked"] == 20

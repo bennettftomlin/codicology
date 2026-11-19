@@ -22,7 +22,7 @@ _ELISIONS = re.compile(r"(?:tis|twas|twere|em|cause|til|till|round|bout|"
                        r"neath|gainst|\d0s?)\b", re.I)
 
 
-def _requote(text: str) -> str:
+def _requote(text: str, before: str = " ") -> str:
     """Directional quotes for one run of plain text, letters untouched.
 
     The printed page had directional quotes; the recogniser flattened them
@@ -32,15 +32,20 @@ def _requote(text: str) -> str:
     typesetter's own: a quote after space or an opening bracket opens, any
     other closes; a straight apostrophe between letters, after a letter, or
     eliding ("'tis", "'90s") is ’.
+
+    `before` is the text the run follows: a run that starts just after an
+    inline tag goes on from the words before it ("<i>Ulysses</i>" closes
+    after the title, and <i>Guardian</i>'s is a possessive). What a quote
+    follows is read as already restored, so quotes that open together
+    ("'Free trade,' …" inside double quotes) both open.
     """
     out = []
     for i, ch in enumerate(text):
+        prev = out[-1] if out else (before[-1:] or " ")
         if ch == '"':
-            prev = text[i - 1] if i else " "
             out.append("“" if prev in " \t\n(—–[{‘“"
                        else "”")
         elif ch == "'":
-            prev = text[i - 1] if i else " "
             nxt = text[i + 1] if i + 1 < len(text) else " "
             if prev.isalnum():
                 out.append("’")           # contraction or possessive
@@ -54,6 +59,17 @@ def _requote(text: str) -> str:
         else:
             out.append(ch)
     return "".join(out)
+
+
+# A tag, its quoted attribute values allowed to hold ">".
+_TAG_SPLIT = re.compile(r"""(<(?:[^>"']|"[^"]*"|'[^']*')*>)""")
+
+# Tags that end a run of text the way a line break does: a quote after one
+# of these starts afresh. Any other tag (<i>, <sup>, <a>…) sits inside a
+# sentence, and the text goes on through it.
+_BREAKS_TEXT = re.compile(r"</?(?:p|div|h[1-6]|li|ol|ul|td|th|tr|table|br|hr|"
+                          r"blockquote|figure|figcaption|section|dd|dt|dl)\b",
+                          re.I)
 
 
 def normalize_typography(bodies: list[str],
@@ -78,19 +94,24 @@ def normalize_typography(bodies: list[str],
                 and os.path.exists(page_paths[i] + ".native"):
             stats["native_skipped"] += 1
             continue
-        parts = re.split(r"(<[^>]+>)", body)
+        parts = _TAG_SPLIT.split(body)
+        before = " "
         for j, part in enumerate(parts):
             if part.startswith("<"):
+                if _BREAKS_TEXT.match(part):
+                    before = " "
                 continue
             n_q = part.count('"') + part.count("'")
             if n_q:
-                part = _requote(part)
+                part = _requote(part, before)
                 stats["quotes"] += n_q
             collapsed = re.sub(r"(?<=\S)  +(?=\S)", " ", part)
             if collapsed != part:
                 stats["spaces"] += 1
                 part = collapsed
             parts[j] = part
+            if part:
+                before = part
         bodies[i] = "".join(parts)
     return stats
 

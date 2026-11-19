@@ -616,6 +616,10 @@ def _counted_list_entries(body: str, carry_from: "int | None" = None
     return out
 
 
+# A heading that may open another part of the book (see link_chapter_notes).
+_PART_HEAD = re.compile(r"<h([1-6])\b")
+
+
 def link_chapter_notes(bodies: list[str], dropped: set) -> dict:
     """
     Chapter-endnotes layout: a "Notes" section closes each chapter, entries
@@ -630,8 +634,17 @@ def link_chapter_notes(bodies: list[str], dropped: set) -> dict:
     notes.
     """
     stats = {"linked": 0, "unlinked": 0, "sections": 0}
-    heads = [(i, m.start()) for i in range(len(bodies))
-             for m in [notes_head_on(bodies, i)] if m]
+    # Every Notes head a page holds: a short chapter's notes can end the
+    # page its predecessor's notes began, and a head missed there gives its
+    # chapter's calls to the next section.
+    heads = []
+    for i in range(len(bodies)):
+        found = [(i, m.start()) for m in NOTES_HEAD.finditer(bodies[i])
+                 if _notes_follow(bodies, i, m.end())]
+        if not found:
+            m = notes_head_on(bodies, i)
+            found = [(i, m.start())] if m else []
+        heads += found
     # A section whose display heading the OCR dropped still announces
     # itself: a bare chapter designation followed at once by entries
     # numbered from one. One book lost a single FOOTNOTES head that way,
@@ -657,13 +670,35 @@ def link_chapter_notes(bodies: list[str], dropped: set) -> dict:
     if len(heads) < 2:
         return stats
     edits: dict[int, list[tuple[int, int, str]]] = {}
-    prev_head_page = -1
+    prev_end = (-1, 0)                 # where the previous section's notes end
     for k, (hp, hpos) in enumerate(heads):
         # entries: from just past the head, across pages while numbers ascend
         entries: dict[int, tuple[int, int]] = {}
         carried: dict[tuple[int, int], int] = {}   # counted on from earlier notes
         expect = 1
         pi, from_pos = hp, hpos
+        # Where this section's notes must end: at the next section's head,
+        # on that head's own page too (a short chapter's notes can share a
+        # page with the next chapter's), and at the first heading after
+        # this head that opens another part of the book — a chapter's
+        # prose may follow its notes on the same page, and a numbered list
+        # in it ("1. First, …") is not more notes.
+        stop_at = heads[k + 1] if k + 1 < len(heads) else (len(bodies), 0)
+        own = re.match(r"<h([1-6])\b", bodies[hp][hpos:])
+        rank = int(own.group(1)) if own else 2
+        for spi in range(hp, min(stop_at[0] + 1, len(bodies))):
+            for hm in _PART_HEAD.finditer(bodies[spi]):
+                if (spi, hm.start()) > (hp, hpos) and (spi, hm.start()) < stop_at \
+                        and int(hm.group(1)) <= rank \
+                        and not NOTES_HEAD.match(bodies[spi], hm.start()):
+                    stop_at = (spi, hm.start())
+                    break
+            else:
+                continue
+            break
+
+        def inside(page: int, pos: int) -> bool:
+            return not (page == hp and pos < from_pos) and (page, pos) < stop_at
         def entries_on(page: int) -> "list[tuple[int, int]]":
             # all three entry forms gathered FIRST, then walked in page
             # order with one ascending counter — three sequential passes
@@ -673,9 +708,9 @@ def link_chapter_notes(bodies: list[str], dropped: set) -> dict:
                 [(m.start(), int(m.group(1)))
                  for pat in (NOTE_ENTRY, NOTE_ENTRY_PLAIN, NOTE_ENTRY_LI)
                  for m in pat.finditer(bodies[page])
-                 if not (page == hp and m.start() < from_pos)]
+                 if inside(page, m.start())]
                 + [(pos, n) for pos, n in counted(page)
-                   if not (page == hp and pos < from_pos)],
+                   if inside(page, pos)],
                 key=lambda t: t[0])
 
         def counted(page: int) -> "list[tuple[int, int]]":
@@ -691,7 +726,7 @@ def link_chapter_notes(bodies: list[str], dropped: set) -> dict:
         def bare_on(page: int) -> "list[tuple[int, int]]":
             return [(m.start(), int(m.group(1)))
                     for m in NOTE_ENTRY_BARE.finditer(bodies[page])
-                    if not (page == hp and m.start() < from_pos)]
+                    if inside(page, m.start())]
 
         while pi < len(bodies):
             found_here = False
@@ -702,6 +737,24 @@ def link_chapter_notes(bodies: list[str], dropped: set) -> dict:
                          else [])
             walk = sorted([(pos, n, j) for j, (pos, n) in enumerate(matches)]
                           + [(pos, n, None) for pos, n in bare_on(pi)])
+            if pi > hp and walk and BODY_MARKER.search(
+                    bodies[pi][:walk[0][0]]) and (not entries
+                                                  or walk[0][1] != expect):
+                # the next chapter's prose, its calls first. Not where the
+                # notes have been running and the page's first entry is the
+                # next: a note carried over the page can hold a raised
+                # figure of its own (The Geopolitics of Green Colonialism,
+                # note 34's end over note 35).
+                break
+            if pi > hp and walk and walk[0][1] != expect \
+                    and walk[0][2] is not None and not _steps_over_a_lost_entry(
+                        walk[0][1], expect,
+                        [m for _, m in matches[walk[0][2] + 1:]], following):
+                # Notes go on over a page from its top, with the next
+                # number. A page whose first entry-shaped paragraph is not
+                # that is the next chapter's, and the "2. Second, …" of a
+                # list in its prose is not this section's note 2.
+                break
             for pos, n, j in walk:
                 if j is None:
                     def after(pos=pos):
@@ -720,14 +773,25 @@ def link_chapter_notes(bodies: list[str], dropped: set) -> dict:
             pi += 1
             if k + 1 < len(heads) and pi > heads[k + 1][0]:
                 break                       # never read into the next section
-        # markers: strictly the body span since the previous section's head
+        # markers: strictly the body between the previous section's notes
+        # and this head. A chapter may open on the page its predecessor's
+        # notes end on, and its first calls are its own; calls after this
+        # head on its page are the next chapter's.
         markers = []
-        for bpi in range(prev_head_page + 1, hp + 1):
+        for bpi in range(max(prev_end[0], 0), hp + 1):
             for m in BODY_MARKER.finditer(bodies[bpi]):
+                if (bpi, m.start()) <= prev_end or (bpi, m.start()) >= (hp, hpos):
+                    continue
                 if bodies[bpi][:m.start()].rstrip().endswith("<p>"):
                     continue                # an entry, not a marker
                 markers.append((bpi, int(m.group(1)), m.start()))
-        prev_head_page = hp
+        # where this section's notes end: past its last entry's paragraph
+        last = max(entries.values(), default=None)
+        if last is None:
+            prev_end = (hp, len(bodies[hp]))
+        else:
+            close = re.compile(r"</(?:p|li)>").search(bodies[last[0]], last[1])
+            prev_end = (last[0], close.start() if close else last[1])
         # A list counted on from the notes before it is taken only where
         # the section then ends on the chapter's last call: a lost entry
         # anywhere would put every note after it one out, and the totals
@@ -1389,6 +1453,24 @@ def _table_notes_overleaf(bodies: list[str]) -> int:
             at += title.end()
         cont = _TABLE.match(nxt, at)
         if cont:
+            # Only the same table going on: its title says so, or repeats
+            # the first page's, or it has none and the same columns. Another
+            # table at the head of the page has its own notes, numbered from
+            # one as these are.
+            here = re.search(r"<p[^>]*>(?:(?!<p[\s>]).)*</p>\s*$",
+                             body[max(0, tm.start() - 600):tm.start()], re.S)
+            letters = lambda t: re.sub(r"[^a-z0-9]", "", _strip_tags(t).lower())
+            cols = lambda t: max((len(re.findall(r"<t[dh]\b", r))
+                                  for r in re.findall(r"<tr\b.*?</tr>", t, re.S)),
+                                 default=0)
+            if title:
+                said, was = letters(title.group(0)), letters(here.group(0)) if here else ""
+                going_on = "contin" in said or (was and (said.startswith(was[:20])
+                                                         or was.startswith(said[:20])))
+            else:
+                going_on = cols(cont.group(0)) == cols(tm.group(0))
+            if not going_on:
+                continue
             at = cont.end()
         elif title:
             at -= title.end()
@@ -1475,11 +1557,29 @@ def _scattered_feet(body: str, pi: int, before: "int | None" = None
     starts = {m.end() - len(m.group(0)) + m.group(0).find("<sup>")
               for ms in feet.values() for m in ms}
     calls: dict[int, list] = {}
+    tables = [(t.start(), t.end()) for t in _TABLE.finditer(body)]
+    in_table: dict[int, list] = {}      # number -> the tables raising it
     for m in _BARE_CALL.finditer(body):
         if m.start() not in starts:
+            for a, z in tables:
+                if a <= m.start() < z:
+                    in_table.setdefault(int(m.group(1)), []).append((a, z))
             calls.setdefault(int(m.group(1)), []).append(m)
+
+    def under_its_table(n, foot) -> bool:
+        """A table's call is the table's: it pairs only with a foot set
+        under that table, no other table between (a list of corporations
+        run over pages, each part with its notes under it), never with a
+        note standing above it or under another table."""
+        for a, z in in_table[n]:
+            if z <= foot.start() and not any(z <= a2 < foot.start()
+                                             for a2, _ in tables):
+                return True
+        return False
     edits = []
     for n, fs in feet.items():
+        if n in in_table and not (len(fs) == 1 and under_its_table(n, fs[0])):
+            continue
         cs = calls.get(n, [])
         if len(fs) != 1 or len(cs) != 1:
             continue
@@ -1577,7 +1677,7 @@ def link_footnotes(bodies: list[str], allow_numbered: bool = False,
             stats["ruleless"] += 1
         for k, sym in enumerate(FOOTNOTE_SYMBOLS):
             foot = list(re.finditer(rf"<p>\s*({sym})(?![*†‡])\s*", below))
-            mark = list(re.finditer(rf"(?<=\S)({sym})(?![*†‡])", above))
+            mark = list(re.finditer(rf"(?<=[^\s*])({sym})(?![*†‡])", above))
             if len(foot) != 1 or len(mark) != 1:
                 if foot or mark:
                     stats["skipped"] += 1

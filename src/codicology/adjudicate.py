@@ -67,13 +67,20 @@ import regex
 # ── folding: policy differences are not disputes ─────────────────────────────
 
 _TYPO = str.maketrans({"’": "'", "‘": "'", "“": '"', "”": '"',
-                       "–": "-", "—": "-", "ﬁ": "fi", "ﬂ": "fl"})
+                       "–": "-", "—": "-", "ﬁ": "fi", "ﬂ": "fl",
+                       # the rest of the printer's ligatures, as markup folds
+                       # them: "eﬀort" is "effort", not a dispute
+                       "ﬀ": "ff", "ﬃ": "ffi", "ﬄ": "ffl", "ﬅ": "st", "ﬆ": "st"})
+
+# A line-break hyphen joins two halves of a word. The first half may end on
+# a combining mark (plē- written e + U+0304), which is no \w.
+_LINE_BREAK = r"([\w\u0300-\u036f])-\s*\n\s*(\w)"
 
 
 def fold_text(text: str) -> str:
     """Join line-break hyphenation; nothing else touches the words."""
     t = (text or "").translate(_TYPO)
-    return re.sub(r"(\w)-\s*\n\s*(\w)", r"\1\2", t)
+    return re.sub(_LINE_BREAK, r"\1\2", t)
 
 
 def fold_word(w: str) -> str:
@@ -242,7 +249,7 @@ def _fold_map(text: str) -> tuple:
             src.append(k)
     t = "".join(out)
     kept, idx, at = [], [], 0
-    for m in re.finditer(r"(\w)-\s*\n\s*(\w)", t):
+    for m in re.finditer(_LINE_BREAK, t):
         kept.append(t[at:m.end(1)])
         idx.extend(src[at:m.end(1)])
         at = m.start(2)

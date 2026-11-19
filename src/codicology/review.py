@@ -778,7 +778,12 @@ def _delete_from_xhtml(xhtml, old) -> "str | None":
         text_parts.append(seg)
         owner.extend((k, off) for off in range(len(seg)))
     flat = "".join(text_parts)
-    m = _run_pattern(words).search(flat)
+    # A run's ends are whole words as the reading has them, and the reading
+    # joins a word broken at a line's end: "trans-\nport" is "transport",
+    # and its second half is no "port" to take.
+    m = next((m for m in _run_pattern(words).finditer(flat)
+              if not re.search(r"[^\W\d_][\u0300-\u036f]*-\s*\n\s*$", flat[:m.start()])
+              and not re.match(r"-\s*\n\s*[^\W\d_]", flat[m.end():])), None)
     if not m:
         return None
     cuts: dict = {}
@@ -799,6 +804,12 @@ def _delete_from_xhtml(xhtml, old) -> "str | None":
             left = left.rstrip()
         segs[k] = re.sub(r"[ \t]{2,}", " ", left + right)
     out = "".join(segs)
+    # an inline element the deletion emptied goes too (an italic caption
+    # cut whole left "<p><i></i></p>"), where the page held none before
+    empty_inline = r"<(i|b|em|strong|u|span|small|sup|sub)\b[^>]*>\s*</\1>"
+    if not re.search(empty_inline, xhtml):
+        while re.search(empty_inline, out):
+            out = re.sub(empty_inline, "", out)
     out = re.sub(r"<(p|li)\b[^>]*>\s*</\1>", "", out)
     return out
 
@@ -987,6 +998,21 @@ def _locate(d, body, folded, words, kmax, trust_ordinal,
             return None, "the words around it have changed"
         # the same neighbours around `new`: the correction is already in
         new_toks = tokens(new)
+        if n and not new_toks:
+            # `new` makes no word the tokens can see ("1" for "l", "&c.",
+            # Greek under the old pattern), so once made the correction
+            # leaves its neighbours side by side with only `new` between
+            # them; read again, the next "l" half matching them must not be
+            # corrected too. The text between the closed-up neighbours says
+            # whether it was made: it holds `new`.
+            shown = new.translate(_TYPO).strip()
+            def gap(p):
+                lo = words[p - 1][3] + len(words[p - 1][0]) if p else 0
+                hi = words[p][3] if p < len(words) else len(folded)
+                return folded[lo:hi]
+            if shown and any(_context_score(toks, p, p, before, after) >= best
+                             and shown in gap(p) for p in range(len(toks) + 1)):
+                return None, already
         if n and new_toks and new_toks != [old_t]:
             m = len(new_toks)
             if any(toks[p:p + m] == new_toks

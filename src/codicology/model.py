@@ -164,6 +164,16 @@ def _tokens(text: str) -> "tuple[list[str], list[int]]":
     return toks, starts
 
 
+def _key(token: str) -> str:
+    """What a token is compared by: a tag by its name, a word as it is."""
+    if token.startswith("<") and len(token) > 1:
+        import re
+        m = re.match(r"<(/?)([A-Za-z][\w:.-]*)", token)
+        if m:
+            return "<" + m.group(1) + m.group(2).lower() + (" /" if token.rstrip().endswith("/>") else "")
+    return token
+
+
 def _carry(old: str, new: str, cuts: "list[int]") -> "tuple[list[int], int]":
     """Where each cut in `old` lands in `new`, and how many fell inside a
     change rather than between unchanged text."""
@@ -171,23 +181,47 @@ def _carry(old: str, new: str, cuts: "list[int]") -> "tuple[list[int], int]":
     import difflib
     if old == new:
         return list(cuts), 0
-    head = 0
-    while head < min(len(old), len(new)) and old[head] == new[head]:
-        head += 1
-    tail = 0
-    while tail < min(len(old), len(new)) - head and old[-1 - tail] == new[-1 - tail]:
-        tail += 1
     # The unchanged ends are taken back to where a tag opens, so the middle
-    # is compared as whole elements: compared from inside a shared "<p>", a
+    # is compared as whole tokens: compared from inside a shared "<p>", a
     # page whose first block was cut gave that block's label to the
-    # paragraph after it, which kept nothing.
-    head = max(old.rfind("<", 0, head + 1), 0)
-    at = old.find("<", len(old) - tail)
-    tail = len(old) - at if at >= head else 0
+    # paragraph after it, which kept nothing. Which end is measured first
+    # matters: a block cut from the top wants the shared end measured whole
+    # (or "<blockquote><p>…" loses its label), a block cut from the foot the
+    # shared start. Both are tried, and the one leaving less to compare kept.
+    def common_head(limit):
+        h = 0
+        while h < limit and old[h] == new[h]:
+            h += 1
+        return max(old.rfind("<", 0, h + 1), 0)
+
+    def common_tail(limit):
+        t = 0
+        while t < limit and old[-1 - t] == new[-1 - t]:
+            t += 1
+        at = old.find("<", len(old) - t)
+        return len(old) - at if at >= 0 else 0
+
+    shortest = min(len(old), len(new))
+    h1 = common_head(shortest)
+    t1 = min(common_tail(shortest - h1), len(old) - h1)
+    t2 = common_tail(shortest)
+    h2 = common_head(shortest - t2)
+    whole = set(_balanced(old))
+
+    def rank(h, t):
+        # more left unchanged first; then a middle that is whole elements
+        return (h + t, h in whole and (len(old) - t) in whole)
+    head, tail = (h1, t1) if rank(h1, t1) >= rank(h2, t2) else (h2, t2)
+    if head > len(old) - tail or head > len(new) - tail:
+        head, tail = h1, 0
     mid_old, mid_new = old[head:len(old) - tail], new[head:len(new) - tail]
     t_old, s_old = _tokens(mid_old)
     t_new, s_new = _tokens(mid_new)
-    ops = difflib.SequenceMatcher(None, t_old, t_new, autojunk=False).get_opcodes()
+    # Tags are matched by name, their attributes aside: a block cut while
+    # the next one's opening tag gained a class is a deletion and a retag,
+    # not one change across the boundary.
+    k_old, k_new = [_key(t) for t in t_old], [_key(t) for t in t_new]
+    ops = difflib.SequenceMatcher(None, k_old, k_new, autojunk=False).get_opcodes()
     out, straddled = [], 0
     for c in cuts:
         if c <= head:

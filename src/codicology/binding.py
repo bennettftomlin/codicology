@@ -97,8 +97,10 @@ _CAPTION = re.compile(
 # and after it nothing that begins with a small letter.
 _LABEL_AND_NAMES = re.compile(r"[A-Z][\w ]{0,30}:\s+(?:[^a-z\s]\S*\s*)+$")
 # A word the printer broke at the foot of the page, and what takes it up.
-_BROKEN_WORD = re.compile(r"([A-Za-z]+)-$")
-_REST_OF_WORD = re.compile(r"[a-z]+")
+# Letters of any alphabet, accented ones too: "Égyp-" | "tian" is one word
+# as surely as "Egyp-" | "tian".
+_BROKEN_WORD = re.compile(r"([^\W\d_]+)-$")
+_REST_OF_WORD = re.compile(r"(?:(?=[^\W\d_])[^A-ZÀ-ÞĀ-Ž\u0391-\u03a9\u0410-\u042f])+")
 # …and all of it, with whatever is set close against it: "centration,".
 _REST_OF_TOKEN = re.compile(r"[^\s<]*")
 # A paragraph that stops without a stop, taken up by a capital or a figure:
